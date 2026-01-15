@@ -1,0 +1,131 @@
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[project]
+name = "satellite-mission-planner"
+version = "0.1.0"
+description = "A modular, offline-capable satellite mission planning tool"
+authors = [
+    {name = "Mission Planner", email = "mission@planner.com"},
+]
+dependencies = [
+    "orbit-predictor>=1.15.0",
+    "cartopy>=0.22.0",
+    "matplotlib>=3.7.0",
+    "numpy>=1.24.0",
+    "pandas>=2.0.0",
+    "click>=8.1.0",
+    "pydantic>=2.0.0",
+    "pytz>=2023.3",
+    "requests>=2.31.0",
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "python-multipart>=0.0.6",
+    "pulp>=3.3.0",
+]
+requires-python = ">=3.11"
+readme = "README.md"
+license = {text = "MIT"}
+keywords = ["satellite", "mission-planning", "orbit", "visualization"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Astronomy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "pytest-timeout>=2.3.0",
+    "pytest-xdist>=3.5.0",
+    "pytest-sugar>=1.0.0",
+    "pytest-randomly>=3.15.0",
+    "pytest-instafail>=0.5.0",
+    "black>=23.7.0",
+    "isort>=5.12.0",
+    "mypy>=1.5.0",
+    "flake8>=6.0.0",
+    "httpx>=0.27.0",
+]
+
+[project.scripts]
+mission-planner = "mission_planner.cli:main"
+
+[tool.pdm]
+distribution = true
+
+[tool.black]
+line-length = 88
+target-version = ['py311']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 88
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+mypy_path = "backend"
+
+[[tool.mypy.overrides]]
+module = "backend.validation.*"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+    "--timeout=30",
+    "--timeout_method=thread",
+    "-x",  # Stop on first failure
+    "--instafail",  # Show failures immediately
+    "--cov=src/mission_planner",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+]
+timeout = 30  # Default timeout per test in seconds
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "requires_server: marks tests that need backend server running",
+    "integration: marks integration tests",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

@@ -1,0 +1,14 @@
+{
+  "satellite_name": "ICEYE-X44",
+  "total_passes": 6,
+  "targets_analyzed": 1,
+  "targets_with_passes": 1,
+  "average_passes_per_target": 6.0,
+  "highest_elevation": 51.2,
+  "total_contact_time_minutes": 36.5,
+  "best_pass": {
+    "target": "Space42",
+    "time": "2025-08-12T07:41:17.628676",
+    "elevation": 51.2
+  }
+}

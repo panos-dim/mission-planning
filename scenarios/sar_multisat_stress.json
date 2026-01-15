@@ -1,0 +1,102 @@
+{
+  "id": "sar_multisat_stress",
+  "name": "SAR Multi-Satellite Stress Test",
+  "description": "Multiple ICEYE SAR satellites and Eastern Mediterranean targets to stress test compute performance and validation.",
+  "satellites": [
+    {
+      "name": "ICEYE-X67",
+      "tle_line1": "1 66302U 25248K   25351.52022923  .00008056  00000+0  39235-3 0  9992",
+      "tle_line2": "2 66302  45.4058  13.9386 0003917  99.8686 260.2642 15.18878380  8033"
+    },
+    {
+      "name": "ICEYE-X66",
+      "tle_line1": "1 66301U 25248J   25351.53082976  .00009182  00000+0  44987-3 0  9997",
+      "tle_line2": "2 66301  45.4026  13.9955 0002559  86.4008 273.7171 15.18523745  8027"
+    },
+    {
+      "name": "ICEYE-X57",
+      "tle_line1": "1 64578U 25135BC  25351.93827337  .00005332  00000+0  46693-3 0  9997",
+      "tle_line2": "2 64578  97.7585 103.7248 0002720 186.3440 173.7748 14.97117585 26851"
+    }
+  ],
+  "targets": [
+    {
+      "name": "Athens",
+      "latitude": 37.9838,
+      "longitude": 23.7275,
+      "priority": 4,
+      "import_source": "ui_sample"
+    },
+    {
+      "name": "Istanbul",
+      "latitude": 41.0082,
+      "longitude": 28.9784,
+      "priority": 4,
+      "import_source": "ui_sample"
+    },
+    {
+      "name": "Thessaloniki",
+      "latitude": 40.6401,
+      "longitude": 22.9444,
+      "priority": 3,
+      "import_source": "ui_sample"
+    },
+    {
+      "name": "Izmir",
+      "latitude": 38.4237,
+      "longitude": 27.1428,
+      "priority": 3,
+      "import_source": "ui_sample"
+    },
+    {
+      "name": "Nicosia",
+      "latitude": 35.1856,
+      "longitude": 33.3823,
+      "priority": 3,
+      "import_source": "ui_sample"
+    },
+    {
+      "name": "Sofia",
+      "latitude": 42.6977,
+      "longitude": 23.3219,
+      "priority": 2,
+      "import_source": "ui_sample"
+    },
+    {
+      "name": "Rhodes",
+      "latitude": 36.4341,
+      "longitude": 28.2176,
+      "priority": 2,
+      "import_source": "ui_sample"
+    },
+    {
+      "name": "Heraklion",
+      "latitude": 35.3387,
+      "longitude": 25.1442,
+      "priority": 1,
+      "import_source": "ui_sample"
+    }
+  ],
+  "config": {
+    "start_time": "2026-01-15T00:00:00Z",
+    "end_time": "2026-01-17T00:00:00Z",
+    "imaging_mode": "strip",
+    "look_side": "ANY",
+    "pass_direction": "ANY",
+    "incidence_min_deg": 15.0,
+    "incidence_max_deg": 50.0,
+    "max_spacecraft_roll_deg": 45.0,
+    "max_roll_rate_dps": 1.0,
+    "quality_weight": 0.5,
+    "quality_model": "band",
+    "run_planning": true,
+    "algorithms": ["first_fit", "best_fit"]
+  },
+  "expected": {
+    "expect_left_opportunities": true,
+    "expect_right_opportunities": true,
+    "incidence_must_be_in_range": true,
+    "min_opportunities": 20
+  },
+  "tags": ["sar", "stress", "multi-satellite", "performance", "iceye"]
+}

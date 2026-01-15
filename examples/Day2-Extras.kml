@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+
+  <Document>
+    <name>Day2-Extras.kml</name>
+    <description>Taitus Software</description>
+    <Style id="style0">
+      <IconStyle>
+        <Icon>
+          <href>C:\Users\BYT-STK-01\AppData\Local\Programs\Taitus Software\SaVoir\bin\..\img\icons\16\bullet_ball_glass_red.png</href>
+        </Icon>
+      </IconStyle>
+      <LineStyle>
+        <color>FFFFFFFF</color>
+        <width>2</width>
+      </LineStyle>
+      <PolyStyle>
+        <color>3C803F80</color>
+        <fill>true</fill>
+      </PolyStyle>
+    </Style>
+    <Style id="style1">
+      <IconStyle>
+        <Icon>
+          <href>C:\Users\BYT-STK-01\AppData\Local\Programs\Taitus Software\SaVoir\bin\..\img\icons\16\bullet_ball_glass_red.png</href>
+        </Icon>
+      </IconStyle>
+      <LineStyle>
+        <color>FFFFFFFF</color>
+        <width>2</width>
+      </LineStyle>
+      <PolyStyle>
+        <color>3C803F80</color>
+        <fill>true</fill>
+      </PolyStyle>
+    </Style>
+    <Style id="style2">
+      <IconStyle>
+        <Icon>
+          <href>C:\Users\BYT-STK-01\AppData\Local\Programs\Taitus Software\SaVoir\bin\..\img\icons\16\bullet_ball_glass_red.png</href>
+        </Icon>
+      </IconStyle>
+      <LineStyle>
+        <color>FFFFFFFF</color>
+        <width>2</width>
+      </LineStyle>
+      <PolyStyle>
+        <color>3C3F3F3F</color>
+        <fill>true</fill>
+      </PolyStyle>
+    </Style>
+    <Placemark>
+      <name>R5-SE</name>
+      <visibility>false</visibility>
+      <styleUrl>#style0</styleUrl>
+      <balloonVisibility xmlns="http://www.google.com/kml/ext/2.2">true</balloonVisibility>
+      <Point>
+        <altitudeMode>clampToGround</altitudeMode>
+        <coordinates>-4.43271761,55.86591726,0 </coordinates>
+      </Point>
+    </Placemark>
+    <Placemark>
+      <name>R10-SC</name>
+      <visibility>false</visibility>
+      <styleUrl>#style1</styleUrl>
+      <balloonVisibility xmlns="http://www.google.com/kml/ext/2.2">true</balloonVisibility>
+      <Point>
+        <altitudeMode>clampToGround</altitudeMode>
+        <coordinates>-113.57521676,53.31086155,0 </coordinates>
+      </Point>
+    </Placemark>
+    <Placemark>
+      <name>R15-ST</name>
+      <visibility>false</visibility>
+      <styleUrl>#style2</styleUrl>
+      <balloonVisibility xmlns="http://www.google.com/kml/ext/2.2">true</balloonVisibility>
+      <Point>
+        <altitudeMode>clampToGround</altitudeMode>
+        <coordinates>120.35177999,22.57566778,0 </coordinates>
+      </Point>
+    </Placemark>
+  </Document>
+
+</kml>

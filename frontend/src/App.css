@@ -1,0 +1,55 @@
+/* Import Cesium custom styling */
+@import './styles/cesium-custom.css';
+
+/* Additional app-specific styles */
+.mission-controls-panel {
+  backdrop-filter: blur(10px);
+  background: rgba(17, 24, 39, 0.9);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.glass-panel {
+  backdrop-filter: blur(12px);
+  background: rgba(31, 41, 55, 0.8);
+  border: 1px solid rgba(75, 85, 99, 0.3);
+}
+
+.input-field {
+  @apply bg-gray-800/50 border border-gray-600 rounded-lg px-3 py-2 text-white placeholder-gray-400 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors;
+}
+
+.btn-primary {
+  @apply bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center space-x-2;
+}
+
+.btn-secondary {
+  @apply bg-gray-700 hover:bg-gray-600 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center space-x-2;
+}
+
+.btn-success {
+  @apply bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center space-x-2;
+}
+
+.btn-danger {
+  @apply bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center space-x-2;
+}
+
+.status-indicator {
+  @apply w-3 h-3 rounded-full;
+}
+
+.status-success {
+  @apply bg-green-500 animate-pulse;
+}
+
+.status-warning {
+  @apply bg-yellow-500 animate-pulse;
+}
+
+.status-error {
+  @apply bg-red-500 animate-pulse;
+}
+
+.status-idle {
+  @apply bg-gray-500;
+}

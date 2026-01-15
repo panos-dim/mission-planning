@@ -1,0 +1,36 @@
+ground_stations:
+- name: Svalbard (SvalSat)
+  latitude: 78.2298
+  longitude: 15.4078
+  altitude_km: 0.474
+  elevation_mask: 6
+  active: true
+  id: svalbard
+  type: Primary
+  description: Arctic ground station operated by KSAT near Longyearbyen, Norway
+  capabilities:
+  - communication
+  - tracking
+  - telemetry
+  - data_download
+- name: Space42 GS
+  latitude: 24.4405
+  longitude: 54.8266
+  altitude_km: 0.05
+  elevation_mask: 5
+  active: true
+  id: space42_gs
+  type: Primary
+  description: Space42 ground station in Abu Dhabi, UAE
+  capabilities:
+  - communication
+  - tracking
+  - telemetry
+  - data_download
+defaults:
+  elevation_mask: 10
+  altitude_km: 0
+  active: true
+  capabilities:
+  - communication
+mission_settings: {}

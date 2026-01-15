@@ -1,0 +1,106 @@
+analysis_settings:
+  conflict_resolution_strategy: priority_based
+  ground_sample_distance_m: 100
+  target_buffer_km: 5
+  time_step_seconds: 10
+defaults:
+  data_latency_requirements: near_real_time
+  mission_criticality: routine
+  mission_duration_days: 7
+  target_revisit_hours: 24
+elevation_constraints:
+  communication:
+    default_mask_deg: 10
+    max_useful_deg: 90
+    optimal_min_deg: 15
+  imaging:
+    default_mask_deg: 10
+    max_useful_deg: 85
+    optimal_min_deg: 20
+  tracking:
+    default_mask_deg: 5
+    max_useful_deg: 90
+    optimal_min_deg: 10
+mission_priorities:
+  calibration: 5
+  commercial_imaging: 2
+  emergency_response: 1
+  routine_monitoring: 4
+  scientific_research: 3
+output_settings:
+  export_formats:
+  - json
+  - kml
+  - csv
+  reports:
+    include_conflict_analysis: false
+    include_coverage_analysis: true
+    include_statistics: true
+    include_timeline: true
+  visualization:
+    default_map_provider: cesium
+    show_communication_links: true
+    show_coverage_areas: true
+    show_orbit_tracks: true
+pass_duration:
+  communication:
+    max_seconds: 600
+    min_seconds: 60
+    preferred_seconds: 120
+  imaging:
+    max_seconds: 300
+    min_seconds: 31
+    preferred_seconds: 60
+  tracking:
+    max_seconds: 900
+    min_seconds: 120
+    preferred_seconds: 180
+performance:
+  cache_expiry_hours: 24
+  enable_calculation_cache: true
+  max_memory_usage_mb: 2048
+  max_worker_threads: 4
+  parallel_processing: true
+planning_constraints:
+  max_passes_per_satellite: 50
+  min_pass_gap_minutes: 90
+  planning_horizon_days: 14
+  tle_max_age_days: 7
+  weather:
+    max_cloud_cover_percent: 20
+    min_visibility_km: 10
+resource_allocation:
+  max_concurrent_communication: 5
+  max_concurrent_imaging: 3
+  max_concurrent_tracking: 2
+  max_daily_data_volume: 100
+  max_station_utilization: 85
+mission_planning:
+  agility_constraints:
+    default_imaging_time_s: 5.0
+    default_max_roll_rate_dps: 3.0
+    default_max_roll_accel_dps2: 1.0
+    default_max_pitch_rate_dps: 0.0
+    default_max_pitch_accel_dps2: 0.0
+  algorithm_settings:
+    default_algorithms:
+    - first_fit
+    - best_fit
+    - value_density
+    default_look_window_s: 600
+    default_value_source: uniform
+  scheduling_constraints:
+    min_maneuver_time_s: 0.0
+    max_maneuver_time_s: 300.0
+    min_slack_time_s: 0.0
+  tolerances:
+    # Aiming and geometry tolerances
+    aiming_epsilon_deg: 0.1  # Within-cone slack for geometry checks
+    time_edge_epsilon_s: 0.5  # AOS/LOS time boundary refinement
+    # Aiming strategy
+    aiming_mode: TARGET_CENTER  # TARGET_CENTER (current) or NADIR (legacy)
+    # Incidence calculation method
+    incidence_mode: OFF_NADIR_PROXY  # OFF_NADIR_PROXY (current) or LOCAL_SURFACE_NORMAL (future)
+    # Coordinate precision documentation
+    # Python float64 provides ~15 decimal digits
+    # Lat/lon precision: ~1e-8 degrees ≈ 1mm at equator

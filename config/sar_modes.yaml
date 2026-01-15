@@ -1,0 +1,199 @@
+# SAR Mode Specifications - ICEYE-parity Configuration
+# Reference: ICEYE Product Specification and Tasking API Documentation
+#
+# This configuration defines SAR imaging mode parameters aligned with ICEYE capabilities.
+# All values are configurable and can be overridden per-mission.
+#
+# NOTE: These are defaults based on publicly available ICEYE documentation.
+# Actual satellite capabilities may vary.
+
+# =============================================================================
+# SAR IMAGING MODES
+# =============================================================================
+modes:
+  # Spot mode - highest resolution, small scene
+  spot:
+    display_name: "Spot"
+    description: "High-resolution spotlight mode for detailed imaging"
+    # Incidence angle constraints (degrees from nadir)
+    incidence_angle:
+      recommended_min: 15.0
+      recommended_max: 35.0
+      absolute_min: 10.0
+      absolute_max: 45.0
+    # Scene/swath dimensions
+    scene:
+      width_km: 5.0        # Cross-track dimension
+      length_km: 5.0       # Along-track dimension
+    # Collection parameters
+    collection:
+      duration_s: 10.0     # Typical collection duration
+      azimuth_resolution_m: 0.5
+      range_resolution_m: 0.5
+    # Quality scoring - peak incidence for best image quality
+    quality:
+      optimal_incidence_deg: 25.0  # Peak quality incidence
+      quality_model: "band"        # band or monotonic
+
+  # Strip mode - medium resolution, long swath
+  strip:
+    display_name: "Strip"
+    description: "Standard stripmap mode for area coverage"
+    incidence_angle:
+      recommended_min: 15.0
+      recommended_max: 45.0
+      absolute_min: 10.0
+      absolute_max: 55.0
+    scene:
+      width_km: 30.0       # Fixed swath width
+      length_km: 50.0      # Configurable length (default)
+      max_length_km: 500.0 # Maximum strip length
+    collection:
+      duration_s: null     # Variable based on strip length
+      azimuth_resolution_m: 3.0
+      range_resolution_m: 3.0
+    quality:
+      optimal_incidence_deg: 30.0
+      quality_model: "band"
+
+  # Scan mode - wide area coverage
+  scan:
+    display_name: "Scan"
+    description: "ScanSAR mode for wide area surveillance"
+    incidence_angle:
+      recommended_min: 20.0
+      recommended_max: 50.0
+      absolute_min: 15.0
+      absolute_max: 55.0
+    scene:
+      width_km: 100.0      # Wide swath
+      length_km: 100.0     # Configurable
+      max_length_km: 1000.0
+    collection:
+      duration_s: null     # Variable
+      azimuth_resolution_m: 15.0
+      range_resolution_m: 15.0
+    quality:
+      optimal_incidence_deg: 35.0
+      quality_model: "band"
+
+  # Dwell mode - extended collection for moving target indication
+  dwell:
+    display_name: "Dwell"
+    description: "Extended dwell for coherent change detection"
+    incidence_angle:
+      recommended_min: 20.0
+      recommended_max: 40.0
+      absolute_min: 15.0
+      absolute_max: 50.0
+    scene:
+      width_km: 5.0
+      length_km: 5.0
+    collection:
+      duration_s: 25.0     # Extended dwell time
+      azimuth_resolution_m: 1.0
+      range_resolution_m: 1.0
+    quality:
+      optimal_incidence_deg: 30.0
+      quality_model: "band"
+
+# =============================================================================
+# LOOK SIDE CONFIGURATION
+# =============================================================================
+look_side:
+  options:
+    - LEFT
+    - RIGHT
+    - ANY      # System selects optimal
+  default: ANY
+  description: |
+    Look side determines which side of the ground track is imaged.
+    LEFT: Antenna points to the left of flight direction
+    RIGHT: Antenna points to the right of flight direction
+    ANY: System selects based on target geometry (closer side preferred)
+
+# =============================================================================
+# PASS DIRECTION CONFIGURATION
+# =============================================================================
+pass_direction:
+  options:
+    - ASCENDING   # Satellite moving north
+    - DESCENDING  # Satellite moving south
+    - ANY         # Either direction acceptable
+  default: ANY
+  description: |
+    Pass direction filter for tasking.
+    ASCENDING: Satellite crossing target while moving northbound
+    DESCENDING: Satellite crossing target while moving southbound
+    ANY: Either pass direction is acceptable
+
+# =============================================================================
+# SWATH GEOMETRY MODEL
+# =============================================================================
+swath_geometry:
+  # Method for computing swath polygon
+  method: "simplified"  # simplified | full_antenna_pattern
+
+  # Simplified model parameters
+  simplified:
+    # Swath width scales with incidence angle and altitude
+    use_altitude_scaling: true
+    use_incidence_scaling: true
+    # Ground range calculation: R = h * tan(incidence)
+    # Swath width at near/far edges differs
+
+  # Incidence angle model (near/center/far)
+  incidence_model:
+    # For a given center incidence, compute near/far
+    # Near edge: closer to nadir, smaller incidence
+    # Far edge: further from nadir, larger incidence
+    swath_half_angle_offset_deg: 2.5  # +/- from center
+
+# =============================================================================
+# DEFAULT SAR SPACECRAFT PARAMETERS
+# =============================================================================
+spacecraft:
+  max_roll_deg: 60.0           # Maximum off-nadir pointing
+  max_roll_rate_dps: 1.0       # Roll slew rate
+  max_roll_accel_dps2: 1.0     # Roll acceleration
+  settling_time_s: 3.0         # Post-maneuver settling
+
+  # SAR-specific: no pitch needed for SAR (steering is electronic)
+  max_pitch_deg: 0.0
+  max_pitch_rate_dps: 0.0
+
+# =============================================================================
+# SAR-SPECIFIC CONSTRAINTS
+# =============================================================================
+constraints:
+  # SAR is day/night capable - no illumination requirement
+  requires_illumination: false
+
+  # All-weather capable
+  weather_constraint: none  # none | clouds_only | full
+
+  # Minimum elevation for acceptable geometry
+  min_elevation_deg: 10.0
+
+  # Doppler constraints (simplified)
+  max_squint_angle_deg: 5.0
+
+# =============================================================================
+# TASKING PARAMETERS (ICEYE-aligned)
+# =============================================================================
+tasking:
+  # Priority levels (1=highest)
+  priority_levels: [1, 2, 3, 4, 5]
+  default_priority: 3
+
+  # Exclusivity (can other tasks share the opportunity?)
+  exclusivity_options:
+    - STANDARD    # Can share
+    - PRIORITY    # Preferred but can share
+    - EXCLUSIVE   # Must not share
+  default_exclusivity: STANDARD
+
+  # Time constraints
+  time_windows:
+    min_lead_time_hours: 24    # Minimum time before imaging
+    max_advance_days: 14       # Maximum advance booking

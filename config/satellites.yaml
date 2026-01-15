@@ -1,0 +1,356 @@
+defaults:
+  active: true
+  capabilities:
+  - imaging
+  imaging_type: optical
+  satellite_agility: 1.0
+satellite_settings:
+  optical:
+    default_agility_deg_per_sec: 1.0
+    max_cloud_cover: 20
+    max_slew_angle: 45
+    min_sun_elevation: 30
+    sensor:
+      max_cloud_cover_percent: 20
+      min_sun_elevation_deg: 30
+      mode: optical
+      sensor_fov_half_angle_deg: 15.0
+    settling_time_seconds: 5
+    spacecraft:
+      max_roll_accel_dps2: 1.0
+      max_roll_rate_dps: 3.0
+      max_spacecraft_roll_deg: 45.0
+      settling_time_s: 5.0
+  sar:
+    default_agility_deg_per_sec: 2.5
+    default_mode: stripmap
+    incidence_angle_range:
+    - 20
+    - 50
+    max_slew_angle: 45
+    polarizations:
+    - VV
+    - VH
+    - HH
+    - HV
+    resolution_modes:
+    - stripmap
+    - spotlight
+    - scan
+    sensor:
+      incidence_angle_range_deg:
+      - 20
+      - 50
+      mode: sar
+      polarizations:
+      - VV
+      - VH
+      - HH
+      - HV
+      sar_mode: stripmap
+      sensor_fov_half_angle_deg: 30.0
+    settling_time_seconds: 3
+    spacecraft:
+      max_roll_accel_dps2: 1.0
+      max_roll_rate_dps: 2.5
+      max_spacecraft_roll_deg: 45.0
+      settling_time_s: 3.0
+satellites:
+- active: true
+  capabilities:
+  - imaging
+  created_at: '2025-12-03T12:00:00Z'
+  description: Custom satellite with 45-degree inclination at 450km altitude
+  id: custom-sat-45deg
+  imaging_parameters:
+    resolution_m: 1
+    swath_width_km: 21
+  imaging_type: optical
+  line1: 1 99001U 25999A   25337.00000000  .00000000  00000+0  00000+0 0  9990
+  line2: 2 99001  45.0000 100.0000 0001000   0.0000   0.0000 15.38000000    10
+  name: CUSTOM-45DEG-450KM
+  orbital_characteristics:
+    altitude_km: 450
+    inclination_deg: 45.0
+    period_minutes: 93.6
+  sar_mode: stripmap
+  satellite_agility: 1.0
+  sensor_fov_half_angle_deg: 1.0
+  tle_updated_at: '2025-12-03T12:00:00Z'
+- active: true
+  capabilities:
+  - imaging
+  created_at: '2025-08-28T12:00:00Z'
+  description: High-resolution optical imaging satellite for Earth observation
+  id: iceye-x44
+  imaging_parameters:
+    resolution_m: 1
+    swath_width_km: 21
+  imaging_type: optical
+  line1: 1 62707U 25009DC  25337.22325646  .00005980  00000+0  55896-3 0  9995
+  line2: 2 62707  97.7247  54.4904 0002410  80.3183 279.8309 14.94500111 70658
+  name: ICEYE-X44
+  orbital_characteristics:
+    altitude_km: 591
+    inclination_deg: 97.5
+    period_minutes: 96.5
+  sar_mode: stripmap
+  satellite_agility: 1.0
+  sensor_fov_half_angle_deg: 1.0
+  tle_updated_at: '2025-12-03T12:12:37.656113Z'
+- active: true
+  capabilities:
+  - imaging
+  created_at: '2025-12-08T12:00:00Z'
+  description: NUSAT Earth observation satellite (Argentina)
+  id: nusat-39
+  imaging_parameters:
+    resolution_m: 1.5
+    swath_width_km: 15
+  imaging_type: optical
+  line1: 1 56201U 23054Z   25341.88587524  .00030131  00000+0  78403-3 0  9992
+  line2: 2 56201  97.3244 245.9822 0007442  33.9273 326.2448 15.38828619148970
+  name: NUSAT-39
+  orbital_characteristics:
+    altitude_km: 480
+    inclination_deg: 97.3
+    period_minutes: 93.6
+  satellite_agility: 1.2
+  sensor_fov_half_angle_deg: 1.5
+  tle_updated_at: '2025-12-08T12:00:00Z'
+- active: true
+  capabilities:
+  - imaging
+  created_at: '2025-12-08T12:00:00Z'
+  description: Planet Flock Earth observation satellite
+  id: flock-4p-1
+  imaging_parameters:
+    resolution_m: 3.0
+    swath_width_km: 24
+  imaging_type: optical
+  line1: 1 55060U 23001BK  25341.77729867  .00015830  00000+0  63445-3 0  9990
+  line2: 2 55060  97.4690  55.9021 0010127  86.0519 274.1893 15.20932641109419
+  name: FLOCK-4P-1
+  orbital_characteristics:
+    altitude_km: 525
+    inclination_deg: 97.5
+    period_minutes: 95.0
+  satellite_agility: 1.0
+  sensor_fov_half_angle_deg: 2.0
+  tle_updated_at: '2025-12-08T12:00:00Z'
+- active: true
+  capabilities:
+  - imaging
+  created_at: '2025-12-08T12:00:00Z'
+  description: Planet Flock Earth observation satellite
+  id: flock-4p-2
+  imaging_parameters:
+    resolution_m: 3.0
+    swath_width_km: 24
+  imaging_type: optical
+  line1: 1 55061U 23001BL  25341.84063200  .00014579  00000+0  58584-3 0  9991
+  line2: 2 55061  97.4700  56.4682 0009769  84.2018 275.9894 15.20872879109420
+  name: FLOCK-4P-2
+  orbital_characteristics:
+    altitude_km: 525
+    inclination_deg: 97.5
+    period_minutes: 95.0
+  satellite_agility: 1.0
+  sensor_fov_half_angle_deg: 2.0
+  tle_updated_at: '2025-12-08T12:00:00Z'
+- active: true
+  capabilities:
+  - imaging
+  - sar
+  created_at: '2025-12-08T12:00:00Z'
+  description: ICEYE SAR satellite for all-weather imaging
+  id: iceye-x21
+  imaging_parameters:
+    resolution_m: 1.0
+    swath_width_km: 30
+  imaging_type: sar
+  line1: 1 52765U 22057H   25341.50000000  .00012345  00000+0  45678-3 0  9999
+  line2: 2 52765  97.5500  60.0000 0001500  90.0000 270.0000 15.19000000 12345
+  name: ICEYE-X21
+  orbital_characteristics:
+    altitude_km: 570
+    inclination_deg: 97.5
+    period_minutes: 95.8
+  sar_mode: spotlight
+  satellite_agility: 2.5
+  sensor_fov_half_angle_deg: 1.0
+  tle_updated_at: '2025-12-08T12:00:00Z'
+- active: true
+  capabilities:
+  - imaging
+  created_at: '2025-12-08T12:00:00Z'
+  description: Hawk imaging satellite
+  id: hawk-7c
+  imaging_parameters:
+    resolution_m: 0.9
+    swath_width_km: 12
+  imaging_type: optical
+  line1: 1 56200U 23054Y   25341.94396439  .00009755  00000+0  34153-3 0  9993
+  line2: 2 56200  97.2931 227.8239 0006777  29.0973 331.0644 15.29678956147838
+  name: HAWK-7C
+  orbital_characteristics:
+    altitude_km: 505
+    inclination_deg: 97.3
+    period_minutes: 94.5
+  satellite_agility: 1.5
+  sensor_fov_half_angle_deg: 0.8
+  tle_updated_at: '2025-12-08T12:00:00Z'
+- active: true
+  capabilities:
+  - imaging
+  - sar
+  created_at: '2025-12-18T06:00:00Z'
+  description: ICEYE SAR satellite for all-weather imaging (2025 launch)
+  id: iceye-x67
+  imaging_parameters:
+    resolution_m: 1.0
+    swath_width_km: 30
+  imaging_type: sar
+  line1: 1 66302U 25248K   25351.52022923  .00008056  00000+0  39235-3 0  9992
+  line2: 2 66302  45.4058  13.9386 0003917  99.8686 260.2642 15.18878380  8033
+  name: ICEYE-X67
+  orbital_characteristics:
+    altitude_km: 540
+    inclination_deg: 45.4
+    period_minutes: 94.8
+  sar_mode: spotlight
+  satellite_agility: 2.5
+  sensor_fov_half_angle_deg: 1.0
+  tle_updated_at: '2025-12-18T06:00:00Z'
+- active: true
+  capabilities:
+  - imaging
+  - sar
+  created_at: '2025-12-18T06:00:00Z'
+  description: ICEYE SAR satellite for all-weather imaging (2025 launch)
+  id: iceye-x66
+  imaging_parameters:
+    resolution_m: 1.0
+    swath_width_km: 30
+  imaging_type: sar
+  line1: 1 66301U 25248J   25351.53082976  .00009182  00000+0  44987-3 0  9997
+  line2: 2 66301  45.4026  13.9955 0002559  86.4008 273.7171 15.18523745  8027
+  name: ICEYE-X66
+  orbital_characteristics:
+    altitude_km: 540
+    inclination_deg: 45.4
+    period_minutes: 94.8
+  sar_mode: spotlight
+  satellite_agility: 2.5
+  sensor_fov_half_angle_deg: 1.0
+  tle_updated_at: '2025-12-18T06:00:00Z'
+- active: true
+  capabilities:
+  - imaging
+  - sar
+  created_at: '2025-12-18T06:00:00Z'
+  description: ICEYE SAR satellite for all-weather imaging (2025 launch)
+  id: iceye-x65
+  imaging_parameters:
+    resolution_m: 1.0
+    swath_width_km: 30
+  imaging_type: sar
+  line1: 1 66300U 25248H   25351.52822868  .00004920  00000+0  24674-3 0  9993
+  line2: 2 66300  45.4054  13.9916 0002913  99.0183 261.1033 15.18604071  8044
+  name: ICEYE-X65
+  orbital_characteristics:
+    altitude_km: 540
+    inclination_deg: 45.4
+    period_minutes: 94.8
+  sar_mode: spotlight
+  satellite_agility: 2.5
+  sensor_fov_half_angle_deg: 1.0
+  tle_updated_at: '2025-12-18T06:00:00Z'
+- active: true
+  capabilities:
+  - imaging
+  - sar
+  created_at: '2025-12-18T06:00:00Z'
+  description: ICEYE SAR satellite for all-weather imaging (2025 launch)
+  id: iceye-x57
+  imaging_parameters:
+    resolution_m: 1.0
+    swath_width_km: 30
+  imaging_type: sar
+  line1: 1 64578U 25135BC  25351.93827337  .00005332  00000+0  46693-3 0  9997
+  line2: 2 64578  97.7585 103.7248 0002720 186.3440 173.7748 14.97117585 26851
+  name: ICEYE-X57
+  orbital_characteristics:
+    altitude_km: 560
+    inclination_deg: 97.8
+    period_minutes: 96.2
+  sar_mode: spotlight
+  satellite_agility: 2.5
+  sensor_fov_half_angle_deg: 1.0
+  tle_updated_at: '2025-12-18T06:00:00Z'
+- active: true
+  capabilities:
+  - imaging
+  - sar
+  created_at: '2025-12-18T06:00:00Z'
+  description: ICEYE SAR satellite for all-weather imaging (2025 launch)
+  id: iceye-x56
+  imaging_parameters:
+    resolution_m: 1.0
+    swath_width_km: 30
+  imaging_type: sar
+  line1: 1 64574U 25135AY  25351.90695785  .00003289  00000+0  31392-3 0  9999
+  line2: 2 64574  97.7610 103.6832 0001701 191.9123 168.2057 14.93987966 26847
+  name: ICEYE-X56
+  orbital_characteristics:
+    altitude_km: 560
+    inclination_deg: 97.8
+    period_minutes: 96.3
+  sar_mode: spotlight
+  satellite_agility: 2.5
+  sensor_fov_half_angle_deg: 1.0
+  tle_updated_at: '2025-12-18T06:00:00Z'
+- active: true
+  capabilities:
+  - imaging
+  - sar
+  created_at: '2025-12-18T06:00:00Z'
+  description: ICEYE SAR satellite for all-weather imaging (2025 launch)
+  id: iceye-x55
+  imaging_parameters:
+    resolution_m: 1.0
+    swath_width_km: 30
+  imaging_type: sar
+  line1: 1 64581U 25135BF  25351.92325051  .00003912  00000+0  37646-3 0  9996
+  line2: 2 64581  97.7609 103.6616 0002503 215.2611 144.8444 14.93557962 26845
+  name: ICEYE-X55
+  orbital_characteristics:
+    altitude_km: 560
+    inclination_deg: 97.8
+    period_minutes: 96.3
+  sar_mode: spotlight
+  satellite_agility: 2.5
+  sensor_fov_half_angle_deg: 1.0
+  tle_updated_at: '2025-12-18T06:00:00Z'
+- active: true
+  capabilities:
+  - imaging
+  - sar
+  created_at: '2025-12-18T06:00:00Z'
+  description: ICEYE SAR satellite for all-weather imaging (2025 launch)
+  id: iceye-x53
+  imaging_parameters:
+    resolution_m: 1.0
+    swath_width_km: 30
+  imaging_type: sar
+  line1: 1 64584U 25135BJ  25351.95207442  .00004291  00000+0  34199-3 0  9996
+  line2: 2 64584  97.7562 104.3586 0002546 193.7834 166.3321 15.00874117 26895
+  name: ICEYE-X53
+  orbital_characteristics:
+    altitude_km: 555
+    inclination_deg: 97.8
+    period_minutes: 96.0
+  sar_mode: spotlight
+  satellite_agility: 2.5
+  sensor_fov_half_angle_deg: 1.0
+  tle_updated_at: '2025-12-18T06:00:00Z'

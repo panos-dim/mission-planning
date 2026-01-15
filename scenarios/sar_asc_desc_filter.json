@@ -1,0 +1,44 @@
+{
+  "id": "sar_asc_desc_filter",
+  "name": "SAR Ascending/Descending Filter Test",
+  "description": "Verify pass direction filtering works correctly. Tests ASCENDING-only constraint.",
+  "satellites": [
+    {
+      "name": "ICEYE-X67",
+      "tle_line1": "1 66302U 25248K   25351.52022923  .00008056  00000+0  39235-3 0  9992",
+      "tle_line2": "2 66302  45.4058  13.9386 0003917  99.8686 260.2642 15.18878380  8033"
+    }
+  ],
+  "targets": [
+    {
+      "name": "Istanbul",
+      "latitude": 41.0082,
+      "longitude": 28.9784,
+      "priority": 4,
+      "import_source": "ui_sample"
+    }
+  ],
+  "config": {
+    "start_time": "2026-01-15T00:00:00Z",
+    "end_time": "2026-01-18T00:00:00Z",
+    "imaging_mode": "strip",
+    "look_side": "ANY",
+    "pass_direction": "ASCENDING",
+    "incidence_min_deg": 15.0,
+    "incidence_max_deg": 45.0,
+    "max_spacecraft_roll_deg": 45.0,
+    "max_roll_rate_dps": 1.0,
+    "quality_weight": 0.5,
+    "quality_model": "band",
+    "run_planning": true,
+    "algorithms": ["first_fit"]
+  },
+  "expected": {
+    "expect_ascending_passes": true,
+    "expect_descending_passes": false,
+    "expect_single_pass_direction": "ASCENDING",
+    "incidence_must_be_in_range": true,
+    "min_opportunities": 1
+  },
+  "tags": ["sar", "pass_direction", "filter", "iceye"]
+}

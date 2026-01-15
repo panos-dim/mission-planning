@@ -1,0 +1,12 @@
+/* Custom Cesium Selection Indicator Styling - Blue Theme */
+
+/* Only change the color from green to blue, keep original Cesium behavior */
+.cesium-selection-wrapper svg {
+  fill: rgb(59, 130, 246) !important; /* Blue instead of green */
+  stroke: rgb(59, 130, 246) !important; /* Blue instead of green */
+}
+
+.cesium-selection-wrapper svg path {
+  fill: rgb(59, 130, 246) !important; /* Blue instead of green */
+  stroke: rgb(59, 130, 246) !important; /* Blue instead of green */
+}

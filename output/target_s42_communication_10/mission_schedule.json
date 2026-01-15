@@ -1,0 +1,81 @@
+{
+  "metadata": {
+    "satellite": "ICEYE-X44",
+    "export_time": "2025-08-11T12:17:17.669618",
+    "total_passes": 6
+  },
+  "passes": [
+    {
+      "target_name": "Space42",
+      "satellite_name": "ICEYE-X44",
+      "start_time": "2025-08-11T18:11:47.628676",
+      "max_elevation_time": "2025-08-11T18:14:47.628676",
+      "end_time": "2025-08-11T18:18:17.628676",
+      "max_elevation": 23.94,
+      "start_azimuth": 127.06,
+      "max_elevation_azimuth": 79.19,
+      "end_azimuth": 20.23,
+      "duration_minutes": 6.5
+    },
+    {
+      "target_name": "Space42",
+      "satellite_name": "ICEYE-X44",
+      "start_time": "2025-08-11T19:47:47.628676",
+      "max_elevation_time": "2025-08-11T19:50:17.628676",
+      "end_time": "2025-08-11T19:52:47.628676",
+      "max_elevation": 16.23,
+      "start_azimuth": 224.3,
+      "max_elevation_azimuth": 262.02,
+      "end_azimuth": 300.78,
+      "duration_minutes": 5.0
+    },
+    {
+      "target_name": "Space42",
+      "satellite_name": "ICEYE-X44",
+      "start_time": "2025-08-12T07:37:17.628676",
+      "max_elevation_time": "2025-08-12T07:41:17.628676",
+      "end_time": "2025-08-12T07:44:47.628676",
+      "max_elevation": 51.16,
+      "start_azimuth": 358.92,
+      "max_elevation_azimuth": 273.31,
+      "end_azimuth": 208.63,
+      "duration_minutes": 7.5
+    },
+    {
+      "target_name": "Space42",
+      "satellite_name": "ICEYE-X44",
+      "start_time": "2025-08-12T18:18:47.628676",
+      "max_elevation_time": "2025-08-12T18:22:17.628676",
+      "end_time": "2025-08-12T18:25:47.628676",
+      "max_elevation": 29.69,
+      "start_azimuth": 134.42,
+      "max_elevation_azimuth": 72.66,
+      "end_azimuth": 13.86,
+      "duration_minutes": 7.0
+    },
+    {
+      "target_name": "Space42",
+      "satellite_name": "ICEYE-X44",
+      "start_time": "2025-08-12T19:55:47.628676",
+      "max_elevation_time": "2025-08-12T19:57:47.628676",
+      "end_time": "2025-08-12T19:59:17.628676",
+      "max_elevation": 12.92,
+      "start_azimuth": 237.0,
+      "max_elevation_azimuth": 266.46,
+      "end_azimuth": 288.63,
+      "duration_minutes": 3.5
+    },
+    {
+      "target_name": "Space42",
+      "satellite_name": "ICEYE-X44",
+      "start_time": "2025-08-13T07:44:47.628676",
+      "max_elevation_time": "2025-08-13T07:48:17.628676",
+      "end_time": "2025-08-13T07:51:47.628676",
+      "max_elevation": 40.67,
+      "start_azimuth": 352.5,
+      "max_elevation_azimuth": 285.73,
+      "end_azimuth": 216.45,
+      "duration_minutes": 7.0
+    }
+  ]
+}

@@ -1,0 +1,181 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Cesium viewer styles */
+.cesium-viewer {
+  @apply w-full h-full;
+}
+
+.cesium-viewer-cesiumWidgetContainer {
+  @apply w-full h-full;
+}
+
+.cesium-widget-credits {
+  @apply hidden;
+}
+
+/* Global Custom Scrollbar - Applied to all scrollable areas */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #4b5563 #1f2937;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  @apply bg-gray-800;
+  border-radius: 4px;
+}
+
+*::-webkit-scrollbar-thumb {
+  @apply bg-gray-600;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  @apply bg-gray-500;
+}
+
+*::-webkit-scrollbar-corner {
+  @apply bg-gray-800;
+}
+
+/* Custom scrollbar class for specific elements */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  @apply bg-gray-800;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  @apply bg-gray-600 rounded-full;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  @apply bg-gray-500;
+}
+
+/* Animation for satellite pulse */
+@keyframes satellite-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 0.7;
+  }
+}
+
+.satellite-pulse {
+  animation: satellite-pulse 2s ease-in-out infinite;
+}
+
+/* Loading spinner */
+.loading-spinner {
+  border: 3px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  border-top: 3px solid #ffffff;
+  width: 24px;
+  height: 24px;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* React DatePicker Custom Styles - Dark Theme */
+.react-datepicker-wrapper {
+  @apply w-full;
+}
+
+.react-datepicker {
+  @apply bg-gray-800 border border-gray-700 rounded-lg shadow-xl font-sans;
+}
+
+.react-datepicker__header {
+  @apply bg-gray-900 border-b border-gray-700 rounded-t-lg;
+}
+
+.react-datepicker__current-month,
+.react-datepicker-time__header,
+.react-datepicker-year-header {
+  @apply text-white font-semibold text-sm py-2;
+}
+
+.react-datepicker__day-name {
+  @apply text-gray-400 text-xs font-medium;
+}
+
+.react-datepicker__day {
+  @apply text-gray-300 hover:bg-blue-600 hover:text-white rounded transition-colors;
+}
+
+.react-datepicker__day--selected,
+.react-datepicker__day--keyboard-selected {
+  @apply bg-blue-500 text-white font-semibold;
+}
+
+.react-datepicker__day--today {
+  @apply bg-gray-700 text-white font-bold;
+}
+
+.react-datepicker__day--disabled {
+  @apply text-gray-600 cursor-not-allowed hover:bg-transparent;
+}
+
+.react-datepicker__day--outside-month {
+  @apply text-gray-600;
+}
+
+.react-datepicker__navigation {
+  @apply top-3;
+}
+
+.react-datepicker__navigation-icon::before {
+  @apply border-gray-400;
+}
+
+.react-datepicker__navigation:hover .react-datepicker__navigation-icon::before {
+  @apply border-white;
+}
+
+.react-datepicker__time-container {
+  @apply border-l border-gray-700;
+}
+
+.react-datepicker__time-container .react-datepicker__time {
+  @apply bg-gray-800;
+}
+
+.react-datepicker__time-container .react-datepicker__time .react-datepicker__time-box {
+  @apply w-full;
+}
+
+.react-datepicker__time-container .react-datepicker__time .react-datepicker__time-box ul.react-datepicker__time-list {
+  @apply bg-gray-800;
+}
+
+.react-datepicker__time-container .react-datepicker__time .react-datepicker__time-box ul.react-datepicker__time-list li.react-datepicker__time-list-item {
+  @apply text-gray-300 hover:bg-blue-600 hover:text-white transition-colors;
+}
+
+.react-datepicker__time-container .react-datepicker__time .react-datepicker__time-box ul.react-datepicker__time-list li.react-datepicker__time-list-item--selected {
+  @apply bg-blue-500 text-white font-semibold;
+}
+
+.react-datepicker__input-container input {
+  @apply w-full;
+}

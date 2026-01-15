@@ -1,0 +1,21 @@
+{
+  "metadata": {
+    "satellite": "ICEYE-X44",
+    "export_time": "2025-08-11T12:32:58.341557",
+    "total_passes": 1
+  },
+  "passes": [
+    {
+      "target_name": "Space42",
+      "satellite_name": "ICEYE-X44",
+      "start_time": "2025-08-12T07:40:28.277101",
+      "max_elevation_time": "2025-08-12T07:40:28.277101",
+      "end_time": "2025-08-12T07:41:58.277101",
+      "max_elevation": 46.35,
+      "start_azimuth": 316.62,
+      "max_elevation_azimuth": 316.62,
+      "end_azimuth": 316.62,
+      "duration_minutes": 1.5
+    }
+  ]
+}

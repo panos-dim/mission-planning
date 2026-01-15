@@ -1,0 +1,355 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document>
+
+    <Placemark>
+        <name>T1</name>
+        <Point>
+            <coordinates>66.784494,84.699032,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T2</name>
+        <Point>
+            <coordinates>101.717818,63.964493,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T3</name>
+        <Point>
+            <coordinates>67.672981,75.643065,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T4</name>
+        <Point>
+            <coordinates>-25.798299,46.935169,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T5</name>
+        <Point>
+            <coordinates>7.194523,82.439264,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T6</name>
+        <Point>
+            <coordinates>-80.73407,3.042374,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T7</name>
+        <Point>
+            <coordinates>-62.221952,-69.040239,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T8</name>
+        <Point>
+            <coordinates>-115.423114,9.686451,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T9</name>
+        <Point>
+            <coordinates>93.905262,-74.233806,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T10</name>
+        <Point>
+            <coordinates>-5.744093,59.06063,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T11</name>
+        <Point>
+            <coordinates>62.331981,78.928017,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T12</name>
+        <Point>
+            <coordinates>-99.520858,64.905599,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T13</name>
+        <Point>
+            <coordinates>-71.874564,-12.447797,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T14</name>
+        <Point>
+            <coordinates>-160.043469,-35.702836,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T15</name>
+        <Point>
+            <coordinates>137.45172,79.685335,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T16</name>
+        <Point>
+            <coordinates>117.751426,36.160345,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T17</name>
+        <Point>
+            <coordinates>81.286675,33.309057,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T18</name>
+        <Point>
+            <coordinates>80.81506,37.33062,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T19</name>
+        <Point>
+            <coordinates>7.94116,0.245349,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T20</name>
+        <Point>
+            <coordinates>91.593729,15.985524,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T21</name>
+        <Point>
+            <coordinates>136.710297,-20.797494,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T22</name>
+        <Point>
+            <coordinates>-118.87985,-22.796126,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T23</name>
+        <Point>
+            <coordinates>-176.486228,8.732406,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T24</name>
+        <Point>
+            <coordinates>148.563058,-55.157683,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T25</name>
+        <Point>
+            <coordinates>-37.956312,-58.466796,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T26</name>
+        <Point>
+            <coordinates>-36.545993,-71.475007,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T27</name>
+        <Point>
+            <coordinates>-177.660579,-54.394038,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T28</name>
+        <Point>
+            <coordinates>-141.972875,-28.07835,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T29</name>
+        <Point>
+            <coordinates>-116.405523,21.47299,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T30</name>
+        <Point>
+            <coordinates>30.091415,79.924175,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T31</name>
+        <Point>
+            <coordinates>28.835629,-88.710496,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T32</name>
+        <Point>
+            <coordinates>42.903473,-34.209577,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T33</name>
+        <Point>
+            <coordinates>68.215012,83.661027,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T34</name>
+        <Point>
+            <coordinates>-143.912402,-66.244744,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T35</name>
+        <Point>
+            <coordinates>66.13339,36.655003,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T36</name>
+        <Point>
+            <coordinates>-155.038697,17.873785,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T37</name>
+        <Point>
+            <coordinates>28.447611,-58.015594,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T38</name>
+        <Point>
+            <coordinates>30.582155,56.223445,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T39</name>
+        <Point>
+            <coordinates>75.198891,-46.391955,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T40</name>
+        <Point>
+            <coordinates>-98.901478,-39.151886,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T41</name>
+        <Point>
+            <coordinates>118.98766,-20.10282,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T42</name>
+        <Point>
+            <coordinates>-127.311668,-35.80232,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T43</name>
+        <Point>
+            <coordinates>-177.79171,-80.093596,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T44</name>
+        <Point>
+            <coordinates>-82.396955,-37.13232,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T45</name>
+        <Point>
+            <coordinates>-129.42132,24.251702,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T46</name>
+        <Point>
+            <coordinates>147.52364,-24.101353,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T47</name>
+        <Point>
+            <coordinates>-30.678941,-57.199447,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T48</name>
+        <Point>
+            <coordinates>13.223108,81.419499,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T49</name>
+        <Point>
+            <coordinates>-36.537075,19.632423,0</coordinates>
+        </Point>
+    </Placemark>
+    
+    <Placemark>
+        <name>T50</name>
+        <Point>
+            <coordinates>-173.424315,-67.324543,0</coordinates>
+        </Point>
+    </Placemark>
+    </Document>
+</kml>

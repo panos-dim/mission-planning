@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>COSMOS42 | Space42</title>
+    <script>
+      // Global passive event listener polyfill to reduce Cesium warnings
+      (function() {
+        if (typeof EventTarget !== "undefined") {
+          let supportsPassive = false;
+          try {
+            addEventListener("test", null, Object.defineProperty({}, 'passive', {
+              get: function () { supportsPassive = true; }
+            }));
+          } catch(e) {}
+
+          const addEvent = EventTarget.prototype.addEventListener;
+          const touchEvents = ['touchstart', 'touchmove', 'touchend', 'touchcancel'];
+          const wheelEvents = ['wheel', 'mousewheel'];
+
+          EventTarget.prototype.addEventListener = function(name, listener, options) {
+            if (supportsPassive && typeof options !== "object") {
+              options = { passive: false, capture: !!options };
+            }
+
+            // Make touch and wheel events passive where appropriate for better performance
+            if (supportsPassive && typeof options === "object") {
+              if ((touchEvents.includes(name) || wheelEvents.includes(name)) &&
+                  options.passive === undefined) {
+                options.passive = true;
+              }
+            }
+
+            return addEvent.call(this, name, listener, options);
+          };
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

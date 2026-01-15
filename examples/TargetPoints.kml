@@ -1,0 +1,699 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document>
+
+<Placemark>
+    <name>POINT_N19__E51</name>
+    <Point>
+        <coordinates>50.515015,18.817592,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N18__E51</name>
+    <Point>
+        <coordinates>51.011981,18.417884,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N19__E52</name>
+    <Point>
+        <coordinates>51.508947,19.583635,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N19__E52.1</name>
+    <Point>
+        <coordinates>51.840258,19.050744,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N19__E51.1</name>
+    <Point>
+        <coordinates>51.343292,19.017437,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N19__E52.2</name>
+    <Point>
+        <coordinates>52.436618,19.084051,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N19__E53</name>
+    <Point>
+        <coordinates>52.867322,19.283889,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N19__E54</name>
+    <Point>
+        <coordinates>53.529943,19.283889,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N19__E50</name>
+    <Point>
+        <coordinates>50.018049,18.817592,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N20__E55</name>
+    <Point>
+        <coordinates>54.855187,19.650243,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N20__E55.1</name>
+    <Point>
+        <coordinates>54.755793,20.516092,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N18__E49</name>
+    <Point>
+        <coordinates>49.45482,18.301298,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N18__E50</name>
+    <Point>
+        <coordinates>49.786131,18.134744,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N31__E37</name>
+    <Point>
+        <coordinates>37.395107,31.278499,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N23__E42</name>
+    <Point>
+        <coordinates>42.265376,23.528992,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N21__E47</name>
+    <Point>
+        <coordinates>47.367562,21.231996,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N22__E47</name>
+    <Point>
+        <coordinates>47.268169,22.064341,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N23__E47</name>
+    <Point>
+        <coordinates>47.235038,22.996433,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N23__E47.1</name>
+    <Point>
+        <coordinates>46.936858,23.429141,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N23__E46</name>
+    <Point>
+        <coordinates>46.07545,23.628842,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N24__E42</name>
+    <Point>
+        <coordinates>41.867803,24.194623,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N25__E42</name>
+    <Point>
+        <coordinates>41.602754,24.860176,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N24__E46</name>
+    <Point>
+        <coordinates>45.77727,24.32774,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N25__E46</name>
+    <Point>
+        <coordinates>45.744139,25.292744,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N23__E51</name>
+    <Point>
+        <coordinates>51.343292,23.262719,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N24__E51</name>
+    <Point>
+        <coordinates>51.210768,24.361019,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N25__E51</name>
+    <Point>
+        <coordinates>50.780064,25.192923,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N24__E47</name>
+    <Point>
+        <coordinates>47.102514,24.460854,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N26__E41</name>
+    <Point>
+        <coordinates>40.741346,26.091241,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N26__E40</name>
+    <Point>
+        <coordinates>40.343773,26.556977,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N26__E42</name>
+    <Point>
+        <coordinates>41.569623,25.658736,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N26__E42.1</name>
+    <Point>
+        <coordinates>41.602754,26.457179,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N25__E42.1</name>
+    <Point>
+        <coordinates>42.066589,25.15965,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N25__E41</name>
+    <Point>
+        <coordinates>40.675084,25.292744,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N24__E41</name>
+    <Point>
+        <coordinates>41.337706,24.261182,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N22__E42</name>
+    <Point>
+        <coordinates>42.364769,22.430537,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N27__E39</name>
+    <Point>
+        <coordinates>39.382972,27.554845,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N32__E37</name>
+    <Point>
+        <coordinates>37.096927,31.943141,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N33__E38</name>
+    <Point>
+        <coordinates>38.057728,32.707365,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N31__E39</name>
+    <Point>
+        <coordinates>38.554695,30.713482,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N30__E37</name>
+    <Point>
+        <coordinates>37.461369,29.948942,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N30__E38</name>
+    <Point>
+        <coordinates>38.123991,30.547288,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N31__E39.1</name>
+    <Point>
+        <coordinates>39.184185,31.378202,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N30__E40</name>
+    <Point>
+        <coordinates>39.846807,30.314606,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N27__E46</name>
+    <Point>
+        <coordinates>45.909795,26.956146,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N26__E46</name>
+    <Point>
+        <coordinates>46.439892,26.157777,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N26__E46.1</name>
+    <Point>
+        <coordinates>45.810401,26.024704,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N25__E47</name>
+    <Point>
+        <coordinates>47.168776,24.760348,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N25__E47.1</name>
+    <Point>
+        <coordinates>47.069383,25.459107,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N25__E46.1</name>
+    <Point>
+        <coordinates>46.37363,24.727072,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N19__E47</name>
+    <Point>
+        <coordinates>46.572416,18.634395,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N20__E47</name>
+    <Point>
+        <coordinates>46.738072,19.633591,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N18__E48</name>
+    <Point>
+        <coordinates>48.195839,18.601086,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N21__E46</name>
+    <Point>
+        <coordinates>45.77727,20.86573,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N19__E48</name>
+    <Point>
+        <coordinates>47.864529,19.467069,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N19__E45</name>
+    <Point>
+        <coordinates>45.114649,19.23393,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N19__E46</name>
+    <Point>
+        <coordinates>46.207974,18.800938,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N20__E44</name>
+    <Point>
+        <coordinates>43.789406,20.066531,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N21__E43</name>
+    <Point>
+        <coordinates>43.126784,21.365179,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N32__E38</name>
+    <Point>
+        <coordinates>37.560762,32.275427,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N32__E38.1</name>
+    <Point>
+        <coordinates>38.123991,31.909911,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N32__E39</name>
+    <Point>
+        <coordinates>39.184185,32.142516,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N30__E37.1</name>
+    <Point>
+        <coordinates>36.831878,30.381088,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N29__E39</name>
+    <Point>
+        <coordinates>38.554695,29.55,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N32__E36</name>
+    <Point>
+        <coordinates>36.368043,32.076059,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N31__E38</name>
+    <Point>
+        <coordinates>38.157122,31.411435,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N30__E38.1</name>
+    <Point>
+        <coordinates>38.256515,29.682987,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N31__E37.1</name>
+    <Point>
+        <coordinates>36.898141,31.079089,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N31__E39.2</name>
+    <Point>
+        <coordinates>39.151054,31.14556,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N24__E43</name>
+    <Point>
+        <coordinates>42.629818,24.627242,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N23__E43</name>
+    <Point>
+        <coordinates>42.795473,23.262719,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N23__E42.1</name>
+    <Point>
+        <coordinates>41.967196,23.02972,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N23__E48</name>
+    <Point>
+        <coordinates>48.22897,22.963147,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N22__E49</name>
+    <Point>
+        <coordinates>49.256034,21.698123,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N23__E49</name>
+    <Point>
+        <coordinates>49.12351,22.996433,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N25__E49</name>
+    <Point>
+        <coordinates>48.792199,24.760348,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N19__E49</name>
+    <Point>
+        <coordinates>48.957854,19.467069,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N20__E49</name>
+    <Point>
+        <coordinates>48.990985,20.566042,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N20__E48</name>
+    <Point>
+        <coordinates>48.096446,20.532742,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N28__E38</name>
+    <Point>
+        <coordinates>38.355908,28.086964,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N27__E39.1</name>
+    <Point>
+        <coordinates>39.382972,26.789829,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N25__E40</name>
+    <Point>
+        <coordinates>39.681151,25.226197,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N22__E52</name>
+    <Point>
+        <coordinates>52.469749,21.831296,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N21__E54</name>
+    <Point>
+        <coordinates>53.695599,21.365179,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N22__E54</name>
+    <Point>
+        <coordinates>54.225696,22.330668,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N23__E53</name>
+    <Point>
+        <coordinates>52.900453,23.262719,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N23__E52</name>
+    <Point>
+        <coordinates>51.641472,22.796711,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N25__E49.1</name>
+    <Point>
+        <coordinates>49.421689,24.693795,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N25__E48</name>
+    <Point>
+        <coordinates>47.963922,25.192923,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N22__E44</name>
+    <Point>
+        <coordinates>44.418896,22.463827,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N21__E43.1</name>
+    <Point>
+        <coordinates>42.99426,21.564947,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N22__E44.1</name>
+    <Point>
+        <coordinates>43.855668,22.164215,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N22__E43</name>
+    <Point>
+        <coordinates>43.193046,22.230797,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N23__E44</name>
+    <Point>
+        <coordinates>43.690012,22.863286,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N19__E45.1</name>
+    <Point>
+        <coordinates>44.750207,18.701013,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N18__E45</name>
+    <Point>
+        <coordinates>45.412829,17.968186,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N21__E45</name>
+    <Point>
+        <coordinates>44.683945,20.665939,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N17__E47</name>
+    <Point>
+        <coordinates>47.069383,16.868808,0</coordinates>
+    </Point>
+</Placemark>
+
+<Placemark>
+    <name>POINT_N17__E48</name>
+    <Point>
+        <coordinates>48.361495,17.368545,0</coordinates>
+    </Point>
+</Placemark>
+
+</Document>
+</kml>
