@@ -24,10 +24,42 @@ import { SceneObject } from "../../types";
 import { SceneMode, useVisStore } from "../../store/visStore";
 import { useTargetAddStore } from "../../store/targetAddStore";
 import { usePreviewTargetsStore } from "../../store/previewTargetsStore";
+import { useSwathStore } from "../../store/swathStore";
 import { useMapClickToCartographic } from "../../hooks/useMapClickToCartographic";
 import SlewVisualizationLayer from "./SlewVisualizationLayer";
 import { SlewCanvasOverlay } from "./SlewCanvasOverlay";
+import SwathDebugOverlay from "./SwathDebugOverlay";
 import debug from "../../utils/debug";
+
+/**
+ * Extract SAR swath properties from entity
+ */
+function extractSwathProperties(entity: Entity): {
+  opportunityId: string | null;
+  targetId: string | null;
+  runId: string | null;
+} | null {
+  if (!entity.properties) return null;
+  try {
+    const entityType = entity.properties.entity_type?.getValue(null);
+    if (entityType !== "sar_swath") return null;
+    return {
+      opportunityId: entity.properties.opportunity_id?.getValue(null) ?? null,
+      targetId: entity.properties.target_id?.getValue(null) ?? null,
+      runId: entity.properties.run_id?.getValue(null) ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Check if entity is a SAR swath
+ */
+function isSarSwathEntity(entity: Entity): boolean {
+  if (!entity.id || typeof entity.id !== "string") return false;
+  return entity.id.startsWith("sar_swath_");
+}
 
 interface GlobeViewportProps {
   mode: SceneMode;
@@ -77,7 +109,12 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
     clockShouldAnimate,
     clockMultiplier,
     setClockState,
+    setSelectedOpportunity,
   } = useVisStore();
+
+  // Swath store for SAR swath selection and debug
+  const { selectSwath, setHoveredSwath, updateDebugInfo, debugEnabled } =
+    useSwathStore();
 
   // Use shared CZML if provided, otherwise use state CZML
   const czmlData = sharedCzml || state.czmlData;
@@ -631,6 +668,29 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
           if (defined(pickedObject) && pickedObject.id instanceof Entity) {
             const entity = pickedObject.id;
 
+            // ===== SAR SWATH PICKING (deterministic selection) =====
+            if (isSarSwathEntity(entity)) {
+              const swathProps = extractSwathProperties(entity);
+              if (swathProps?.opportunityId) {
+                // Update debug info
+                updateDebugInfo({
+                  pickingHitType: "sar_swath",
+                  lastPickTime: Date.now(),
+                });
+
+                // Select the swath in swath store
+                selectSwath(entity.id, swathProps.opportunityId);
+
+                // Sync with visStore for cross-panel sync
+                setSelectedOpportunity(swathProps.opportunityId);
+
+                debug.info(
+                  `[SwathPicking] Selected swath: ${swathProps.opportunityId} (target: ${swathProps.targetId})`
+                );
+              }
+              return; // Don't process as regular entity
+            }
+
             // Ignore non-interactive entities (visualization helpers, not mission objects)
             if (
               entity.name?.includes("Coverage Area") ||
@@ -702,6 +762,27 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
             selectObject(null);
           }
         }, ScreenSpaceEventType.LEFT_CLICK);
+
+        // Add mouse move handler for swath hover highlighting
+        eventHandlerRef.current.setInputAction(
+          (movement: { endPosition: Cartesian2 }) => {
+            const pickedObject = viewer.scene.pick(movement.endPosition);
+
+            if (defined(pickedObject) && pickedObject.id instanceof Entity) {
+              const entity = pickedObject.id;
+              if (isSarSwathEntity(entity)) {
+                const swathProps = extractSwathProperties(entity);
+                if (swathProps?.opportunityId) {
+                  setHoveredSwath(entity.id, swathProps.opportunityId);
+                  return;
+                }
+              }
+            }
+            // Clear hover when not over a swath
+            setHoveredSwath(null, null);
+          },
+          ScreenSpaceEventType.MOUSE_MOVE
+        );
       } catch (error) {
         console.error(`[${viewportId}] Error setting up click handler:`, error);
       }
@@ -729,6 +810,10 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
     pickCartographic,
     setPendingTarget,
     openDetailsSheet,
+    selectSwath,
+    setSelectedOpportunity,
+    setHoveredSwath,
+    updateDebugInfo,
   ]);
 
   // Focus on opportunity when selected
@@ -915,6 +1000,9 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
           </div>
         </div>
       )}
+
+      {/* SAR Swath Debug Overlay (dev mode only) */}
+      {viewportId === "primary" && debugEnabled && <SwathDebugOverlay />}
     </div>
   );
 };

@@ -21,9 +21,121 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from backend.config_resolver import get_config_hash, get_config_snapshot
+from backend.schedule_persistence import get_schedule_db
 from backend.workspace_persistence import get_workspace_db
 
 logger = logging.getLogger(__name__)
+
+
+def _migrate_orders_state_to_v2(
+    workspace_id: str,
+    orders_state: Optional[Dict[str, Any]],
+) -> int:
+    """
+    Migrate legacy orders_state_json blob to normalized v2 tables.
+
+    This is a one-time migration that runs when loading a workspace that has
+    orders_state_json but no corresponding rows in the v2 acquisitions table.
+
+    Args:
+        workspace_id: Workspace ID to associate migrated data with
+        orders_state: Legacy orders_state dict from workspace blob
+
+    Returns:
+        Number of acquisitions migrated
+    """
+    if not orders_state:
+        return 0
+
+    orders_list = orders_state.get("orders", [])
+    if not orders_list:
+        return 0
+
+    schedule_db = get_schedule_db()
+
+    # Check if we've already migrated this workspace
+    existing = schedule_db.list_acquisitions(workspace_id=workspace_id, limit=1)
+    if existing:
+        logger.info(
+            f"[Migration] Workspace {workspace_id} already has v2 acquisitions, skipping migration"
+        )
+        return 0
+
+    logger.info(
+        f"[Migration] Migrating {len(orders_list)} AcceptedOrders from workspace {workspace_id}"
+    )
+
+    migrated_count = 0
+
+    for order in orders_list:
+        order_id = order.get("order_id", "")
+        algorithm = order.get("algorithm", "unknown")
+        schedule = order.get("schedule", [])
+
+        if not schedule:
+            continue
+
+        # Create a plan record for this AcceptedOrder
+        import hashlib
+        import uuid
+        from datetime import datetime
+
+        run_id = f"migrated_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        input_hash = f"sha256:{hashlib.sha256(order_id.encode()).hexdigest()[:16]}"
+
+        metrics = order.get("metrics", {})
+
+        plan = schedule_db.create_plan(
+            algorithm=algorithm,
+            config={"source": "migrated_from_v1", "original_order_id": order_id},
+            input_hash=input_hash,
+            run_id=run_id,
+            metrics=metrics,
+            workspace_id=workspace_id,
+        )
+
+        # Create plan items and acquisitions from schedule
+        for item in schedule:
+            # Create plan item
+            schedule_db.create_plan_item(
+                plan_id=plan.id,
+                opportunity_id=item.get("opportunity_id", ""),
+                satellite_id=item.get("satellite_id", ""),
+                target_id=item.get("target_id", ""),
+                start_time=item.get("start_time", ""),
+                end_time=item.get("end_time", ""),
+                roll_angle_deg=item.get("droll_deg", 0.0),
+                pitch_angle_deg=0.0,
+                value=item.get("value"),
+            )
+
+            # Create acquisition (committed)
+            schedule_db.create_acquisition(
+                satellite_id=item.get("satellite_id", ""),
+                target_id=item.get("target_id", ""),
+                start_time=item.get("start_time", ""),
+                end_time=item.get("end_time", ""),
+                roll_angle_deg=item.get("droll_deg", 0.0),
+                pitch_angle_deg=0.0,
+                mode="OPTICAL",  # Default, can't determine from legacy data
+                state="committed",
+                lock_level="soft",
+                source="auto",
+                plan_id=plan.id,
+                opportunity_id=item.get("opportunity_id", ""),
+                workspace_id=workspace_id,
+            )
+            migrated_count += 1
+
+        # Mark plan as committed
+        schedule_db.update_plan_status(plan.id, "committed")
+
+    logger.info(
+        f"[Migration] Successfully migrated {migrated_count} acquisitions from workspace {workspace_id}"
+    )
+
+    return migrated_count
+
 
 router = APIRouter(prefix="/api/v1/workspaces", tags=["workspaces"])
 
@@ -218,6 +330,7 @@ async def get_workspace(workspace_id: str, include_czml: bool = True) -> Dict[st
     """Get a workspace by ID.
 
     Returns complete workspace data including state blobs.
+    Also triggers migration of legacy orders_state to v2 tables if needed.
     """
     try:
         db = get_workspace_db()
@@ -226,9 +339,27 @@ async def get_workspace(workspace_id: str, include_czml: bool = True) -> Dict[st
         if not workspace:
             raise HTTPException(status_code=404, detail="Workspace not found")
 
+        # Backward compatibility: migrate legacy orders_state to v2 tables
+        # This is a one-time migration that runs on first load after upgrade
+        migrated_count = 0
+        if workspace.orders_state:
+            migrated_count = _migrate_orders_state_to_v2(
+                workspace_id=workspace_id,
+                orders_state=workspace.orders_state,
+            )
+
+        response_data = workspace.to_dict(include_czml=include_czml)
+
+        # Add migration info to response
+        if migrated_count > 0:
+            response_data["_migration"] = {
+                "migrated_acquisitions": migrated_count,
+                "message": f"Migrated {migrated_count} acquisitions from legacy orders_state to v2 tables",
+            }
+
         return {
             "success": True,
-            "workspace": workspace.to_dict(include_czml=include_czml),
+            "workspace": response_data,
         }
 
     except HTTPException:

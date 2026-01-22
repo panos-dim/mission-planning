@@ -56,6 +56,16 @@ export const SatellitePositionSchema = z.object({
 // Mission Data
 // ============================================
 
+// SAR mission data schema
+export const SARMissionDataSchema = z.object({
+  imaging_mode: z.string().optional(),
+  look_side: z.string().optional(),
+  pass_direction: z.string().optional(),
+  incidence_min_deg: z.number().optional(),
+  incidence_max_deg: z.number().optional(),
+  sar_passes_count: z.number().optional(),
+});
+
 export const MissionDataSchema = z.object({
   // Legacy single satellite (optional for constellation)
   satellite_name: z.string().nullable().optional(),
@@ -63,6 +73,7 @@ export const MissionDataSchema = z.object({
   satellites: z.array(SatelliteInfoSchema).optional(),
   is_constellation: z.boolean().optional(),
   mission_type: z.string(),
+  imaging_type: z.string().optional(), // 'optical' or 'sar'
   start_time: z.string(),
   end_time: z.string(),
   elevation_mask: z.number(),
@@ -75,6 +86,8 @@ export const MissionDataSchema = z.object({
   passes: z.array(PassDataSchema),
   coverage_percentage: z.number().optional(),
   pass_statistics: z.record(z.string(), z.number()).optional(),
+  // SAR-specific data (only present for SAR missions)
+  sar: SARMissionDataSchema.optional(),
 });
 
 // ============================================

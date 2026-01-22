@@ -208,9 +208,12 @@ class SARCZMLGenerator:
         self.end_time = end_time
 
     def _format_czml_date(self, dt: Optional[datetime]) -> str:
-        """Format datetime for CZML."""
+        """Format datetime for CZML. Returns empty string if None (caller should handle)."""
         if dt is None:
             return ""
+        # Handle timezone-aware datetimes by converting to naive UTC
+        if hasattr(dt, "tzinfo") and dt.tzinfo is not None:
+            dt = dt.replace(tzinfo=None)
         return dt.replace(microsecond=0).isoformat() + "Z"
 
     def generate_swath_packets(
@@ -245,12 +248,15 @@ class SARCZMLGenerator:
         self,
         sar_pass: Any,
         index: int,
+        run_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Create CZML packet for a single SAR swath polygon.
 
         The swath is positioned on the correct side of the ground track
         based on the look_side attribute.
+
+        Includes stable opportunity_id and run_id for deterministic picking.
         """
         try:
             sar_data = sar_pass.sar_data
@@ -282,9 +288,13 @@ class SARCZMLGenerator:
             for lat, lon in swath_corners:
                 polygon_positions.extend([lon, lat, 0])
 
-            # Create packet
-            packet_id = f"sar_swath_{index}"
+            # Generate stable opportunity_id from target + time
             target_name = sar_pass.target_name
+            time_key = imaging_time.strftime("%Y%m%d%H%M%S")
+            opportunity_id = f"{target_name}_{time_key}_{index}"
+
+            # Create packet with deterministic ID
+            packet_id = f"sar_swath_{opportunity_id}"
             look_side = sar_data.look_side.value
             pass_dir = sar_data.pass_direction.value
             mode = sar_data.imaging_mode.value
@@ -309,7 +319,8 @@ class SARCZMLGenerator:
                         </table>
                     </div>
                 """,
-                "availability": f"{self._format_czml_date(sar_pass.start_time)}/{self._format_czml_date(sar_pass.end_time)}",
+                # Use pass times if available, fallback to mission times
+                "availability": f"{self._format_czml_date(sar_pass.start_time or self.start_time)}/{self._format_czml_date(sar_pass.end_time or self.end_time)}",
                 "polygon": {
                     "positions": {
                         "cartographicDegrees": polygon_positions,
@@ -319,6 +330,19 @@ class SARCZMLGenerator:
                     "outline": True,
                     "outlineColor": {"rgba": colors["outline"]},
                     "outlineWidth": 2,
+                },
+                # Custom properties for deterministic picking
+                "properties": {
+                    "opportunity_id": {"string": opportunity_id},
+                    "run_id": {"string": run_id or "analysis"},
+                    "target_id": {"string": target_name},
+                    "pass_index": {"number": index},
+                    "look_side": {"string": look_side},
+                    "pass_direction": {"string": pass_dir},
+                    "incidence_deg": {"number": inc_center},
+                    "swath_width_km": {"number": sar_data.swath_width_km},
+                    "imaging_time": {"string": self._format_czml_date(imaging_time)},
+                    "entity_type": {"string": "sar_swath"},
                 },
             }
 
@@ -514,6 +538,9 @@ class SARCZMLGenerator:
         Creates a swath polygon that moves with the satellite throughout
         the mission, useful for showing continuous SAR coverage capability.
 
+        Uses CZML vertexPositions with time-sampled data for proper Cesium rendering.
+        Format: [time, lon1, lat1, h1, lon2, lat2, h2, lon3, lat3, h3, lon4, lat4, h4, ...]
+
         Args:
             look_side: "LEFT" or "RIGHT"
             swath_width_km: Swath width in km
@@ -528,12 +555,13 @@ class SARCZMLGenerator:
         colors = SAR_COLORS.get(look_side, SAR_COLORS["ANY"])
 
         # Generate swath corners at each time step
-        time_step = timedelta(seconds=30)  # 30-second intervals
+        # Use larger time step for performance (60 seconds)
+        time_step = timedelta(seconds=60)
         current_time = self.start_time
 
-        # Build time-tagged polygon positions
-        # Format: [time0, positions0..., time1, positions1..., ...]
-        polygon_data = []
+        # Build time-tagged vertex positions for CZML
+        # Format: [time0, lon1, lat1, h1, lon2, lat2, h2, ..., time1, lon1, lat1, h1, ...]
+        vertex_data: List[float] = []
 
         sample_count = 0
         while current_time <= self.end_time:
@@ -551,13 +579,15 @@ class SARCZMLGenerator:
                     incidence_deg=incidence_deg,
                 )
 
-                if corners:
+                if corners and len(corners) >= 4:
                     seconds_from_start = (
                         current_time - self.start_time
                     ).total_seconds()
-                    polygon_data.append(seconds_from_start)
+                    # Add time offset first
+                    vertex_data.append(seconds_from_start)
+                    # Then add all 4 corners: lon, lat, height for each
                     for lat, lon in corners:
-                        polygon_data.extend([lon, lat, 0])
+                        vertex_data.extend([lon, lat, 0])
                     sample_count += 1
 
             except Exception as e:
@@ -565,7 +595,8 @@ class SARCZMLGenerator:
 
             current_time += time_step
 
-        if not polygon_data:
+        if not vertex_data or sample_count < 2:
+            logger.warning(f"Insufficient data for dynamic {look_side} swath")
             return None
 
         logger.info(f"Generated dynamic {look_side} swath with {sample_count} samples")
@@ -576,9 +607,9 @@ class SARCZMLGenerator:
             "show": True,
             "availability": f"{self._format_czml_date(self.start_time)}/{self._format_czml_date(self.end_time)}",
             "polygon": {
-                "positions": {
+                "vertexPositions": {
                     "epoch": self._format_czml_date(self.start_time),
-                    "cartographicDegrees": polygon_data,
+                    "cartographicDegrees": vertex_data,
                 },
                 "height": 0,
                 "material": {"solidColor": {"color": {"rgba": colors["fill"]}}},

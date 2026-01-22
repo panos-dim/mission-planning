@@ -115,6 +115,7 @@ satellites:
     altitude_km: 480
     inclination_deg: 97.3
     period_minutes: 93.6
+  sar_mode: stripmap
   satellite_agility: 1.2
   sensor_fov_half_angle_deg: 1.5
   tle_updated_at: '2025-12-08T12:00:00Z'
@@ -135,6 +136,7 @@ satellites:
     altitude_km: 525
     inclination_deg: 97.5
     period_minutes: 95.0
+  sar_mode: stripmap
   satellite_agility: 1.0
   sensor_fov_half_angle_deg: 2.0
   tle_updated_at: '2025-12-08T12:00:00Z'
@@ -155,6 +157,7 @@ satellites:
     altitude_km: 525
     inclination_deg: 97.5
     period_minutes: 95.0
+  sar_mode: stripmap
   satellite_agility: 1.0
   sensor_fov_half_angle_deg: 2.0
   tle_updated_at: '2025-12-08T12:00:00Z'
@@ -197,6 +200,7 @@ satellites:
     altitude_km: 505
     inclination_deg: 97.3
     period_minutes: 94.5
+  sar_mode: stripmap
   satellite_agility: 1.5
   sensor_fov_half_angle_deg: 0.8
   tle_updated_at: '2025-12-08T12:00:00Z'
@@ -211,8 +215,8 @@ satellites:
     resolution_m: 1.0
     swath_width_km: 30
   imaging_type: sar
-  line1: 1 66302U 25248K   25351.52022923  .00008056  00000+0  39235-3 0  9992
-  line2: 2 66302  45.4058  13.9386 0003917  99.8686 260.2642 15.18878380  8033
+  line1: 1 66302U 25248K   26015.00002314  .00043581  00000+0  22822-2 0  9990
+  line2: 2 66302  45.4031 221.9357 0006760 261.1225 327.2600 15.15194529  5831
   name: ICEYE-X67
   orbital_characteristics:
     altitude_km: 540
@@ -221,7 +225,7 @@ satellites:
   sar_mode: spotlight
   satellite_agility: 2.5
   sensor_fov_half_angle_deg: 1.0
-  tle_updated_at: '2025-12-18T06:00:00Z'
+  tle_updated_at: '2026-01-15T12:22:16.127391Z'
 - active: true
   capabilities:
   - imaging
@@ -233,8 +237,8 @@ satellites:
     resolution_m: 1.0
     swath_width_km: 30
   imaging_type: sar
-  line1: 1 66301U 25248J   25351.53082976  .00009182  00000+0  44987-3 0  9997
-  line2: 2 66301  45.4026  13.9955 0002559  86.4008 273.7171 15.18523745  8027
+  line1: 1 66301U 25248J   26015.16670139 -.00017877  00000+0 -89844-3 0  9991
+  line2: 2 66301  45.3992 221.0591 0005449 249.8702 151.4521 15.16191247  5735
   name: ICEYE-X66
   orbital_characteristics:
     altitude_km: 540
@@ -243,7 +247,7 @@ satellites:
   sar_mode: spotlight
   satellite_agility: 2.5
   sensor_fov_half_angle_deg: 1.0
-  tle_updated_at: '2025-12-18T06:00:00Z'
+  tle_updated_at: '2026-01-15T12:22:14.134970Z'
 - active: true
   capabilities:
   - imaging
@@ -255,8 +259,8 @@ satellites:
     resolution_m: 1.0
     swath_width_km: 30
   imaging_type: sar
-  line1: 1 66300U 25248H   25351.52822868  .00004920  00000+0  24674-3 0  9993
-  line2: 2 66300  45.4054  13.9916 0002913  99.0183 261.1033 15.18604071  8044
+  line1: 1 66300U 25248H   26015.16670139 -.00024881  00000+0 -13062-2 0  9991
+  line2: 2 66300  45.4028 221.2194 0005263 261.1190  79.7894 15.14850109  5831
   name: ICEYE-X65
   orbital_characteristics:
     altitude_km: 540
@@ -265,7 +269,7 @@ satellites:
   sar_mode: spotlight
   satellite_agility: 2.5
   sensor_fov_half_angle_deg: 1.0
-  tle_updated_at: '2025-12-18T06:00:00Z'
+  tle_updated_at: '2026-01-15T12:22:11.909241Z'
 - active: true
   capabilities:
   - imaging
@@ -277,8 +281,8 @@ satellites:
     resolution_m: 1.0
     swath_width_km: 30
   imaging_type: sar
-  line1: 1 64578U 25135BC  25351.93827337  .00005332  00000+0  46693-3 0  9997
-  line2: 2 64578  97.7585 103.7248 0002720 186.3440 173.7748 14.97117585 26851
+  line1: 1 64578U 25135BC  26015.13963994  .00003687  00000+0  32124-3 0  9992
+  line2: 2 64578  97.7578 131.7216 0004587 112.5414 247.6294 14.97504663 31078
   name: ICEYE-X57
   orbital_characteristics:
     altitude_km: 560
@@ -287,7 +291,7 @@ satellites:
   sar_mode: spotlight
   satellite_agility: 2.5
   sensor_fov_half_angle_deg: 1.0
-  tle_updated_at: '2025-12-18T06:00:00Z'
+  tle_updated_at: '2026-01-15T12:22:10.352335Z'
 - active: true
   capabilities:
   - imaging
@@ -299,8 +303,8 @@ satellites:
     resolution_m: 1.0
     swath_width_km: 30
   imaging_type: sar
-  line1: 1 64574U 25135AY  25351.90695785  .00003289  00000+0  31392-3 0  9999
-  line2: 2 64574  97.7610 103.6832 0001701 191.9123 168.2057 14.93987966 26847
+  line1: 1 64574U 25135AY  26015.16791990  .00001993  00000+0  19084-3 0  9994
+  line2: 2 64574  97.7603 131.6138 0002850 116.0168 244.1346 14.94303144 31068
   name: ICEYE-X56
   orbital_characteristics:
     altitude_km: 560
@@ -309,7 +313,7 @@ satellites:
   sar_mode: spotlight
   satellite_agility: 2.5
   sensor_fov_half_angle_deg: 1.0
-  tle_updated_at: '2025-12-18T06:00:00Z'
+  tle_updated_at: '2026-01-15T12:22:08.674614Z'
 - active: true
   capabilities:
   - imaging
@@ -321,8 +325,8 @@ satellites:
     resolution_m: 1.0
     swath_width_km: 30
   imaging_type: sar
-  line1: 1 64581U 25135BF  25351.92325051  .00003912  00000+0  37646-3 0  9996
-  line2: 2 64581  97.7609 103.6616 0002503 215.2611 144.8444 14.93557962 26845
+  line1: 1 64581U 25135BF  26015.19235498  .00002795  00000+0  26837-3 0  9996
+  line2: 2 64581  97.7604 131.5813 0004071 129.7847 230.3732 14.93872813 31067
   name: ICEYE-X55
   orbital_characteristics:
     altitude_km: 560
@@ -331,7 +335,7 @@ satellites:
   sar_mode: spotlight
   satellite_agility: 2.5
   sensor_fov_half_angle_deg: 1.0
-  tle_updated_at: '2025-12-18T06:00:00Z'
+  tle_updated_at: '2026-01-15T12:22:06.195002Z'
 - active: true
   capabilities:
   - imaging
@@ -343,8 +347,8 @@ satellites:
     resolution_m: 1.0
     swath_width_km: 30
   imaging_type: sar
-  line1: 1 64584U 25135BJ  25351.95207442  .00004291  00000+0  34199-3 0  9996
-  line2: 2 64584  97.7562 104.3586 0002546 193.7834 166.3321 15.00874117 26895
+  line1: 1 64584U 25135BJ  26015.15304416  .00002640  00000+0  21221-3 0  9993
+  line2: 2 64584  97.7506 132.4956 0002351 139.3507 220.7892 15.00879545 31123
   name: ICEYE-X53
   orbital_characteristics:
     altitude_km: 555
@@ -353,4 +357,4 @@ satellites:
   sar_mode: spotlight
   satellite_agility: 2.5
   sensor_fov_half_angle_deg: 1.0
-  tle_updated_at: '2025-12-18T06:00:00Z'
+  tle_updated_at: '2026-01-15T12:22:03.820843Z'

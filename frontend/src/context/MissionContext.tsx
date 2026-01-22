@@ -295,7 +295,20 @@ export function MissionProvider({
           formData.pointingAngle > 0 ? formData.pointingAngle : undefined,
         ground_station_name: formData.groundStationName,
         imaging_type: formData.imagingType,
-        sar_mode: formData.sarMode,
+        // Map frontend SAR mode names to backend API names
+        // Frontend: spot, strip, scan, dwell → Backend: spotlight, stripmap, scan
+        sar_mode: (() => {
+          const mode = formData.sar?.imaging_mode || formData.sarMode;
+          const modeMap: Record<string, string> = {
+            spot: "spotlight",
+            strip: "stripmap",
+            scan: "scan",
+            dwell: "scan", // dwell maps to scan for backend
+            stripmap: "stripmap",
+            spotlight: "spotlight",
+          };
+          return modeMap[mode || "stripmap"] || "stripmap";
+        })() as "stripmap" | "spotlight" | "scan",
       };
 
       debug.section("MISSION ANALYSIS");

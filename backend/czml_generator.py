@@ -43,6 +43,7 @@ class CZMLGenerator:
         mission_type: Optional[str] = None,
         sensor_fov_half_angle_deg: Optional[float] = None,
         max_spacecraft_roll_deg: Optional[float] = None,
+        imaging_type: Optional[str] = None,  # "optical" or "sar"
     ) -> None:
         # Constellation support: satellites dict takes precedence
         if satellites:
@@ -64,6 +65,7 @@ class CZMLGenerator:
         self.start_time = start_time
         self.end_time = end_time
         self.mission_type = mission_type
+        self.imaging_type = imaging_type  # "optical" or "sar"
 
         # Sensor FOV half-angle for footprint visualization
         self.sensor_fov_half_angle_deg: Optional[float] = sensor_fov_half_angle_deg
@@ -136,9 +138,12 @@ class CZMLGenerator:
             )
 
             # Sensor footprint for imaging missions (primary satellite only for performance)
+            # Only generate sensor cone for optical missions, not SAR
+            # SAR missions use swath polygons instead (generated in sar_czml.py)
             if (
                 idx == 0
                 and self.mission_type == "imaging"
+                and self.imaging_type != "sar"  # Skip cone for SAR missions
                 and self.sensor_fov_half_angle_deg
             ):
                 logger.info(
@@ -149,7 +154,12 @@ class CZMLGenerator:
                     czml.append(pointing_cone_packet)
 
             # Agility envelope for EACH satellite in constellation with matching colors
-            if self.mission_type == "imaging" and self.max_spacecraft_roll_deg:
+            # Only for optical missions - SAR uses swath polygons instead
+            if (
+                self.mission_type == "imaging"
+                and self.imaging_type != "sar"
+                and self.max_spacecraft_roll_deg
+            ):
                 agility_envelope_packet = self._create_agility_envelope_packet_for(
                     sat_id, sat_orbit, sat_color_rgba, idx
                 )

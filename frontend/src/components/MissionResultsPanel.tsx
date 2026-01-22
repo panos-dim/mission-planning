@@ -12,6 +12,8 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { getSatelliteColorByIndex } from "../constants/colors";
+import { useVisStore } from "../store/visStore";
+import { useSwathStore } from "../store/swathStore";
 
 type Section = "overview" | "schedule" | "timeline" | "summary";
 
@@ -86,6 +88,10 @@ const MissionResultsPanel: React.FC = () => {
   const [expandedSections, setExpandedSections] = useState<Section[]>([
     "overview",
   ]);
+
+  // Cross-panel sync: selected opportunity highlighting
+  const { selectedOpportunityId, setSelectedOpportunity } = useVisStore();
+  const { selectSwath, setFilteredTarget, autoFilterEnabled } = useSwathStore();
 
   // SAR filter state
   const [lookSideFilter, setLookSideFilter] = useState<
@@ -247,6 +253,20 @@ const MissionResultsPanel: React.FC = () => {
                       {state.missionData.mission_type}
                     </span>
                   </div>
+                  {state.missionData.mission_type === "imaging" && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Imaging Type:</span>
+                      <span
+                        className={`capitalize font-medium ${
+                          state.missionData.imaging_type === "sar"
+                            ? "text-purple-400"
+                            : "text-blue-400"
+                        }`}
+                      >
+                        {state.missionData.imaging_type || "optical"}
+                      </span>
+                    </div>
+                  )}
                   <div className="flex justify-between">
                     <span className="text-gray-400">Duration:</span>
                     <span className="text-white">
@@ -261,17 +281,64 @@ const MissionResultsPanel: React.FC = () => {
                   </div>
                   {state.missionData.mission_type === "imaging" ? (
                     <>
-                      <div className="flex justify-between">
-                        <span className="text-gray-400">Sensor FOV:</span>
-                        <span className="text-white">
-                          {state.missionData.sensor_fov_half_angle_deg || "N/A"}
-                          ° (±
-                          {state.missionData.sensor_fov_half_angle_deg
-                            ? state.missionData.sensor_fov_half_angle_deg * 2
-                            : "N/A"}
-                          ° total)
-                        </span>
-                      </div>
+                      {state.missionData.imaging_type === "sar" &&
+                      state.missionData.sar ? (
+                        <>
+                          <div className="flex justify-between">
+                            <span className="text-gray-400">SAR Mode:</span>
+                            <span className="text-purple-300 capitalize">
+                              {state.missionData.sar.imaging_mode || "strip"}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-400">Look Side:</span>
+                            <span className="text-white">
+                              {state.missionData.sar.look_side || "ANY"}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-400">
+                              Pass Direction:
+                            </span>
+                            <span className="text-white">
+                              {state.missionData.sar.pass_direction || "ANY"}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-400">
+                              Incidence Range:
+                            </span>
+                            <span className="text-white">
+                              {state.missionData.sar.incidence_min_deg || 15}° -{" "}
+                              {state.missionData.sar.incidence_max_deg || 45}°
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-400">
+                              SAR Opportunities:
+                            </span>
+                            <span className="text-purple-400 font-semibold">
+                              {state.missionData.sar.sar_passes_count || 0}
+                            </span>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex justify-between">
+                            <span className="text-gray-400">Sensor FOV:</span>
+                            <span className="text-white">
+                              {state.missionData.sensor_fov_half_angle_deg ||
+                                "N/A"}
+                              ° (±
+                              {state.missionData.sensor_fov_half_angle_deg
+                                ? state.missionData.sensor_fov_half_angle_deg *
+                                  2
+                                : "N/A"}
+                              ° total)
+                            </span>
+                          </div>
+                        </>
+                      )}
                       <div className="flex justify-between">
                         <span className="text-gray-400">
                           Max Satellite Agility:
@@ -422,10 +489,23 @@ const MissionResultsPanel: React.FC = () => {
                   index,
                   satellites
                 );
+                // Generate stable opportunity ID for cross-panel sync
+                const passTime = new Date(pass.start_time);
+                const timeKey = passTime
+                  .toISOString()
+                  .replace(/[-:TZ.]/g, "")
+                  .slice(0, 14);
+                const opportunityId = `${pass.target}_${timeKey}_${index}`;
+                const isSelected = selectedOpportunityId === opportunityId;
+
                 return (
                   <div
                     key={index}
-                    className="glass-panel rounded-lg p-2 cursor-pointer hover:bg-gray-800/50 transition-colors"
+                    className={`glass-panel rounded-lg p-2 cursor-pointer transition-colors ${
+                      isSelected
+                        ? "bg-blue-900/50 ring-1 ring-blue-500"
+                        : "hover:bg-gray-800/50"
+                    }`}
                     onClick={() => {
                       // Find original index in unsorted array
                       const originalIndex = state.missionData!.passes.findIndex(
@@ -434,6 +514,15 @@ const MissionResultsPanel: React.FC = () => {
                           p.target === pass.target
                       );
                       navigateToPassWindow(originalIndex);
+
+                      // Cross-panel sync: update selection in stores
+                      setSelectedOpportunity(opportunityId);
+                      selectSwath(`sar_swath_${opportunityId}`, opportunityId);
+
+                      // Auto-filter to target if enabled (for SAR missions)
+                      if (autoFilterEnabled && pass.sar_data) {
+                        setFilteredTarget(pass.target);
+                      }
                     }}
                     title="Click to navigate to this pass"
                   >

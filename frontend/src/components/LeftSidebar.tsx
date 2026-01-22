@@ -7,11 +7,13 @@ import {
   Package,
   FolderOpen,
   GitBranch,
+  AlertTriangle,
 } from "lucide-react";
 import MissionControls from "./MissionControls";
 import MissionPlanning from "./MissionPlanning";
 import AcceptedOrders from "./AcceptedOrders";
 import WorkspacePanel from "./WorkspacePanel";
+import ConflictsPanel from "./ConflictsPanel";
 import { ObjectExplorerTree } from "./ObjectExplorer";
 import ResizeHandle from "./ResizeHandle";
 import { useVisStore } from "../store/visStore";
@@ -19,6 +21,7 @@ import { useMission } from "../context/MissionContext";
 import { usePreviewTargetsStore } from "../store/previewTargetsStore";
 import { useOrdersStore } from "../store/ordersStore";
 import { usePlanningStore } from "../store/planningStore";
+import { useConflictStore } from "../store/conflictStore";
 import {
   AlgorithmResult,
   AcceptedOrder,
@@ -26,12 +29,15 @@ import {
   SceneObject,
   TargetData,
 } from "../types";
+import { commitScheduleDirect, DirectCommitItem } from "../api/scheduleApi";
 
 interface SidebarPanel {
   id: string;
   title: string;
   icon: React.ElementType;
   component: React.ReactNode;
+  badge?: number;
+  badgeColor?: "red" | "yellow" | "blue";
 }
 
 interface LeftSidebarProps {
@@ -70,7 +76,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
   // Handler for loading workspace data into MissionContext
   const handleWorkspaceLoad = (
     _workspaceId: string,
-    workspaceData: WorkspaceData
+    workspaceData: WorkspaceData,
   ) => {
     // Create scene objects from workspace data
     const sceneObjects: SceneObject[] = [];
@@ -89,7 +95,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
             createdAt: now,
             updatedAt: now,
           });
-        }
+        },
       );
     }
 
@@ -115,7 +121,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
             createdAt: now,
             updatedAt: now,
           });
-        }
+        },
       );
     }
 
@@ -156,7 +162,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
             longitude: target.longitude,
             priority: target.priority || 1,
             color: target.color || "#3B82F6",
-          })
+          }),
         );
       setHidePreview(false); // Ensure preview is visible
       setPreviewTargets(previewTargets);
@@ -165,7 +171,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
     // Restore planning results if available
     console.log(
       "[Workspace Load] planning_state:",
-      workspaceData.planning_state
+      workspaceData.planning_state,
     );
     console.log("[Workspace Load] orders_state:", workspaceData.orders_state);
     if (workspaceData.planning_state?.algorithm_runs) {
@@ -174,7 +180,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
         workspaceData.planning_state.algorithm_runs as Record<
           string,
           AlgorithmResult
-        >
+        >,
       );
       if (workspaceData.planning_state.selected_algorithm) {
         setActiveAlgorithm(workspaceData.planning_state.selected_algorithm);
@@ -202,9 +208,10 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
   }, [orders]);
 
   // Handler for promoting schedule to orders
-  const handlePromoteToOrders = (
+  // Now calls backend API to persist acquisitions to the database
+  const handlePromoteToOrders = async (
     algorithm: string,
-    result: AlgorithmResult
+    result: AlgorithmResult,
   ) => {
     const timestamp = new Date().toISOString();
     const dateStr = new Date()
@@ -217,10 +224,61 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
     const satellites = [...new Set(result.schedule.map((s) => s.satellite_id))];
     const targets = [...new Set(result.schedule.map((s) => s.target_id))];
 
+    // Build items for direct commit API
+    const commitItems: DirectCommitItem[] = result.schedule.map((s) => ({
+      opportunity_id: s.opportunity_id,
+      satellite_id: s.satellite_id,
+      target_id: s.target_id,
+      start_time: s.start_time,
+      end_time: s.end_time,
+      roll_angle_deg: s.roll_angle || s.delta_roll || 0,
+      pitch_angle_deg: s.pitch_angle || 0,
+      value: s.value,
+      incidence_angle_deg: s.incidence_angle,
+      sar_mode: s.sar_mode,
+      look_side: s.look_side,
+      pass_direction: s.pass_direction,
+    }));
+
+    // Try to commit to backend first
+    let backendCommitSuccess = false;
+    let planId: string | undefined;
+
+    try {
+      console.log("[PromoteToOrders] Committing to backend...", {
+        algorithm,
+        itemCount: commitItems.length,
+      });
+
+      const commitResponse = await commitScheduleDirect({
+        items: commitItems,
+        algorithm,
+        mode: result.schedule[0]?.sar_mode ? "SAR" : "OPTICAL",
+        lock_level: "soft",
+        workspace_id: state.activeWorkspace || undefined,
+      });
+
+      if (commitResponse.success) {
+        backendCommitSuccess = true;
+        planId = commitResponse.plan_id;
+        console.log("[PromoteToOrders] Backend commit successful:", {
+          planId,
+          committed: commitResponse.committed,
+          acquisitionIds: commitResponse.acquisition_ids,
+        });
+      }
+    } catch (error) {
+      console.warn(
+        "[PromoteToOrders] Backend commit failed, falling back to localStorage:",
+        error,
+      );
+    }
+
+    // Create local AcceptedOrder for UI display (backward compatible)
     const newOrder: AcceptedOrder = {
-      order_id: `order_${Date.now()}_${Math.random()
-        .toString(36)
-        .substr(2, 9)}`,
+      order_id:
+        planId ||
+        `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       name: `${algorithm.replace("_", "-")}-${dateStr}`,
       created_at: timestamp,
       algorithm: algorithm as "first_fit" | "best_fit" | "optimal",
@@ -252,7 +310,16 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
 
     setOrders((prev) => [...prev, newOrder]);
     setActivePanel("orders");
+
+    // Show feedback to user
+    if (backendCommitSuccess) {
+      console.log(
+        `[PromoteToOrders] ✓ Schedule committed to database (plan: ${planId})`,
+      );
+    }
   };
+
+  const conflictSummary = useConflictStore((s) => s.summary);
 
   const panels: SidebarPanel[] = [
     {
@@ -281,13 +348,13 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
             if (nodeType === "opportunity" || nodeType === "plan_item") {
               // These have timing info - extract pass index for timeline jump
               const match = nodeId.match(
-                /opportunity_(\d+)_|plan_item_\w+_(\d+)/
+                /opportunity_(\d+)_|plan_item_\w+_(\d+)/,
               );
               if (match) {
                 const passIndex = parseInt(match[1] || match[2], 10);
                 console.log(
                   "[ObjectExplorer] Jump to time, pass index:",
-                  passIndex
+                  passIndex,
                 );
               }
             }
@@ -323,6 +390,24 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
       title: "Orders",
       icon: Package,
       component: <AcceptedOrders orders={orders} onOrdersChange={setOrders} />,
+    },
+    {
+      id: "conflicts",
+      title: "Conflicts",
+      icon: AlertTriangle,
+      component: <ConflictsPanel />,
+      badge:
+        conflictSummary.errorCount > 0
+          ? conflictSummary.errorCount
+          : conflictSummary.warningCount > 0
+            ? conflictSummary.warningCount
+            : undefined,
+      badgeColor:
+        conflictSummary.errorCount > 0
+          ? "red"
+          : conflictSummary.warningCount > 0
+            ? "yellow"
+            : undefined,
     },
   ];
 
@@ -360,6 +445,21 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 title={panel.title}
               >
                 <panel.icon className="w-5 h-5" />
+
+                {/* Badge for conflict counts */}
+                {panel.badge !== undefined && panel.badge > 0 && (
+                  <span
+                    className={`absolute -top-1 -right-1 min-w-[16px] h-4 flex items-center justify-center text-[10px] font-bold rounded-full px-1 ${
+                      panel.badgeColor === "red"
+                        ? "bg-red-500 text-white"
+                        : panel.badgeColor === "yellow"
+                          ? "bg-yellow-500 text-black"
+                          : "bg-blue-500 text-white"
+                    }`}
+                  >
+                    {panel.badge > 99 ? "99+" : panel.badge}
+                  </span>
+                )}
 
                 {/* Tooltip */}
                 <div className="absolute left-full ml-2 px-2 py-1 bg-gray-800 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity">

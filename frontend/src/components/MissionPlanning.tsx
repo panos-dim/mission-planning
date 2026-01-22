@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   PlanningRequest,
   PlanningResponse,
@@ -11,8 +11,29 @@ import { useVisStore } from "../store/visStore";
 import { usePlanningStore } from "../store/planningStore";
 import { useExplorerStore } from "../store/explorerStore";
 import { JulianDate } from "cesium";
-import { Eye, EyeOff } from "lucide-react";
+import {
+  Eye,
+  EyeOff,
+  Database,
+  RefreshCw,
+  AlertTriangle,
+  CheckCircle,
+} from "lucide-react";
 import debug from "../utils/debug";
+import {
+  getScheduleContext,
+  createRepairPlan,
+  type PlanningMode,
+  type LockPolicy,
+  type SoftLockPolicy,
+  type RepairObjective,
+  type RepairPlanResponse,
+} from "../api/scheduleApi";
+import {
+  ConflictWarningModal,
+  type CommitPreview,
+} from "./ConflictWarningModal";
+import { RepairDiffPanel } from "./RepairDiffPanel";
 
 interface MissionPlanningProps {
   onPromoteToOrders?: (algorithm: string, result: AlgorithmResult) => void;
@@ -32,6 +53,50 @@ export default function MissionPlanning({
 
   // State for opportunities
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
+
+  // State for planning mode (incremental planning)
+  const [planningMode, setPlanningMode] =
+    useState<PlanningMode>("from_scratch");
+  const [lockPolicy, setLockPolicy] = useState<LockPolicy>("respect_hard_only");
+  const [includeTentative, setIncludeTentative] = useState(false);
+
+  // State for repair mode
+  const [softLockPolicy, setSoftLockPolicy] =
+    useState<SoftLockPolicy>("allow_replace");
+  const [repairObjective, setRepairObjective] =
+    useState<RepairObjective>("maximize_score");
+  const [maxChanges, setMaxChanges] = useState(100);
+  const [repairResult, setRepairResult] = useState<RepairPlanResponse | null>(
+    null,
+  );
+
+  // State for schedule context (loaded when in incremental mode)
+  const [scheduleContext, setScheduleContext] = useState<{
+    loaded: boolean;
+    loading: boolean;
+    count: number;
+    byState: Record<string, number>;
+    bySatellite: Record<string, number>;
+    horizonDays: number;
+    error?: string;
+  }>({
+    loaded: false,
+    loading: false,
+    count: 0,
+    byState: {},
+    bySatellite: {},
+    horizonDays: 7,
+  });
+
+  // State for conflict warning modal
+  const [showCommitModal, setShowCommitModal] = useState(false);
+  const [commitPreview, setCommitPreview] = useState<CommitPreview | null>(
+    null,
+  );
+  const [isCommitting, setIsCommitting] = useState(false);
+  const [pendingCommitAlgorithm, setPendingCommitAlgorithm] = useState<
+    string | null
+  >(null);
 
   // State for planning configuration
   // NOTE: Only roll_pitch_best_fit is used - other algorithms are deprecated
@@ -162,56 +227,210 @@ export default function MissionPlanning({
     }
   }, [state.missionData]);
 
+  // Load schedule context when planning mode changes to incremental
+  const loadScheduleContext = useCallback(async () => {
+    // For now, use a default workspace - in production this would come from workspace context
+    const workspaceId = "default";
+
+    setScheduleContext((prev) => ({
+      ...prev,
+      loading: true,
+      error: undefined,
+    }));
+
+    try {
+      const now = new Date();
+      const horizonEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+      const context = await getScheduleContext({
+        workspace_id: workspaceId,
+        from: now.toISOString(),
+        to: horizonEnd.toISOString(),
+        include_tentative: includeTentative,
+      });
+
+      setScheduleContext((prev) => ({
+        ...prev,
+        loaded: true,
+        loading: false,
+        count: context.count,
+        byState: context.by_state,
+        bySatellite: context.by_satellite,
+      }));
+    } catch (err) {
+      setScheduleContext((prev) => ({
+        ...prev,
+        loading: false,
+        error:
+          err instanceof Error
+            ? err.message
+            : "Failed to load schedule context",
+      }));
+    }
+  }, [includeTentative]);
+
+  // Auto-load context when switching to incremental or repair mode
+  useEffect(() => {
+    if (planningMode === "incremental" || planningMode === "repair") {
+      loadScheduleContext();
+    }
+  }, [planningMode, loadScheduleContext]);
+
   // Simplified: Run planning with roll_pitch_best_fit only
   const handleRunPlanning = async () => {
     setIsPlanning(true);
     setError(null);
 
     try {
-      const request: PlanningRequest = {
-        ...config,
-        algorithms: ["roll_pitch_best_fit"], // Only algorithm in use
-      };
+      const workspaceId = "default"; // TODO: Get from workspace context
 
-      debug.section("MISSION PLANNING");
-      debug.apiRequest("POST /api/planning/schedule", request);
+      // Handle repair mode separately
+      if (planningMode === "repair") {
+        debug.section("REPAIR PLANNING");
 
-      const response = await fetch("/api/planning/schedule", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(request),
-      });
+        const repairRequest = {
+          planning_mode: "repair" as const,
+          workspace_id: workspaceId,
+          include_tentative: includeTentative,
+          soft_lock_policy: softLockPolicy,
+          max_changes: maxChanges,
+          objective: repairObjective,
+          imaging_time_s: config.imaging_time_s,
+          max_roll_rate_dps: config.max_roll_rate_dps,
+          max_roll_accel_dps2: config.max_roll_accel_dps2,
+          max_pitch_rate_dps: config.max_pitch_rate_dps,
+          max_pitch_accel_dps2: config.max_pitch_accel_dps2,
+          look_window_s: config.look_window_s,
+          value_source: config.value_source,
+        };
 
-      const data: PlanningResponse = await response.json();
+        debug.apiRequest("POST /api/v1/schedule/repair", repairRequest);
 
-      debug.apiResponse("POST /api/planning/schedule", data, {
-        summary: data.success ? "✅ Planning completed" : `❌ ${data.message}`,
-      });
+        const repairResponse = await createRepairPlan(repairRequest);
 
-      if (data.success && data.results) {
-        setResults(data.results);
-        // Share results with global store for Object Explorer
-        usePlanningStore.getState().setResults(data.results);
-        usePlanningStore.getState().setActiveAlgorithm("roll_pitch_best_fit");
-
-        // Track planning run in explorer store for each algorithm
-        Object.entries(data.results).forEach(([algorithm, result]) => {
-          useExplorerStore.getState().addPlanningRun({
-            id: `planning_${algorithm}_${Date.now()}`,
-            algorithm: algorithm,
-            timestamp: new Date().toISOString(),
-            accepted: result.metrics.opportunities_accepted,
-            totalValue: result.metrics.total_value,
-          });
+        debug.apiResponse("POST /api/v1/schedule/repair", repairResponse, {
+          summary: repairResponse.success
+            ? `✅ Repair: ${repairResponse.repair_diff.change_score.num_changes} changes`
+            : `❌ ${repairResponse.message}`,
         });
 
-        // Log schedule
-        const result = data.results["roll_pitch_best_fit"];
-        if (result?.schedule && result.schedule.length > 0) {
-          debug.schedule("roll_pitch_best_fit", result.schedule);
+        if (repairResponse.success) {
+          // Store repair result for UI display
+          setRepairResult(repairResponse);
+
+          // Convert repair result to standard results format for compatibility
+          const repairAlgoResult: AlgorithmResult = {
+            schedule: repairResponse.new_plan_items.map((item) => ({
+              id: item.opportunity_id,
+              opportunity_id: item.opportunity_id,
+              satellite_id: item.satellite_id,
+              target_id: item.target_id,
+              start_time: item.start_time,
+              end_time: item.end_time,
+              roll_angle_deg: item.roll_angle_deg,
+              pitch_angle_deg: item.pitch_angle_deg,
+              roll_angle: item.roll_angle_deg,
+              pitch_angle: item.pitch_angle_deg,
+              delta_roll: 0,
+              delta_pitch: 0,
+              slew_time_s: 0,
+              total_maneuver_s: 0,
+              imaging_time_s: 1.0,
+              maneuver_time: 0,
+              slack_time: 0,
+              density: 1.0,
+              value: item.value || 1.0,
+              quality_score: item.quality_score || 1.0,
+            })),
+            metrics: {
+              algorithm: "repair_mode",
+              runtime_ms: 0,
+              opportunities_evaluated:
+                repairResponse.existing_acquisitions.count,
+              opportunities_accepted: repairResponse.new_plan_items.length,
+              opportunities_rejected: repairResponse.repair_diff.dropped.length,
+              total_value: repairResponse.metrics_comparison.score_after,
+              mean_value:
+                repairResponse.new_plan_items.length > 0
+                  ? repairResponse.metrics_comparison.score_after /
+                    repairResponse.new_plan_items.length
+                  : 0,
+              total_imaging_time_s: repairResponse.new_plan_items.length,
+              mean_incidence_deg: 0,
+              total_maneuver_time_s: 0,
+              schedule_span_s: 0,
+              utilization: 0,
+              mean_density: 0,
+              median_density: 0,
+            },
+          };
+
+          setResults({ repair_mode: repairAlgoResult });
+          usePlanningStore
+            .getState()
+            .setResults({ repair_mode: repairAlgoResult });
+          usePlanningStore.getState().setActiveAlgorithm("repair_mode");
+
+          useExplorerStore.getState().addPlanningRun({
+            id: `repair_${Date.now()}`,
+            algorithm: "repair_mode",
+            timestamp: new Date().toISOString(),
+            accepted: repairResponse.new_plan_items.length,
+            totalValue: repairResponse.metrics_comparison.score_after,
+          });
+        } else {
+          setError(repairResponse.message || "Repair planning failed");
         }
       } else {
-        setError(data.message || "Planning failed");
+        // Standard planning (from_scratch or incremental)
+        const request: PlanningRequest = {
+          ...config,
+          algorithms: ["roll_pitch_best_fit"],
+          mode: planningMode,
+          workspace_id:
+            planningMode === "incremental" ? workspaceId : undefined,
+        };
+
+        debug.section("MISSION PLANNING");
+        debug.apiRequest("POST /api/planning/schedule", request);
+
+        const response = await fetch("/api/planning/schedule", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(request),
+        });
+
+        const data: PlanningResponse = await response.json();
+
+        debug.apiResponse("POST /api/planning/schedule", data, {
+          summary: data.success
+            ? "✅ Planning completed"
+            : `❌ ${data.message}`,
+        });
+
+        if (data.success && data.results) {
+          setResults(data.results);
+          setRepairResult(null); // Clear any previous repair result
+          usePlanningStore.getState().setResults(data.results);
+          usePlanningStore.getState().setActiveAlgorithm("roll_pitch_best_fit");
+
+          Object.entries(data.results).forEach(([algorithm, result]) => {
+            useExplorerStore.getState().addPlanningRun({
+              id: `planning_${algorithm}_${Date.now()}`,
+              algorithm: algorithm,
+              timestamp: new Date().toISOString(),
+              accepted: result.metrics.opportunities_accepted,
+              totalValue: result.metrics.total_value,
+            });
+          });
+
+          const result = data.results["roll_pitch_best_fit"];
+          if (result?.schedule && result.schedule.length > 0) {
+            debug.schedule("roll_pitch_best_fit", result.schedule);
+          }
+        } else {
+          setError(data.message || "Planning failed");
+        }
       }
     } catch (err) {
       setError("Failed to run planning");
@@ -232,9 +451,56 @@ export default function MissionPlanning({
   };
 
   const handleAcceptPlan = () => {
-    if (results && results[activeTab] && onPromoteToOrders) {
-      onPromoteToOrders(activeTab, results[activeTab]);
+    if (!results || !results[activeTab]) return;
+
+    // Build commit preview based on planning mode
+    const result = results[activeTab];
+    const preview: CommitPreview = {
+      new_items_count: result.schedule.length,
+      conflicts_count: 0,
+      conflicts: [],
+      warnings: [],
+    };
+
+    // In incremental mode, check for potential conflicts with existing schedule
+    if (planningMode === "incremental" && scheduleContext.count > 0) {
+      preview.warnings.push(
+        `Planning around ${scheduleContext.count} existing acquisitions`,
+      );
     }
+
+    // Set the preview and show modal
+    setCommitPreview(preview);
+    setPendingCommitAlgorithm(activeTab);
+    setShowCommitModal(true);
+  };
+
+  const handleConfirmCommit = () => {
+    if (
+      results &&
+      pendingCommitAlgorithm &&
+      results[pendingCommitAlgorithm] &&
+      onPromoteToOrders
+    ) {
+      setIsCommitting(true);
+      try {
+        onPromoteToOrders(
+          pendingCommitAlgorithm,
+          results[pendingCommitAlgorithm],
+        );
+      } finally {
+        setIsCommitting(false);
+        setShowCommitModal(false);
+        setPendingCommitAlgorithm(null);
+        setCommitPreview(null);
+      }
+    }
+  };
+
+  const handleCancelCommit = () => {
+    setShowCommitModal(false);
+    setPendingCommitAlgorithm(null);
+    setCommitPreview(null);
   };
 
   const exportToCsv = (algorithm: string) => {
@@ -274,9 +540,9 @@ export default function MissionPlanning({
           s.density === "inf"
             ? "inf"
             : typeof s.density === "number"
-            ? s.density.toFixed(3)
-            : "N/A",
-        ].join(",")
+              ? s.density.toFixed(3)
+              : "N/A",
+        ].join(","),
       ),
     ].join("\n");
 
@@ -307,7 +573,7 @@ export default function MissionPlanning({
   // Navigate to pass in timeline when clicking a schedule row
   const handleScheduleRowClick = (
     scheduledTime: string,
-    _algorithm?: string
+    _algorithm?: string,
   ) => {
     if (!state.missionData) return;
 
@@ -419,6 +685,272 @@ export default function MissionPlanning({
             isDisabled ? "opacity-50 pointer-events-none" : ""
           }`}
         >
+          {/* Planning Mode Section */}
+          <div className="space-y-3 pb-3 border-b border-gray-700">
+            <h4 className="text-xs font-semibold text-blue-400 uppercase tracking-wide flex items-center gap-2">
+              <Database size={14} />
+              Planning Mode
+            </h4>
+
+            {/* Mode Toggle */}
+            <div className="flex gap-1">
+              <button
+                onClick={() => setPlanningMode("from_scratch")}
+                className={`flex-1 px-2 py-2 rounded text-xs font-medium transition-colors ${
+                  planningMode === "from_scratch"
+                    ? "bg-blue-600 text-white"
+                    : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+                }`}
+              >
+                From Scratch
+              </button>
+              <button
+                onClick={() => setPlanningMode("incremental")}
+                className={`flex-1 px-2 py-2 rounded text-xs font-medium transition-colors ${
+                  planningMode === "incremental"
+                    ? "bg-green-600 text-white"
+                    : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+                }`}
+              >
+                Incremental
+              </button>
+              <button
+                onClick={() => setPlanningMode("repair")}
+                className={`flex-1 px-2 py-2 rounded text-xs font-medium transition-colors ${
+                  planningMode === "repair"
+                    ? "bg-orange-600 text-white"
+                    : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+                }`}
+              >
+                Repair
+              </button>
+            </div>
+
+            <p className="text-[10px] text-gray-500">
+              {planningMode === "from_scratch"
+                ? "Plan ignores existing schedule - useful for exploring alternatives"
+                : planningMode === "incremental"
+                  ? "Plan avoids conflicts with committed acquisitions"
+                  : "Repair existing schedule: keep hard locks, optionally modify soft items"}
+            </p>
+
+            {/* Schedule Context Box (shown in incremental mode) */}
+            {planningMode === "incremental" && (
+              <div className="bg-gray-900/60 rounded-lg p-3 border border-gray-700">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-medium text-gray-300 flex items-center gap-1.5">
+                    {scheduleContext.loading ? (
+                      <RefreshCw
+                        size={12}
+                        className="animate-spin text-blue-400"
+                      />
+                    ) : scheduleContext.count > 0 ? (
+                      <CheckCircle size={12} className="text-green-400" />
+                    ) : (
+                      <AlertTriangle size={12} className="text-yellow-400" />
+                    )}
+                    Schedule Context
+                  </span>
+                  <button
+                    onClick={loadScheduleContext}
+                    disabled={scheduleContext.loading}
+                    className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1"
+                  >
+                    <RefreshCw
+                      size={10}
+                      className={scheduleContext.loading ? "animate-spin" : ""}
+                    />
+                    Refresh
+                  </button>
+                </div>
+
+                {scheduleContext.error ? (
+                  <div className="text-xs text-red-400">
+                    {scheduleContext.error}
+                  </div>
+                ) : scheduleContext.loading ? (
+                  <div className="text-xs text-gray-400">
+                    Loading schedule context...
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="text-xs text-gray-300">
+                      <span className="text-white font-medium">
+                        {scheduleContext.count}
+                      </span>{" "}
+                      committed acquisitions (horizon:{" "}
+                      {scheduleContext.horizonDays} days)
+                    </div>
+
+                    {/* State breakdown */}
+                    {Object.keys(scheduleContext.byState).length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {Object.entries(scheduleContext.byState).map(
+                          ([state, count]) => (
+                            <span
+                              key={state}
+                              className={`px-1.5 py-0.5 rounded text-[10px] ${
+                                state === "committed"
+                                  ? "bg-green-900/50 text-green-300"
+                                  : state === "locked"
+                                    ? "bg-red-900/50 text-red-300"
+                                    : "bg-gray-700 text-gray-300"
+                              }`}
+                            >
+                              {state}: {count}
+                            </span>
+                          ),
+                        )}
+                      </div>
+                    )}
+
+                    {/* Lock Policy */}
+                    <div className="pt-2 border-t border-gray-700/50">
+                      <label className="block text-[10px] text-gray-400 mb-1">
+                        Lock Policy
+                      </label>
+                      <select
+                        value={lockPolicy}
+                        onChange={(e) =>
+                          setLockPolicy(e.target.value as LockPolicy)
+                        }
+                        className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs"
+                      >
+                        <option value="respect_hard_only">
+                          Hard locks only
+                        </option>
+                        <option value="respect_hard_and_soft">
+                          Hard + soft locks
+                        </option>
+                      </select>
+                    </div>
+
+                    {/* Include Tentative Toggle */}
+                    <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={includeTentative}
+                        onChange={(e) => setIncludeTentative(e.target.checked)}
+                        className="rounded bg-gray-700 border-gray-600"
+                      />
+                      Include tentative acquisitions
+                    </label>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Repair Mode Controls (shown in repair mode) */}
+            {planningMode === "repair" && (
+              <div className="bg-orange-900/20 rounded-lg p-3 border border-orange-700/50">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-xs font-medium text-orange-300 flex items-center gap-1.5">
+                    <AlertTriangle size={12} />
+                    Repair Configuration
+                  </span>
+                  <button
+                    onClick={loadScheduleContext}
+                    disabled={scheduleContext.loading}
+                    className="text-xs text-orange-400 hover:text-orange-300 flex items-center gap-1"
+                  >
+                    <RefreshCw
+                      size={10}
+                      className={scheduleContext.loading ? "animate-spin" : ""}
+                    />
+                    Load Schedule
+                  </button>
+                </div>
+
+                {/* Schedule summary */}
+                {scheduleContext.count > 0 && (
+                  <div className="text-xs text-gray-300 mb-3 pb-2 border-b border-orange-700/30">
+                    <span className="text-white font-medium">
+                      {scheduleContext.count}
+                    </span>{" "}
+                    acquisitions in horizon ({scheduleContext.horizonDays} days)
+                  </div>
+                )}
+
+                {/* Soft Lock Policy */}
+                <div className="space-y-2 mb-3">
+                  <label className="block text-[10px] text-gray-400">
+                    Soft Lock Policy
+                  </label>
+                  <select
+                    value={softLockPolicy}
+                    onChange={(e) =>
+                      setSoftLockPolicy(e.target.value as SoftLockPolicy)
+                    }
+                    className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs"
+                  >
+                    <option value="allow_replace">
+                      Allow Replace (drop soft for better)
+                    </option>
+                    <option value="allow_shift">
+                      Allow Shift (move timing only)
+                    </option>
+                    <option value="freeze_soft">
+                      Freeze Soft (treat as hard)
+                    </option>
+                  </select>
+                </div>
+
+                {/* Max Changes Slider */}
+                <div className="space-y-2 mb-3">
+                  <div className="flex justify-between">
+                    <label className="text-[10px] text-gray-400">
+                      Max Changes
+                    </label>
+                    <span className="text-[10px] text-orange-300 font-medium">
+                      {maxChanges}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="1"
+                    max="200"
+                    value={maxChanges}
+                    onChange={(e) => setMaxChanges(parseInt(e.target.value))}
+                    className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
+                  />
+                  <div className="flex justify-between text-[9px] text-gray-500">
+                    <span>Conservative</span>
+                    <span>Aggressive</span>
+                  </div>
+                </div>
+
+                {/* Objective */}
+                <div className="space-y-2">
+                  <label className="block text-[10px] text-gray-400">
+                    Optimization Objective
+                  </label>
+                  <select
+                    value={repairObjective}
+                    onChange={(e) =>
+                      setRepairObjective(e.target.value as RepairObjective)
+                    }
+                    className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs"
+                  >
+                    <option value="maximize_score">Maximize Score</option>
+                    <option value="maximize_priority">Maximize Priority</option>
+                    <option value="minimize_changes">Minimize Changes</option>
+                  </select>
+                </div>
+
+                {/* Include Tentative Toggle */}
+                <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mt-3 pt-2 border-t border-orange-700/30">
+                  <input
+                    type="checkbox"
+                    checked={includeTentative}
+                    onChange={(e) => setIncludeTentative(e.target.checked)}
+                    className="rounded bg-gray-700 border-gray-600"
+                  />
+                  Include tentative acquisitions
+                </label>
+              </div>
+            )}
+          </div>
+
           <h3 className="text-sm font-semibold text-white border-b border-gray-700 pb-2">
             Planning Parameters
           </h3>
@@ -896,7 +1428,9 @@ export default function MissionPlanning({
           <div className="bg-gray-800 rounded-lg p-3 space-y-3">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <h3 className="text-sm font-semibold text-white">
-                Schedule Results
+                {planningMode === "repair"
+                  ? "Repair Results"
+                  : "Schedule Results"}
               </h3>
               <button
                 onClick={handleAcceptPlan}
@@ -907,6 +1441,11 @@ export default function MissionPlanning({
                 Accept Plan → Orders
               </button>
             </div>
+
+            {/* Repair Diff Panel (shown in repair mode) */}
+            {planningMode === "repair" && repairResult && (
+              <RepairDiffPanel repairResult={repairResult} />
+            )}
 
             {/* Algorithm Details (no tabs - single algorithm) */}
             {results[activeTab] && (
@@ -981,7 +1520,7 @@ export default function MissionPlanning({
                               >
                                 {targetId}
                               </span>
-                            )
+                            ),
                           )}
                         </div>
                       </details>
@@ -1115,7 +1654,7 @@ export default function MissionPlanning({
                           <th className="text-left py-1 px-2">Target</th>
                           {/* SAR columns - show if any scheduled item has SAR data */}
                           {results[activeTab].schedule.some(
-                            (s) => s.look_side
+                            (s) => s.look_side,
                           ) && (
                             <>
                               <th
@@ -1184,7 +1723,7 @@ export default function MissionPlanning({
                               prevSched.roll_angle !== undefined
                             ) {
                               displayDeltaRoll = Math.abs(
-                                sched.roll_angle - prevSched.roll_angle
+                                sched.roll_angle - prevSched.roll_angle,
                               );
                             }
                             if (
@@ -1192,7 +1731,7 @@ export default function MissionPlanning({
                               prevSched.pitch_angle !== undefined
                             ) {
                               displayDeltaPitch = Math.abs(
-                                sched.pitch_angle - prevSched.pitch_angle
+                                sched.pitch_angle - prevSched.pitch_angle,
                               );
                             }
                           }
@@ -1201,7 +1740,7 @@ export default function MissionPlanning({
                           const roll = Math.abs(sched.roll_angle ?? 0);
                           const pitch = Math.abs(sched.pitch_angle ?? 0);
                           const offNadirAngle = Math.sqrt(
-                            roll * roll + pitch * pitch
+                            roll * roll + pitch * pitch,
                           );
 
                           return (
@@ -1211,7 +1750,7 @@ export default function MissionPlanning({
                               onClick={() =>
                                 handleScheduleRowClick(
                                   sched.start_time,
-                                  activeTab
+                                  activeTab,
                                 )
                               }
                               onMouseEnter={() =>
@@ -1227,7 +1766,7 @@ export default function MissionPlanning({
                               <td className="py-1 px-2">{sched.target_id}</td>
                               {/* SAR data cells */}
                               {results[activeTab].schedule.some(
-                                (s) => s.look_side
+                                (s) => s.look_side,
                               ) && (
                                 <>
                                   <td className="text-center py-1 px-2">
@@ -1298,8 +1837,8 @@ export default function MissionPlanning({
                                 {sched.density === "inf"
                                   ? "∞"
                                   : typeof sched.density === "number"
-                                  ? sched.density.toFixed(2)
-                                  : "-"}
+                                    ? sched.density.toFixed(2)
+                                    : "-"}
                               </td>
                             </tr>
                           );
@@ -1313,6 +1852,16 @@ export default function MissionPlanning({
           </div>
         )}
       </div>
+
+      {/* Conflict Warning Modal */}
+      <ConflictWarningModal
+        isOpen={showCommitModal}
+        onClose={handleCancelCommit}
+        onConfirm={handleConfirmCommit}
+        onCancel={handleCancelCommit}
+        preview={commitPreview}
+        isCommitting={isCommitting}
+      />
     </div>
   );
 }

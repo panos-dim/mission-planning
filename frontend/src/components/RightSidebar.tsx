@@ -11,6 +11,7 @@ import {
 import { Inspector } from "./ObjectExplorer";
 import MissionResultsPanel from "./MissionResultsPanel";
 import ResizeHandle from "./ResizeHandle";
+import SwathLayerControl from "./Map/SwathLayerControl";
 import { useMission } from "../context/MissionContext";
 import { useVisStore } from "../store/visStore";
 
@@ -153,23 +154,12 @@ const RightSidebar: React.FC = () => {
                 </label>
               </>
             )}
-            {/* SAR-specific layers */}
+            {/* SAR-specific layers - using SwathLayerControl for granular control */}
             {(state.missionData?.imaging_type === "sar" ||
               state.missionData?.sar) && (
-              <>
-                <label className="flex items-center space-x-2 text-gray-300 hover:text-white cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={activeLayers.sarSwaths ?? true}
-                    onChange={(e) => {
-                      setLayerVisibility("sarSwaths", e.target.checked);
-                      toggleEntityVisibility("sar_swath", e.target.checked);
-                    }}
-                    className="rounded"
-                  />
-                  <span>SAR Swaths</span>
-                </label>
-              </>
+              <div className="pt-2 border-t border-gray-700 mt-2">
+                <SwathLayerControl isSARMission={true} />
+              </div>
             )}
           </div>
         </div>

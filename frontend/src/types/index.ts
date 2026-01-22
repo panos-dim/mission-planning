@@ -231,12 +231,12 @@ export interface SAROpportunityData {
 
 /** SAR mission response data */
 export interface SARMissionData {
-  imaging_mode: SARImagingMode;
-  look_side: SARLookSide;
-  pass_direction: SARPassDirection;
+  imaging_mode?: SARImagingMode;
+  look_side?: SARLookSide;
+  pass_direction?: SARPassDirection;
   incidence_min_deg?: number;
   incidence_max_deg?: number;
-  sar_passes_count: number;
+  sar_passes_count?: number;
 }
 
 export interface MissionData {
@@ -561,6 +561,10 @@ export interface AlgorithmResult {
 }
 
 export interface PlanningRequest {
+  // Planning mode (incremental vs from_scratch vs repair)
+  mode?: "from_scratch" | "incremental" | "repair";
+  workspace_id?: string;
+  // Agility parameters
   imaging_time_s: number;
   max_roll_rate_dps: number;
   max_roll_accel_dps2: number;

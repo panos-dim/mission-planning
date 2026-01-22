@@ -9,11 +9,13 @@ Provides REST API endpoints for:
 - Mission analysis and planning
 """
 
+import hashlib
 import json
 import logging
 import os
 import sys
 import tempfile
+import uuid
 from datetime import datetime, timedelta
 from io import BytesIO
 from typing import Any, Dict, List, Optional, Union
@@ -79,9 +81,12 @@ from backend.coordinate_parser import CoordinateParser, FileParser, TargetValida
 from backend.czml_generator import CZMLGenerator, generate_mission_czml
 from backend.mission_settings_manager import MissionSettingsManager
 from backend.routers.config_admin import router as config_admin_router
+from backend.routers.orders import router as orders_router
+from backend.routers.schedule import router as schedule_router
 from backend.routers.validation import router as validation_router
 from backend.routers.workspaces import router as workspaces_router
 from backend.satellite_manager import SatelliteManager
+from backend.schedule_persistence import get_schedule_db
 from backend.validation.mission_input_validator import (
     reload_validation_config,
     validate_mission_input,
@@ -91,6 +96,21 @@ from backend.validation.mission_input_validator import (
 config_manager = ConfigManager()
 satellite_manager = SatelliteManager()
 mission_settings_manager = MissionSettingsManager()
+
+# Cache for opportunities (used by incremental/repair planning endpoints)
+_opportunities_cache: List[Dict[str, Any]] = []
+
+
+def get_cached_opportunities() -> List[Dict[str, Any]]:
+    """Get cached opportunities from the last mission analysis."""
+    return _opportunities_cache
+
+
+def set_cached_opportunities(opportunities: List[Dict[str, Any]]) -> None:
+    """Set cached opportunities from mission analysis."""
+    global _opportunities_cache
+    _opportunities_cache = opportunities
+
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -114,6 +134,8 @@ app.add_middleware(
 app.include_router(workspaces_router)
 app.include_router(validation_router)
 app.include_router(config_admin_router)
+app.include_router(schedule_router)
+app.include_router(orders_router)
 
 # Serve static files (built React app)
 if os.path.exists("../frontend/dist"):
@@ -299,6 +321,10 @@ class MissionRequest(BaseModel):
     imaging_type: Optional[str] = Field(
         default="optical",
         description="Imaging sensor type: optical or sar (for imaging missions)",
+    )
+    sar_mode: Optional[str] = Field(
+        default=None,
+        description="SAR imaging mode: spotlight, stripmap, or scan (used when imaging_type='sar')",
     )
     elevation_mask: Optional[float] = Field(
         default=None,
@@ -1010,6 +1036,15 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
             from mission_planner.sar_visibility import SARVisibilityCalculator
 
             # Get SAR params from request or use defaults
+            # Map API mode names to internal names: spotlight→spot, stripmap→strip
+            api_to_internal_mode = {
+                "spotlight": "spot",
+                "stripmap": "strip",
+                "scan": "scan",
+                "spot": "spot",
+                "strip": "strip",
+            }
+
             if request.sar:
                 sar_input_params = SARConfigParams(
                     imaging_mode=SARMode.from_string(request.sar.imaging_mode),
@@ -1020,6 +1055,14 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
                         request.sar.pass_direction
                     ),
                 )
+            elif request.sar_mode:
+                # Use sar_mode from top-level request (frontend sends this)
+                from mission_planner.sar_config import get_default_sar_params
+
+                internal_mode = api_to_internal_mode.get(
+                    request.sar_mode.lower(), "strip"
+                )
+                sar_input_params = get_default_sar_params(internal_mode)
             else:
                 # Use defaults for strip mode
                 from mission_planner.sar_config import get_default_sar_params
@@ -1069,13 +1112,15 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
 
                 for p in sat_all_passes:
                     # Find matching target
-                    target = next((t for t in targets if t.name == p.target_name), None)
-                    if target:
+                    matching_target = next(
+                        (t for t in targets if t.name == p.target_name), None
+                    )
+                    if matching_target is not None:
                         # Compute SAR-specific attributes for this pass
                         sar_passes = sar_calc.compute_sar_passes(
-                            target.latitude,
-                            target.longitude,
-                            target.name,
+                            matching_target.latitude,
+                            matching_target.longitude,
+                            matching_target.name,
                             p.start_time,
                             p.end_time,
                         )
@@ -1132,7 +1177,7 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
         primary_vis_calc = VisibilityCalculator(satellite=satellite, use_adaptive=False)
 
         # Generate mission data
-        mission_data = {
+        mission_data: Dict[str, Any] = {
             # Legacy single satellite name (for backward compatibility)
             "satellite_name": primary_tle.name if not is_constellation else None,
             # NEW: Constellation support
@@ -1224,6 +1269,7 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
             mission_type=request.mission_type,
             sensor_fov_half_angle_deg=actual_sensor_fov,
             max_spacecraft_roll_deg=actual_max_spacecraft_roll,
+            imaging_type=request.imaging_type,  # "optical" or "sar"
         )
         logger.info(
             f"CZMLGenerator initialized with sensor_fov={generator.sensor_fov_half_angle_deg}°, max_roll={generator.max_spacecraft_roll_deg}°"
@@ -2360,6 +2406,16 @@ async def reload_mission_settings() -> Dict[str, Any]:
 class PlanningRequest(BaseModel):
     """Request for mission planning/scheduling."""
 
+    # Planning mode (NEW for persistence)
+    mode: str = Field(
+        default="from_scratch",
+        description="Planning mode: from_scratch (ignore history) | incremental (respect committed)",
+    )
+    workspace_id: Optional[str] = Field(
+        default=None,
+        description="Workspace ID for incremental mode (loads committed acquisitions)",
+    )
+
     # Agility parameters
     imaging_time_s: float = Field(default=5.0, description="Time on target (tau)")
     max_roll_rate_dps: float = Field(default=1.0, description="Max roll rate (deg/s)")
@@ -2420,12 +2476,30 @@ class PlanningRequest(BaseModel):
     )
 
 
+class PlanningAuditMetadata(BaseModel):
+    """Audit metadata for planning responses (instrumentation for persistent scheduling)."""
+
+    plan_input_hash: str = Field(
+        description="SHA256 hash of planning inputs for reproducibility"
+    )
+    run_id: str = Field(description="Unique identifier for this planning run")
+    candidate_plan_id: str = Field(
+        description="In-memory plan ID (for future persistence)"
+    )
+    opportunities_considered: List[str] = Field(
+        description="List of opportunity IDs that were evaluated"
+    )
+
+
 class PlanningResponse(BaseModel):
     """Response from mission planning."""
 
     success: bool
     message: str
     results: Optional[Dict[str, Any]] = None
+    audit: Optional[PlanningAuditMetadata] = Field(
+        default=None, description="Audit metadata for debugging and future persistence"
+    )
 
 
 @app.get("/api/planning/weight-presets")
@@ -2889,6 +2963,91 @@ async def schedule_mission(request: PlanningRequest) -> PlanningResponse:
             f"🎯 WEIGHTS: P={multi_weights.norm_priority*100:.0f}% G={multi_weights.norm_geometry*100:.0f}% T={multi_weights.norm_timing*100:.0f}% (preset={request.weight_preset})"
         )
 
+        # =====================================================================
+        # INCREMENTAL MODE: Filter out opportunities that conflict with
+        # committed acquisitions (blocked intervals per satellite)
+        # =====================================================================
+        blocked_intervals_by_satellite: Dict[str, List[tuple]] = {}
+
+        if request.mode == "incremental":
+            logger.info(f"[INCREMENTAL MODE] Loading committed acquisitions...")
+
+            # Get time window from mission data
+            mission_start = mission_data.get("start_time")
+            mission_end = mission_data.get("end_time")
+
+            if mission_start and mission_end:
+                schedule_db = get_schedule_db()
+
+                # Get all committed/locked acquisitions in this time window
+                for sat_name in set(opp.satellite_id for opp in opportunities):
+                    committed = schedule_db.get_committed_acquisitions_for_satellite(
+                        satellite_id=sat_name,
+                        start_time=mission_start,
+                        end_time=mission_end,
+                        workspace_id=request.workspace_id,
+                    )
+
+                    if committed:
+                        blocked_intervals_by_satellite[sat_name] = [
+                            (acq.start_time, acq.end_time) for acq in committed
+                        ]
+                        logger.info(
+                            f"  Satellite {sat_name}: {len(committed)} committed acquisitions "
+                            f"(blocking {len(committed)} intervals)"
+                        )
+
+                # Filter opportunities that overlap with blocked intervals
+                original_count = len(opportunities)
+                filtered_opportunities = []
+
+                for opp in opportunities:
+                    blocked = blocked_intervals_by_satellite.get(opp.satellite_id, [])
+                    is_blocked = False
+
+                    # Check if this opportunity overlaps any blocked interval
+                    opp_start = (
+                        opp.start_time.isoformat()
+                        if hasattr(opp.start_time, "isoformat")
+                        else str(opp.start_time)
+                    )
+                    opp_end = (
+                        opp.end_time.isoformat()
+                        if hasattr(opp.end_time, "isoformat")
+                        else str(opp.end_time)
+                    )
+
+                    for block_start, block_end in blocked:
+                        # Overlap check: opp_start < block_end AND opp_end > block_start
+                        if opp_start < block_end and opp_end > block_start:
+                            is_blocked = True
+                            break
+
+                    if not is_blocked:
+                        filtered_opportunities.append(opp)
+
+                opportunities = filtered_opportunities
+                removed_count = original_count - len(opportunities)
+
+                if removed_count > 0:
+                    logger.info(
+                        f"[INCREMENTAL MODE] Filtered out {removed_count} opportunities "
+                        f"that conflict with committed acquisitions. "
+                        f"Remaining: {len(opportunities)}"
+                    )
+                else:
+                    logger.info(
+                        f"[INCREMENTAL MODE] No conflicts found. All {len(opportunities)} "
+                        f"opportunities available for planning."
+                    )
+            else:
+                logger.warning(
+                    "[INCREMENTAL MODE] Could not determine mission time window. "
+                    "Falling back to from_scratch mode."
+                )
+        else:
+            logger.info("[FROM_SCRATCH MODE] Ignoring existing acquisitions")
+
         # Store all opportunities for all algorithms
         all_opportunities = opportunities.copy()
 
@@ -3113,9 +3272,45 @@ async def schedule_mission(request: PlanningRequest) -> PlanningResponse:
                 },
             }
 
+        # Compute audit metadata for instrumentation
+        run_timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        run_uuid = str(uuid.uuid4())[:8]
+        run_id = f"run_{run_timestamp}_{run_uuid}"
+        candidate_plan_id = f"plan_temp_{run_uuid}"
+
+        # Compute input hash for reproducibility
+        input_data = {
+            "request": request.model_dump(),
+            "passes_count": len(passes),
+            "targets_count": len(targets),
+            "mission_start": mission_data.get("start_time"),
+            "mission_end": mission_data.get("end_time"),
+        }
+        input_json = json.dumps(input_data, sort_keys=True, default=str)
+        plan_input_hash = (
+            f"sha256:{hashlib.sha256(input_json.encode()).hexdigest()[:16]}"
+        )
+
+        # Collect opportunity IDs considered
+        opportunities_considered = [opp.id for opp in all_opportunities]
+
+        audit_metadata = {
+            "plan_input_hash": plan_input_hash,
+            "run_id": run_id,
+            "candidate_plan_id": candidate_plan_id,
+            "opportunities_considered": opportunities_considered,
+        }
+
+        # Add audit metadata to results
+        results["audit"] = audit_metadata  # type: ignore[assignment]
+
+        logger.info(
+            f"[AUDIT] run_id={run_id}, input_hash={plan_input_hash}, opps={len(opportunities_considered)}"
+        )
+
         return PlanningResponse(
             success=True,
-            message=f"Scheduled with {len(results)} algorithms for {total_targets} targets",
+            message=f"Scheduled with {len(results) - 1} algorithms for {total_targets} targets",
             results=results,
         )
 
