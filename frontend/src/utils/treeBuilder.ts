@@ -54,7 +54,7 @@ export const NODE_ICONS: Record<TreeNodeType, string> = {
 
 function createBadge(
   count: number,
-  color?: TreeNodeBadge["color"]
+  color?: TreeNodeBadge["color"],
 ): TreeNodeBadge | undefined {
   if (count === 0) return undefined;
   return { count, color: color || "gray" };
@@ -131,7 +131,7 @@ export function buildObjectTree(input: TreeBuilderInput): TreeNode {
     missionData,
     algorithmResults,
     acceptedOrders,
-    filterByTarget
+    filterByTarget,
   );
   workspaceNode.children!.push(resultsNode);
 
@@ -144,7 +144,7 @@ export function buildObjectTree(input: TreeBuilderInput): TreeNode {
 
 function buildScenarioNode(
   workspaceData: WorkspaceData | null | undefined,
-  missionData: MissionData | null | undefined
+  missionData: MissionData | null | undefined,
 ): TreeNode {
   const missionMode =
     missionData?.mission_type?.toUpperCase() ||
@@ -176,11 +176,11 @@ function buildScenarioNode(
 
 function buildAssetsNode(
   missionData: MissionData | null | undefined,
-  sceneObjects: SceneObject[]
+  sceneObjects: SceneObject[],
 ): TreeNode {
   const satellites = sceneObjects.filter((obj) => obj.type === "satellite");
   const groundStations = sceneObjects.filter(
-    (obj) => obj.type === "ground_station"
+    (obj) => obj.type === "ground_station",
   );
 
   // Also check missionData for satellites
@@ -275,7 +275,7 @@ function buildAssetsNode(
 
 function buildTargetsNode(
   missionData: MissionData | null | undefined,
-  sceneObjects: SceneObject[]
+  sceneObjects: SceneObject[],
 ): TreeNode {
   // Filter to actual targets, excluding visualization entities
   const targetObjects = sceneObjects.filter((obj) => {
@@ -352,7 +352,7 @@ function buildTargetsNode(
 
 function buildConstraintsNode(
   missionData: MissionData | null | undefined,
-  workspaceData: WorkspaceData | null | undefined
+  workspaceData: WorkspaceData | null | undefined,
 ): TreeNode {
   const constraints = workspaceData?.scenario_config?.constraints || {};
 
@@ -418,7 +418,7 @@ function buildRunsNode(
     algorithm: string;
     timestamp: string;
     accepted: number;
-  }>
+  }>,
 ): TreeNode {
   const analysisRunNodes: TreeNode[] = analysisRuns.map((run) => ({
     id: `analysis_run_${run.id}`,
@@ -437,7 +437,7 @@ function buildRunsNode(
     id: `planning_run_${run.id}`,
     type: "planning_run" as TreeNodeType,
     name: `${formatAlgorithmName(run.algorithm)} - ${formatRunTimestamp(
-      run.timestamp
+      run.timestamp,
     )}`,
     icon: NODE_ICONS.planning_run,
     isLeaf: true,
@@ -486,7 +486,7 @@ function buildResultsNode(
   missionData: MissionData | null | undefined,
   algorithmResults: Record<string, AlgorithmResult>,
   acceptedOrders: AcceptedOrder[],
-  filterByTarget: string | null = null
+  filterByTarget: string | null = null,
 ): TreeNode {
   // Build opportunities from mission passes
   const passes = missionData?.passes || [];
@@ -502,7 +502,7 @@ function buildResultsNode(
   const createOpportunityNode = (
     pass: PassData,
     originalIdx: number,
-    idx: number
+    idx: number,
   ): TreeNode => {
     const passAny = pass as unknown as Record<string, unknown>;
     const targetName =
@@ -516,7 +516,7 @@ function buildResultsNode(
       const lookBadge = sarData.look_side === "LEFT" ? "L" : "R";
       const dirBadge = sarData.pass_direction === "ASCENDING" ? "↑" : "↓";
       displayName = `${targetName} [${lookBadge}${dirBadge}] - ${formatPassTime(
-        startTime
+        startTime,
       )}`;
     }
 
@@ -539,10 +539,10 @@ function buildResultsNode(
   if (isSARMission && filteredPasses.some((p) => p.sar_data)) {
     // Group by look side first
     const leftPasses = filteredPasses.filter(
-      (p) => p.sar_data?.look_side === "LEFT"
+      (p) => p.sar_data?.look_side === "LEFT",
     );
     const rightPasses = filteredPasses.filter(
-      (p) => p.sar_data?.look_side === "RIGHT"
+      (p) => p.sar_data?.look_side === "RIGHT",
     );
 
     const leftNodes = leftPasses.map((pass, idx) => {
@@ -610,26 +610,29 @@ function buildResultsNode(
         console.error(
           "[TreeBuilder] Error creating opportunity node:",
           error,
-          pass
+          pass,
         );
       }
     });
   }
 
   // Build plans from algorithm results
-  const planNodes: TreeNode[] = Object.entries(algorithmResults).map(
-    ([algorithm, result]) => {
-      const planItemNodes: TreeNode[] = result.schedule.map((item, idx) => ({
-        id: `plan_item_${algorithm}_${idx}`,
-        type: "plan_item" as TreeNodeType,
-        name: `${item.target_id} @ ${formatPassTime(item.start_time)}`,
-        icon: NODE_ICONS.plan_item,
-        isLeaf: true,
-        metadata: {
-          ...item,
-          algorithm,
-        },
-      }));
+  const planNodes: TreeNode[] = Object.entries(algorithmResults)
+    .filter(([, result]) => result?.schedule && result?.metrics) // Filter out invalid results
+    .map(([algorithm, result]) => {
+      const planItemNodes: TreeNode[] = (result.schedule || []).map(
+        (item, idx) => ({
+          id: `plan_item_${algorithm}_${idx}`,
+          type: "plan_item" as TreeNodeType,
+          name: `${item.target_id} @ ${formatPassTime(item.start_time)}`,
+          icon: NODE_ICONS.plan_item,
+          isLeaf: true,
+          metadata: {
+            ...item,
+            algorithm,
+          },
+        }),
+      );
 
       return {
         id: `plan_${algorithm}`,
@@ -637,15 +640,17 @@ function buildResultsNode(
         name: formatAlgorithmName(algorithm),
         icon: NODE_ICONS.plan,
         isExpandable: planItemNodes.length > 0,
-        badge: createBadge(result.metrics.opportunities_accepted, "green"),
+        badge: createBadge(
+          result.metrics?.opportunities_accepted ?? 0,
+          "green",
+        ),
         children: planItemNodes,
         metadata: {
           algorithm,
           metrics: result.metrics,
         },
       };
-    }
-  );
+    });
 
   // Build orders - only show orders that were created from current planning results
   // This ensures old orders from previous runs don't appear in the Object Explorer
@@ -839,7 +844,7 @@ export function filterTree(root: TreeNode, query: string): Set<string> {
 
 export function findNodeById(
   root: TreeNode,
-  targetId: string
+  targetId: string,
 ): TreeNode | null {
   if (root.id === targetId) return root;
 

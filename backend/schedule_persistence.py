@@ -24,7 +24,7 @@ from typing import Any, Dict, Generator, List, Optional
 logger = logging.getLogger(__name__)
 
 # Schema version for this module
-SCHEMA_VERSION = "2.0"
+SCHEMA_VERSION = "2.2"
 
 # Default database path (same as workspace_persistence.py)
 DEFAULT_DB_PATH = Path(__file__).parent.parent / "data" / "workspaces.db"
@@ -37,21 +37,31 @@ DEFAULT_DB_PATH = Path(__file__).parent.parent / "data" / "workspaces.db"
 
 @dataclass
 class Order:
-    """User imaging request."""
+    """User imaging request with extended workflow fields."""
 
     id: str
     created_at: str
     updated_at: str
-    status: str  # new | planned | committed | cancelled | completed
+    status: str  # new | queued | planned | committed | rejected | expired
     target_id: str
     priority: int
     constraints_json: Optional[str]
     requested_window_start: Optional[str]
     requested_window_end: Optional[str]
-    source: str  # manual | api | batch
+    source: str  # manual | api | batch | import
     notes: Optional[str]
     external_ref: Optional[str]
     workspace_id: Optional[str]
+    # Extended fields for PS2.5
+    order_type: str = "IMAGING"  # IMAGING | DOWNLINK | MAINTENANCE
+    due_time: Optional[str] = None  # SLA deadline
+    earliest_start: Optional[str] = None  # Constraint: earliest start time
+    latest_end: Optional[str] = None  # Constraint: latest end time
+    batch_id: Optional[str] = None  # Associated batch (nullable)
+    tags_json: Optional[str] = None  # JSON array of tags
+    requested_satellite_group: Optional[str] = None  # Preferred satellite group
+    user_notes: Optional[str] = None  # User-provided notes
+    reject_reason: Optional[str] = None  # Reason for rejection
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API response."""
@@ -61,6 +71,13 @@ class Order:
                 constraints = json.loads(self.constraints_json)
             except json.JSONDecodeError:
                 constraints = None
+
+        tags = None
+        if self.tags_json:
+            try:
+                tags = json.loads(self.tags_json)
+            except json.JSONDecodeError:
+                tags = None
 
         return {
             "id": self.id,
@@ -82,6 +99,77 @@ class Order:
             "notes": self.notes,
             "external_ref": self.external_ref,
             "workspace_id": self.workspace_id,
+            # Extended fields
+            "order_type": self.order_type,
+            "due_time": self.due_time,
+            "earliest_start": self.earliest_start,
+            "latest_end": self.latest_end,
+            "batch_id": self.batch_id,
+            "tags": tags,
+            "requested_satellite_group": self.requested_satellite_group,
+            "user_notes": self.user_notes,
+            "reject_reason": self.reject_reason,
+        }
+
+
+@dataclass
+class OrderBatch:
+    """Batch of orders for planning."""
+
+    id: str
+    workspace_id: str
+    created_at: str
+    updated_at: str
+    policy_id: str  # Reference to planning policy
+    horizon_from: str  # Planning horizon start
+    horizon_to: str  # Planning horizon end
+    status: str  # draft | planned | committed | cancelled
+    plan_id: Optional[str] = None  # Generated plan ID
+    notes: Optional[str] = None
+    metrics_json: Optional[str] = None  # Coverage metrics
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for API response."""
+        metrics = None
+        if self.metrics_json:
+            try:
+                metrics = json.loads(self.metrics_json)
+            except json.JSONDecodeError:
+                metrics = None
+
+        return {
+            "id": self.id,
+            "workspace_id": self.workspace_id,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "policy_id": self.policy_id,
+            "horizon_from": self.horizon_from,
+            "horizon_to": self.horizon_to,
+            "status": self.status,
+            "plan_id": self.plan_id,
+            "notes": self.notes,
+            "metrics": metrics,
+        }
+
+
+@dataclass
+class BatchMember:
+    """Order membership in a batch."""
+
+    id: str
+    batch_id: str
+    order_id: str
+    role: str  # primary | optional
+    created_at: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for API response."""
+        return {
+            "id": self.id,
+            "batch_id": self.batch_id,
+            "order_id": self.order_id,
+            "role": self.role,
+            "created_at": self.created_at,
         }
 
 
@@ -382,6 +470,12 @@ class ScheduleDB:
             if current_version < "2.0":
                 self._migrate_to_v2(conn)
 
+            if current_version < "2.1":
+                self._migrate_to_v2_1(conn)
+
+            if current_version < "2.2":
+                self._migrate_to_v2_2(conn)
+
             conn.commit()
 
     def _migrate_to_v2(self, conn: sqlite3.Connection) -> None:
@@ -611,6 +705,151 @@ class ScheduleDB:
 
         logger.info("Migration to schema v2.0 complete")
 
+    def _migrate_to_v2_1(self, conn: sqlite3.Connection) -> None:
+        """Migrate database schema to v2.1 - Order inbox & batch planning."""
+        cursor = conn.cursor()
+        now = datetime.utcnow().isoformat() + "Z"
+
+        logger.info("Running migration to schema v2.1...")
+
+        # Add new columns to orders table
+        new_order_columns = [
+            ("order_type", "TEXT DEFAULT 'IMAGING'"),
+            ("due_time", "TEXT"),
+            ("earliest_start", "TEXT"),
+            ("latest_end", "TEXT"),
+            ("batch_id", "TEXT"),
+            ("tags_json", "TEXT"),
+            ("requested_satellite_group", "TEXT"),
+            ("user_notes", "TEXT"),
+            ("reject_reason", "TEXT"),
+        ]
+
+        for col_name, col_type in new_order_columns:
+            try:
+                cursor.execute(f"ALTER TABLE orders ADD COLUMN {col_name} {col_type}")
+            except sqlite3.OperationalError:
+                # Column already exists
+                pass
+
+        # Create order_batches table
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS order_batches (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                policy_id TEXT NOT NULL,
+                horizon_from TEXT NOT NULL,
+                horizon_to TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'draft',
+                plan_id TEXT REFERENCES plans(id),
+                notes TEXT,
+                metrics_json TEXT
+            )
+        """
+        )
+
+        # Create batch_members table
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS batch_members (
+                id TEXT PRIMARY KEY,
+                batch_id TEXT NOT NULL REFERENCES order_batches(id) ON DELETE CASCADE,
+                order_id TEXT NOT NULL REFERENCES orders(id),
+                role TEXT NOT NULL DEFAULT 'primary',
+                created_at TEXT NOT NULL,
+                UNIQUE(batch_id, order_id)
+            )
+        """
+        )
+
+        # Create indexes for order_batches
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_batches_workspace ON order_batches(workspace_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_batches_status ON order_batches(status)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_batches_horizon ON order_batches(horizon_from, horizon_to)"
+        )
+
+        # Create indexes for batch_members
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_batch_members_batch ON batch_members(batch_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_batch_members_order ON batch_members(order_id)"
+        )
+
+        # Create indexes for new order columns
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_orders_due_time ON orders(due_time)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_orders_order_type ON orders(order_type)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_orders_batch ON orders(batch_id)"
+        )
+
+        # Record migration
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO schema_migrations (version, applied_at, description)
+            VALUES (?, ?, ?)
+        """,
+            (
+                "2.1",
+                now,
+                "Order inbox automation & batch planning: extended order fields, batches, batch_members",
+            ),
+        )
+
+        logger.info("Migration to schema v2.1 complete")
+
+    def _migrate_to_v2_2(self, conn: sqlite3.Connection) -> None:
+        """Migrate database schema to v2.2 - Soft lock removal.
+
+        PR-OPS-REPAIR-DEFAULT-01: Normalize all soft locks to none.
+        Only hard and none lock levels are supported going forward.
+        """
+        cursor = conn.cursor()
+        now = datetime.utcnow().isoformat() + "Z"
+
+        logger.info("Running migration to schema v2.2...")
+
+        # Normalize soft locks to none
+        cursor.execute(
+            """
+            UPDATE acquisitions
+            SET lock_level = 'none', updated_at = ?
+            WHERE lock_level = 'soft'
+        """,
+            (now,),
+        )
+        soft_count = cursor.rowcount
+
+        if soft_count > 0:
+            logger.info(f"Normalized {soft_count} soft locks to 'none'")
+
+        # Record migration
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO schema_migrations (version, applied_at, description)
+            VALUES (?, ?, ?)
+        """,
+            (
+                "2.2",
+                now,
+                "Soft lock removal: normalized all soft locks to none (PR-OPS-REPAIR-DEFAULT-01)",
+            ),
+        )
+
+        logger.info("Migration to schema v2.2 complete")
+
     # =========================================================================
     # Order Operations
     # =========================================================================
@@ -626,6 +865,14 @@ class ScheduleDB:
         notes: Optional[str] = None,
         external_ref: Optional[str] = None,
         workspace_id: Optional[str] = None,
+        # Extended fields for PS2.5
+        order_type: str = "IMAGING",
+        due_time: Optional[str] = None,
+        earliest_start: Optional[str] = None,
+        latest_end: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        requested_satellite_group: Optional[str] = None,
+        user_notes: Optional[str] = None,
     ) -> Order:
         """Create a new order.
 
@@ -635,10 +882,17 @@ class ScheduleDB:
             constraints: Optional constraints dict
             requested_window_start: Optional start of requested window
             requested_window_end: Optional end of requested window
-            source: Order source (manual | api | batch)
+            source: Order source (manual | api | batch | import)
             notes: Optional notes
             external_ref: Optional external reference ID
             workspace_id: Associated workspace
+            order_type: IMAGING | DOWNLINK | MAINTENANCE
+            due_time: SLA deadline (ISO datetime)
+            earliest_start: Earliest start constraint
+            latest_end: Latest end constraint
+            tags: List of tags
+            requested_satellite_group: Preferred satellite group
+            user_notes: User-provided notes
 
         Returns:
             Created Order object
@@ -647,6 +901,7 @@ class ScheduleDB:
         now = datetime.utcnow().isoformat() + "Z"
 
         constraints_json = json.dumps(constraints) if constraints else None
+        tags_json = json.dumps(tags) if tags else None
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -655,8 +910,10 @@ class ScheduleDB:
                 INSERT INTO orders (
                     id, created_at, updated_at, status, target_id, priority,
                     constraints_json, requested_window_start, requested_window_end,
-                    source, notes, external_ref, workspace_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source, notes, external_ref, workspace_id,
+                    order_type, due_time, earliest_start, latest_end,
+                    tags_json, requested_satellite_group, user_notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     order_id,
@@ -672,6 +929,13 @@ class ScheduleDB:
                     notes,
                     external_ref,
                     workspace_id,
+                    order_type,
+                    due_time,
+                    earliest_start,
+                    latest_end,
+                    tags_json,
+                    requested_satellite_group,
+                    user_notes,
                 ),
             )
             conn.commit()
@@ -692,6 +956,13 @@ class ScheduleDB:
             notes=notes,
             external_ref=external_ref,
             workspace_id=workspace_id,
+            order_type=order_type,
+            due_time=due_time,
+            earliest_start=earliest_start,
+            latest_end=latest_end,
+            tags_json=tags_json,
+            requested_satellite_group=requested_satellite_group,
+            user_notes=user_notes,
         )
 
     def get_order(self, order_id: str) -> Optional[Order]:
@@ -770,6 +1041,8 @@ class ScheduleDB:
 
     def _row_to_order(self, row: sqlite3.Row) -> Order:
         """Convert database row to Order object."""
+        # Handle new columns that might not exist in older databases
+        row_keys = row.keys()
         return Order(
             id=row["id"],
             created_at=row["created_at"],
@@ -784,6 +1057,22 @@ class ScheduleDB:
             notes=row["notes"],
             external_ref=row["external_ref"],
             workspace_id=row["workspace_id"],
+            # Extended fields (v2.1)
+            order_type=row["order_type"] if "order_type" in row_keys else "IMAGING",
+            due_time=row["due_time"] if "due_time" in row_keys else None,
+            earliest_start=(
+                row["earliest_start"] if "earliest_start" in row_keys else None
+            ),
+            latest_end=row["latest_end"] if "latest_end" in row_keys else None,
+            batch_id=row["batch_id"] if "batch_id" in row_keys else None,
+            tags_json=row["tags_json"] if "tags_json" in row_keys else None,
+            requested_satellite_group=(
+                row["requested_satellite_group"]
+                if "requested_satellite_group" in row_keys
+                else None
+            ),
+            user_notes=row["user_notes"] if "user_notes" in row_keys else None,
+            reject_reason=row["reject_reason"] if "reject_reason" in row_keys else None,
         )
 
     # =========================================================================
@@ -940,7 +1229,8 @@ class ScheduleDB:
             params: List[Any] = []
 
             if workspace_id:
-                query += " AND workspace_id = ?"
+                # Include acquisitions with matching workspace_id OR NULL workspace_id
+                query += " AND (workspace_id = ? OR workspace_id IS NULL)"
                 params.append(workspace_id)
             if satellite_id:
                 query += " AND satellite_id = ?"
@@ -998,7 +1288,9 @@ class ScheduleDB:
             params: List[Any] = [end_time, start_time]
 
             if workspace_id:
-                query += " AND workspace_id = ?"
+                # Include acquisitions with matching workspace_id OR NULL workspace_id
+                # (NULL workspace_id means "global" or legacy data that belongs to all workspaces)
+                query += " AND (workspace_id = ? OR workspace_id IS NULL)"
                 params.append(workspace_id)
             if satellite_id:
                 query += " AND satellite_id = ?"
@@ -1045,7 +1337,8 @@ class ScheduleDB:
             params: List[Any] = [satellite_id, end_time, start_time]
 
             if workspace_id:
-                query += " AND workspace_id = ?"
+                # Include acquisitions with matching workspace_id OR NULL workspace_id
+                query += " AND (workspace_id = ? OR workspace_id IS NULL)"
                 params.append(workspace_id)
 
             query += " ORDER BY start_time ASC"
@@ -1334,7 +1627,7 @@ class ScheduleDB:
         self,
         plan_id: str,
         item_ids: List[str],
-        lock_level: str = "soft",
+        lock_level: str = "none",
         mode: str = "OPTICAL",
         workspace_id: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -1346,16 +1639,18 @@ class ScheduleDB:
         Args:
             plan_id: Plan to commit
             item_ids: Specific plan item IDs to commit
-            lock_level: Lock level for created acquisitions (soft|hard)
+            lock_level: Lock level for created acquisitions (none|hard)
             mode: Mission mode (OPTICAL|SAR)
             workspace_id: Workspace ID for acquisitions
 
         Returns:
             Dict with committed count, acquisition IDs, and updated orders
         """
-        # Validate lock level
-        if lock_level not in ["soft", "hard"]:
-            lock_level = "soft"
+        # PR-OPS-REPAIR-DEFAULT-01: Normalize lock levels (soft → none)
+        if lock_level == "soft":
+            lock_level = "none"
+        if lock_level not in ["none", "hard"]:
+            lock_level = "none"
 
         created_acquisitions = []
         updated_orders = set()
@@ -1480,7 +1775,8 @@ class ScheduleDB:
             params: List[Any] = [end_time, start_time]
 
             if workspace_id:
-                base_query += " AND workspace_id = ?"
+                # Include acquisitions with matching workspace_id OR NULL workspace_id
+                base_query += " AND (workspace_id = ? OR workspace_id IS NULL)"
                 params.append(workspace_id)
 
             # Total count
@@ -1668,7 +1964,8 @@ class ScheduleDB:
             acq_params: List[Any] = [end_time, start_time]
 
             if workspace_id:
-                acq_query += " AND workspace_id = ?"
+                # Include acquisitions with matching workspace_id OR NULL workspace_id
+                acq_query += " AND (workspace_id = ? OR workspace_id IS NULL)"
                 acq_params.append(workspace_id)
             if satellite_id:
                 acq_query += " AND satellite_id = ?"
@@ -1685,7 +1982,8 @@ class ScheduleDB:
             conflict_params: List[Any] = []
 
             if workspace_id:
-                conflict_query += " AND workspace_id = ?"
+                # Include conflicts with matching workspace_id OR NULL workspace_id
+                conflict_query += " AND (workspace_id = ? OR workspace_id IS NULL)"
                 conflict_params.append(workspace_id)
             if not include_resolved:
                 conflict_query += " AND resolved_at IS NULL"
@@ -1816,7 +2114,8 @@ class ScheduleDB:
             params: List[Any] = []
 
             if workspace_id:
-                base_query += " AND workspace_id = ?"
+                # Include conflicts with matching workspace_id OR NULL workspace_id
+                base_query += " AND (workspace_id = ? OR workspace_id IS NULL)"
                 params.append(workspace_id)
             if not include_resolved:
                 base_query += " AND resolved_at IS NULL"
@@ -2318,6 +2617,531 @@ class ScheduleDB:
                 conn.rollback()
                 logger.error(f"Atomic commit failed for plan {plan_id}: {e}")
                 raise
+
+    # =========================================================================
+    # Order Batch Operations (PS2.5)
+    # =========================================================================
+
+    def create_order_batch(
+        self,
+        workspace_id: str,
+        policy_id: str,
+        horizon_from: str,
+        horizon_to: str,
+        notes: Optional[str] = None,
+    ) -> OrderBatch:
+        """Create a new order batch.
+
+        Args:
+            workspace_id: Associated workspace
+            policy_id: Planning policy to use
+            horizon_from: Planning horizon start (ISO datetime)
+            horizon_to: Planning horizon end (ISO datetime)
+            notes: Optional notes
+
+        Returns:
+            Created OrderBatch object
+        """
+        batch_id = f"batch_{uuid.uuid4().hex[:12]}"
+        now = datetime.utcnow().isoformat() + "Z"
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO order_batches (
+                    id, workspace_id, created_at, updated_at, policy_id,
+                    horizon_from, horizon_to, status, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    batch_id,
+                    workspace_id,
+                    now,
+                    now,
+                    policy_id,
+                    horizon_from,
+                    horizon_to,
+                    "draft",
+                    notes,
+                ),
+            )
+            conn.commit()
+
+        logger.info(f"Created order batch {batch_id} for workspace {workspace_id}")
+
+        return OrderBatch(
+            id=batch_id,
+            workspace_id=workspace_id,
+            created_at=now,
+            updated_at=now,
+            policy_id=policy_id,
+            horizon_from=horizon_from,
+            horizon_to=horizon_to,
+            status="draft",
+            notes=notes,
+        )
+
+    def get_order_batch(self, batch_id: str) -> Optional[OrderBatch]:
+        """Get an order batch by ID."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM order_batches WHERE id = ?", (batch_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return self._row_to_order_batch(row)
+
+    def list_order_batches(
+        self,
+        workspace_id: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[OrderBatch]:
+        """List order batches with optional filters.
+
+        Args:
+            workspace_id: Filter by workspace
+            status: Filter by status (draft | planned | committed | cancelled)
+            limit: Max results
+            offset: Pagination offset
+
+        Returns:
+            List of OrderBatch objects
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            query = "SELECT * FROM order_batches WHERE 1=1"
+            params: List[Any] = []
+
+            if workspace_id:
+                query += " AND workspace_id = ?"
+                params.append(workspace_id)
+            if status:
+                query += " AND status = ?"
+                params.append(status)
+
+            query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+
+            cursor.execute(query, params)
+            return [self._row_to_order_batch(row) for row in cursor.fetchall()]
+
+    def update_order_batch_status(
+        self,
+        batch_id: str,
+        status: str,
+        plan_id: Optional[str] = None,
+        metrics: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Update order batch status.
+
+        Args:
+            batch_id: Batch to update
+            status: New status (draft | planned | committed | cancelled)
+            plan_id: Associated plan ID (for planned/committed status)
+            metrics: Coverage metrics
+
+        Returns:
+            True if updated
+        """
+        valid_statuses = ["draft", "planned", "committed", "cancelled"]
+        if status not in valid_statuses:
+            raise ValueError(
+                f"Invalid status: {status}. Must be one of {valid_statuses}"
+            )
+
+        now = datetime.utcnow().isoformat() + "Z"
+        metrics_json = json.dumps(metrics) if metrics else None
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE order_batches
+                SET status = ?, updated_at = ?, plan_id = COALESCE(?, plan_id),
+                    metrics_json = COALESCE(?, metrics_json)
+                WHERE id = ?
+            """,
+                (status, now, plan_id, metrics_json, batch_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def _row_to_order_batch(self, row: sqlite3.Row) -> OrderBatch:
+        """Convert database row to OrderBatch object."""
+        return OrderBatch(
+            id=row["id"],
+            workspace_id=row["workspace_id"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            policy_id=row["policy_id"],
+            horizon_from=row["horizon_from"],
+            horizon_to=row["horizon_to"],
+            status=row["status"],
+            plan_id=row["plan_id"],
+            notes=row["notes"],
+            metrics_json=row["metrics_json"],
+        )
+
+    # =========================================================================
+    # Batch Member Operations (PS2.5)
+    # =========================================================================
+
+    def add_order_to_batch(
+        self,
+        batch_id: str,
+        order_id: str,
+        role: str = "primary",
+    ) -> BatchMember:
+        """Add an order to a batch.
+
+        Args:
+            batch_id: Batch ID
+            order_id: Order ID to add
+            role: Role in batch (primary | optional)
+
+        Returns:
+            Created BatchMember object
+        """
+        member_id = f"bm_{uuid.uuid4().hex[:12]}"
+        now = datetime.utcnow().isoformat() + "Z"
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO batch_members (id, batch_id, order_id, role, created_at)
+                VALUES (?, ?, ?, ?, ?)
+            """,
+                (member_id, batch_id, order_id, role, now),
+            )
+
+            # Update order's batch_id reference
+            cursor.execute(
+                "UPDATE orders SET batch_id = ?, updated_at = ? WHERE id = ?",
+                (batch_id, now, order_id),
+            )
+
+            conn.commit()
+
+        return BatchMember(
+            id=member_id,
+            batch_id=batch_id,
+            order_id=order_id,
+            role=role,
+            created_at=now,
+        )
+
+    def remove_order_from_batch(self, batch_id: str, order_id: str) -> bool:
+        """Remove an order from a batch.
+
+        Args:
+            batch_id: Batch ID
+            order_id: Order ID to remove
+
+        Returns:
+            True if removed
+        """
+        now = datetime.utcnow().isoformat() + "Z"
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Remove from batch_members
+            cursor.execute(
+                "DELETE FROM batch_members WHERE batch_id = ? AND order_id = ?",
+                (batch_id, order_id),
+            )
+            removed = cursor.rowcount > 0
+
+            # Clear order's batch_id reference
+            if removed:
+                cursor.execute(
+                    "UPDATE orders SET batch_id = NULL, updated_at = ? WHERE id = ?",
+                    (now, order_id),
+                )
+
+            conn.commit()
+            return removed
+
+    def get_batch_members(self, batch_id: str) -> List[BatchMember]:
+        """Get all members of a batch.
+
+        Args:
+            batch_id: Batch ID
+
+        Returns:
+            List of BatchMember objects
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM batch_members WHERE batch_id = ? ORDER BY created_at ASC",
+                (batch_id,),
+            )
+            return [self._row_to_batch_member(row) for row in cursor.fetchall()]
+
+    def get_batch_orders(self, batch_id: str) -> List[Order]:
+        """Get all orders in a batch.
+
+        Args:
+            batch_id: Batch ID
+
+        Returns:
+            List of Order objects
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT o.* FROM orders o
+                JOIN batch_members bm ON o.id = bm.order_id
+                WHERE bm.batch_id = ?
+                ORDER BY o.priority DESC, o.due_time ASC
+            """,
+                (batch_id,),
+            )
+            return [self._row_to_order(row) for row in cursor.fetchall()]
+
+    def _row_to_batch_member(self, row: sqlite3.Row) -> BatchMember:
+        """Convert database row to BatchMember object."""
+        return BatchMember(
+            id=row["id"],
+            batch_id=row["batch_id"],
+            order_id=row["order_id"],
+            role=row["role"],
+            created_at=row["created_at"],
+        )
+
+    # =========================================================================
+    # Extended Order Operations (PS2.5)
+    # =========================================================================
+
+    def list_orders_inbox(
+        self,
+        workspace_id: str,
+        status_filter: Optional[List[str]] = None,
+        priority_min: Optional[int] = None,
+        due_before: Optional[str] = None,
+        order_type: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[Order]:
+        """List orders for inbox view with extended filters.
+
+        Args:
+            workspace_id: Workspace to query
+            status_filter: Filter by statuses (default: ['new', 'queued'])
+            priority_min: Minimum priority filter
+            due_before: Due time filter (ISO datetime)
+            order_type: Filter by order type
+            tags: Filter by tags (any match)
+            limit: Max results
+            offset: Pagination offset
+
+        Returns:
+            List of Order objects
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            query = "SELECT * FROM orders WHERE workspace_id = ?"
+            params: List[Any] = [workspace_id]
+
+            # Default to inbox statuses
+            if status_filter is None:
+                status_filter = ["new", "queued"]
+
+            if status_filter:
+                placeholders = ",".join("?" * len(status_filter))
+                query += f" AND status IN ({placeholders})"
+                params.extend(status_filter)
+
+            if priority_min is not None:
+                query += " AND priority >= ?"
+                params.append(priority_min)
+
+            if due_before:
+                query += " AND due_time <= ?"
+                params.append(due_before)
+
+            if order_type:
+                query += " AND order_type = ?"
+                params.append(order_type)
+
+            # Note: Tag filtering requires JSON search which SQLite handles via LIKE
+            if tags:
+                tag_conditions = []
+                for tag in tags:
+                    tag_conditions.append("tags_json LIKE ?")
+                    params.append(f'%"{tag}"%')
+                query += f" AND ({' OR '.join(tag_conditions)})"
+
+            query += " ORDER BY priority DESC, due_time ASC NULLS LAST, created_at ASC"
+            query += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+
+            cursor.execute(query, params)
+            return [self._row_to_order(row) for row in cursor.fetchall()]
+
+    def update_order_extended(
+        self,
+        order_id: str,
+        status: Optional[str] = None,
+        due_time: Optional[str] = None,
+        batch_id: Optional[str] = None,
+        reject_reason: Optional[str] = None,
+        user_notes: Optional[str] = None,
+    ) -> bool:
+        """Update order with extended fields.
+
+        Args:
+            order_id: Order to update
+            status: New status
+            due_time: New due time
+            batch_id: New batch ID (or None to clear)
+            reject_reason: Rejection reason (for rejected status)
+            user_notes: User notes
+
+        Returns:
+            True if updated
+        """
+        now = datetime.utcnow().isoformat() + "Z"
+
+        updates = ["updated_at = ?"]
+        params: List[Any] = [now]
+
+        if status is not None:
+            updates.append("status = ?")
+            params.append(status)
+
+        if due_time is not None:
+            updates.append("due_time = ?")
+            params.append(due_time)
+
+        if batch_id is not None:
+            updates.append("batch_id = ?")
+            params.append(batch_id if batch_id else None)
+
+        if reject_reason is not None:
+            updates.append("reject_reason = ?")
+            params.append(reject_reason)
+
+        if user_notes is not None:
+            updates.append("user_notes = ?")
+            params.append(user_notes)
+
+        params.append(order_id)
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"UPDATE orders SET {', '.join(updates)} WHERE id = ?",
+                params,
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def bulk_create_orders(
+        self,
+        orders_data: List[Dict[str, Any]],
+        workspace_id: str,
+        source: str = "import",
+    ) -> List[Order]:
+        """Bulk create orders from a list of data dicts.
+
+        Args:
+            orders_data: List of order data dicts
+            workspace_id: Workspace ID
+            source: Order source
+
+        Returns:
+            List of created Order objects
+        """
+        created_orders: List[Order] = []
+        now = datetime.utcnow().isoformat() + "Z"
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            for data in orders_data:
+                order_id = f"ord_{uuid.uuid4().hex[:12]}"
+                constraints_json = (
+                    json.dumps(data.get("constraints"))
+                    if data.get("constraints")
+                    else None
+                )
+                tags_json = json.dumps(data.get("tags")) if data.get("tags") else None
+
+                cursor.execute(
+                    """
+                    INSERT INTO orders (
+                        id, created_at, updated_at, status, target_id, priority,
+                        constraints_json, requested_window_start, requested_window_end,
+                        source, notes, external_ref, workspace_id,
+                        order_type, due_time, earliest_start, latest_end,
+                        tags_json, requested_satellite_group, user_notes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        order_id,
+                        now,
+                        now,
+                        "new",
+                        data.get("target_id", ""),
+                        data.get("priority", 3),
+                        constraints_json,
+                        data.get("requested_window_start"),
+                        data.get("requested_window_end"),
+                        source,
+                        data.get("notes"),
+                        data.get("external_ref"),
+                        workspace_id,
+                        data.get("order_type", "IMAGING"),
+                        data.get("due_time"),
+                        data.get("earliest_start"),
+                        data.get("latest_end"),
+                        tags_json,
+                        data.get("requested_satellite_group"),
+                        data.get("user_notes"),
+                    ),
+                )
+
+                created_orders.append(
+                    Order(
+                        id=order_id,
+                        created_at=now,
+                        updated_at=now,
+                        status="new",
+                        target_id=data.get("target_id", ""),
+                        priority=data.get("priority", 3),
+                        constraints_json=constraints_json,
+                        requested_window_start=data.get("requested_window_start"),
+                        requested_window_end=data.get("requested_window_end"),
+                        source=source,
+                        notes=data.get("notes"),
+                        external_ref=data.get("external_ref"),
+                        workspace_id=workspace_id,
+                        order_type=data.get("order_type", "IMAGING"),
+                        due_time=data.get("due_time"),
+                        earliest_start=data.get("earliest_start"),
+                        latest_end=data.get("latest_end"),
+                        tags_json=tags_json,
+                        requested_satellite_group=data.get("requested_satellite_group"),
+                        user_notes=data.get("user_notes"),
+                    )
+                )
+
+            conn.commit()
+
+        logger.info(
+            f"Bulk created {len(created_orders)} orders for workspace {workspace_id}"
+        )
+        return created_orders
 
 
 # =============================================================================

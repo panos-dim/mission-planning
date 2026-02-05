@@ -1,12 +1,11 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
-  BarChart2,
   Layers,
   ChevronLeft,
-  Database,
-  Sliders,
-  Info,
   FileSearch,
+  BarChart2,
+  Bot,
+  Sparkles,
 } from "lucide-react";
 import { Inspector } from "./ObjectExplorer";
 import MissionResultsPanel from "./MissionResultsPanel";
@@ -14,6 +13,11 @@ import ResizeHandle from "./ResizeHandle";
 import SwathLayerControl from "./Map/SwathLayerControl";
 import { useMission } from "../context/MissionContext";
 import { useVisStore } from "../store/visStore";
+import {
+  RIGHT_SIDEBAR_PANELS,
+  SIMPLE_MODE_RIGHT_PANELS,
+  isDebugMode,
+} from "../constants/simpleMode";
 
 interface SidebarPanel {
   id: string;
@@ -56,245 +60,415 @@ const RightSidebar: React.FC = () => {
     }
   }, [state.missionData, setLayerVisibility]);
 
-  const panels: SidebarPanel[] = [
-    {
-      id: "inspector",
-      title: "Inspector",
-      icon: FileSearch,
-      component: (
-        <Inspector
-          onAction={(action, nodeId, nodeType) => {
-            console.log("Inspector action:", action, nodeId, nodeType);
-          }}
-        />
-      ),
-    },
-    {
-      id: "mission",
-      title: "Mission Results",
-      icon: BarChart2,
-      component: <MissionResultsPanel />,
-      requiresMissionData: true,
-    },
-    {
-      id: "layers",
-      title: "Layers",
-      icon: Layers,
-      component: (
-        <div className="p-4">
-          <h3 className="text-sm font-semibold text-white mb-3">Map Layers</h3>
-          <div className="space-y-2 text-sm">
-            {/* Satellite Path - dynamic trail with color changes during passes */}
-            <label className="flex items-center space-x-2 text-gray-300 hover:text-white cursor-pointer">
-              <input
-                type="checkbox"
-                checked={activeLayers.orbitLine}
-                onChange={(e) => {
-                  setLayerVisibility("orbitLine", e.target.checked);
-                }}
-                className="rounded"
-              />
-              <span>Satellite Path</span>
-            </label>
-            <label className="flex items-center space-x-2 text-gray-300 hover:text-white cursor-pointer">
-              <input
-                type="checkbox"
-                checked={activeLayers.targets}
-                onChange={(e) => {
-                  setLayerVisibility("targets", e.target.checked);
-                  toggleEntityVisibility("target", e.target.checked);
-                }}
-                className="rounded"
-              />
-              <span>Ground Targets</span>
-            </label>
-            <label className="flex items-center space-x-2 text-gray-300 hover:text-white cursor-pointer">
-              <input
-                type="checkbox"
-                checked={activeLayers.labels}
-                onChange={async (e) => {
-                  setLayerVisibility("labels", e.target.checked);
-                  await toggleEntityVisibility(
-                    "ground_station",
-                    e.target.checked
-                  );
-                }}
-                className="rounded"
-              />
-              <span>Ground Stations</span>
-            </label>
-            {state.missionData?.mission_type === "imaging" && (
-              <>
-                <label className="flex items-center space-x-2 text-gray-300 hover:text-white cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={activeLayers.pointingCone}
-                    onChange={(e) => {
-                      setLayerVisibility("pointingCone", e.target.checked);
-                      toggleEntityVisibility("pointing_cone", e.target.checked);
-                    }}
-                    className="rounded"
-                  />
-                  <span>Sensor Pointing Cone</span>
-                </label>
-                <label className="flex items-center space-x-2 text-gray-300 hover:text-white cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={activeLayers.dayNightLighting}
-                    onChange={(e) => {
-                      setLayerVisibility("dayNightLighting", e.target.checked);
-                      toggleEntityVisibility(
-                        "day_night_lighting",
-                        e.target.checked
-                      );
-                    }}
-                    className="rounded"
-                  />
-                  <span>Day/Night Lighting</span>
-                </label>
-              </>
-            )}
-            {/* SAR-specific layers - using SwathLayerControl for granular control */}
-            {(state.missionData?.imaging_type === "sar" ||
-              state.missionData?.sar) && (
-              <div className="pt-2 border-t border-gray-700 mt-2">
-                <SwathLayerControl isSARMission={true} />
-              </div>
-            )}
+  // Get UI mode from store - in developer mode, show all panels
+  const { uiMode } = useVisStore();
+  const isDeveloperMode = uiMode === "developer" || isDebugMode();
+
+  // Define all available panels
+  const allPanels: SidebarPanel[] = useMemo(
+    () => [
+      // Mission Results first - primary panel for viewing analysis
+      {
+        id: RIGHT_SIDEBAR_PANELS.MISSION_RESULTS,
+        title: "Mission Results",
+        icon: BarChart2,
+        component: <MissionResultsPanel />,
+      },
+      {
+        id: RIGHT_SIDEBAR_PANELS.INSPECTOR,
+        title: "Inspector",
+        icon: FileSearch,
+        component: (
+          <div className="h-full overflow-y-auto">
+            <Inspector
+              onAction={(action, nodeId, nodeType) => {
+                console.log("Inspector action:", action, nodeId, nodeType);
+              }}
+            />
           </div>
-        </div>
-      ),
-    },
-    {
-      id: "data",
-      title: "Data Window",
-      icon: Database,
-      component: (
-        <div className="p-4">
-          <h3 className="text-sm font-semibold text-white mb-3">
-            Mission Data
-          </h3>
-          {state.missionData ? (
-            <div className="space-y-3 text-xs">
-              <div>
-                <div className="text-gray-400 mb-1">Satellite</div>
-                <div className="text-white">
-                  {state.missionData.satellite_name}
+        ),
+      },
+      {
+        id: RIGHT_SIDEBAR_PANELS.LAYERS,
+        title: "Layers",
+        icon: Layers,
+        component: (
+          <div className="h-full flex flex-col p-4">
+            {/* Layer Groups */}
+            <div className="flex-1 space-y-4 overflow-y-auto">
+              {/* Core Layers */}
+              <div className="bg-gray-800/50 rounded-lg p-3">
+                <h4 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-3">
+                  Core Elements
+                </h4>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-700/50 cursor-pointer transition-colors">
+                    <div
+                      className={`w-8 h-8 rounded-lg flex items-center justify-center ${activeLayers.orbitLine ? "bg-blue-500/20" : "bg-gray-700/50"}`}
+                    >
+                      <div
+                        className={`w-3 h-0.5 rounded ${activeLayers.orbitLine ? "bg-blue-400" : "bg-gray-500"}`}
+                      ></div>
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-xs font-medium text-gray-200">
+                        Satellite Path
+                      </p>
+                      <p className="text-[10px] text-gray-500">
+                        Orbit trajectory line
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={activeLayers.orbitLine}
+                      onChange={(e) =>
+                        setLayerVisibility("orbitLine", e.target.checked)
+                      }
+                      className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
+                    />
+                  </label>
+                  <label className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-700/50 cursor-pointer transition-colors">
+                    <div
+                      className={`w-8 h-8 rounded-lg flex items-center justify-center ${activeLayers.targets ? "bg-green-500/20" : "bg-gray-700/50"}`}
+                    >
+                      <div
+                        className={`w-2 h-2 rounded-full ${activeLayers.targets ? "bg-green-400" : "bg-gray-500"}`}
+                      ></div>
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-xs font-medium text-gray-200">
+                        Ground Targets
+                      </p>
+                      <p className="text-[10px] text-gray-500">
+                        Target locations
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={activeLayers.targets}
+                      onChange={(e) => {
+                        setLayerVisibility("targets", e.target.checked);
+                        toggleEntityVisibility("target", e.target.checked);
+                      }}
+                      className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-green-500 focus:ring-green-500 focus:ring-offset-0"
+                    />
+                  </label>
+                  <label className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-700/50 cursor-pointer transition-colors">
+                    <div
+                      className={`w-8 h-8 rounded-lg flex items-center justify-center ${activeLayers.labels ? "bg-yellow-500/20" : "bg-gray-700/50"}`}
+                    >
+                      <div
+                        className={`w-2.5 h-2.5 ${activeLayers.labels ? "text-yellow-400" : "text-gray-500"}`}
+                      >
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" />
+                        </svg>
+                      </div>
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-xs font-medium text-gray-200">
+                        Ground Stations
+                      </p>
+                      <p className="text-[10px] text-gray-500">
+                        Communication sites
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={activeLayers.labels}
+                      onChange={async (e) => {
+                        setLayerVisibility("labels", e.target.checked);
+                        await toggleEntityVisibility(
+                          "ground_station",
+                          e.target.checked,
+                        );
+                      }}
+                      className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-yellow-500 focus:ring-yellow-500 focus:ring-offset-0"
+                    />
+                  </label>
                 </div>
               </div>
-              <div>
-                <div className="text-gray-400 mb-1">Mission Type</div>
-                <div className="text-white capitalize">
-                  {state.missionData.mission_type}
+
+              {/* Imaging Layers */}
+              {state.missionData?.mission_type === "imaging" && (
+                <div className="bg-gray-800/50 rounded-lg p-3">
+                  <h4 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-3">
+                    Imaging Overlays
+                  </h4>
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-700/50 cursor-pointer transition-colors">
+                      <div
+                        className={`w-8 h-8 rounded-lg flex items-center justify-center ${activeLayers.pointingCone ? "bg-purple-500/20" : "bg-gray-700/50"}`}
+                      >
+                        <div
+                          className={`w-0 h-0 border-l-[6px] border-r-[6px] border-b-[10px] border-l-transparent border-r-transparent ${activeLayers.pointingCone ? "border-b-purple-400" : "border-b-gray-500"}`}
+                        ></div>
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-xs font-medium text-gray-200">
+                          Sensor Cone
+                        </p>
+                        <p className="text-[10px] text-gray-500">
+                          Field of view
+                        </p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={activeLayers.pointingCone}
+                        onChange={(e) => {
+                          setLayerVisibility("pointingCone", e.target.checked);
+                          toggleEntityVisibility(
+                            "pointing_cone",
+                            e.target.checked,
+                          );
+                        }}
+                        className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-purple-500 focus:ring-purple-500 focus:ring-offset-0"
+                      />
+                    </label>
+                    <label className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-700/50 cursor-pointer transition-colors">
+                      <div
+                        className={`w-8 h-8 rounded-lg flex items-center justify-center overflow-hidden ${activeLayers.dayNightLighting ? "bg-orange-500/20" : "bg-gray-700/50"}`}
+                      >
+                        <div className="w-full h-full flex">
+                          <div
+                            className={`w-1/2 ${activeLayers.dayNightLighting ? "bg-orange-400/50" : "bg-gray-500/30"}`}
+                          ></div>
+                          <div
+                            className={`w-1/2 ${activeLayers.dayNightLighting ? "bg-gray-900/50" : "bg-gray-600/30"}`}
+                          ></div>
+                        </div>
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-xs font-medium text-gray-200">
+                          Day/Night
+                        </p>
+                        <p className="text-[10px] text-gray-500">
+                          Lighting terminator
+                        </p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={activeLayers.dayNightLighting}
+                        onChange={(e) => {
+                          setLayerVisibility(
+                            "dayNightLighting",
+                            e.target.checked,
+                          );
+                          toggleEntityVisibility(
+                            "day_night_lighting",
+                            e.target.checked,
+                          );
+                        }}
+                        className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-orange-500 focus:ring-orange-500 focus:ring-offset-0"
+                      />
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              {/* SAR Layers */}
+              {(state.missionData?.imaging_type === "sar" ||
+                state.missionData?.sar) && (
+                <div className="bg-gray-800/50 rounded-lg p-3">
+                  <h4 className="text-[10px] font-semibold text-purple-400 uppercase tracking-wide mb-3">
+                    SAR Overlays
+                  </h4>
+                  <SwathLayerControl isSARMission={true} />
+                </div>
+              )}
+
+              {/* Globe Settings - 3D Only */}
+              <div className="bg-gray-800/50 rounded-lg p-3">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">
+                    Globe Settings
+                  </h4>
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 font-medium">
+                    3D only
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-700/50 cursor-pointer transition-colors">
+                    <div
+                      className={`w-8 h-8 rounded-lg flex items-center justify-center ${activeLayers.atmosphere ? "bg-sky-500/20" : "bg-gray-700/50"}`}
+                    >
+                      <div
+                        className={`w-4 h-4 rounded-full ${activeLayers.atmosphere ? "bg-gradient-to-b from-sky-300 to-sky-500" : "bg-gray-500"}`}
+                      ></div>
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-xs font-medium text-gray-200">
+                        Atmosphere
+                      </p>
+                      <p className="text-[10px] text-gray-500">
+                        Sky dome effect
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={activeLayers.atmosphere}
+                      onChange={(e) =>
+                        setLayerVisibility("atmosphere", e.target.checked)
+                      }
+                      className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-sky-500 focus:ring-sky-500 focus:ring-offset-0"
+                    />
+                  </label>
+                  <label className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-700/50 cursor-pointer transition-colors">
+                    <div
+                      className={`w-8 h-8 rounded-lg flex items-center justify-center ${activeLayers.fog ? "bg-slate-500/20" : "bg-gray-700/50"}`}
+                    >
+                      <div
+                        className={`w-5 h-2 rounded ${activeLayers.fog ? "bg-gradient-to-r from-slate-400/80 to-transparent" : "bg-gray-500/50"}`}
+                      ></div>
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-xs font-medium text-gray-200">Fog</p>
+                      <p className="text-[10px] text-gray-500">Distance haze</p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={activeLayers.fog}
+                      onChange={(e) =>
+                        setLayerVisibility("fog", e.target.checked)
+                      }
+                      className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-slate-500 focus:ring-slate-500 focus:ring-offset-0"
+                    />
+                  </label>
                 </div>
               </div>
-              <div>
-                <div className="text-gray-400 mb-1">Duration</div>
-                <div className="text-white">
-                  {(() => {
-                    const start = new Date(state.missionData.start_time);
-                    const end = new Date(state.missionData.end_time);
-                    const hours =
-                      (end.getTime() - start.getTime()) / (1000 * 60 * 60);
-                    return `${hours.toFixed(1)} hours`;
-                  })()}
+
+              {/* Post-Processing */}
+              <div className="bg-gray-800/50 rounded-lg p-3">
+                <h4 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-3">
+                  Visual Effects
+                </h4>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-700/50 cursor-pointer transition-colors">
+                    <div
+                      className={`w-8 h-8 rounded-lg flex items-center justify-center ${activeLayers.fxaa ? "bg-indigo-500/20" : "bg-gray-700/50"}`}
+                    >
+                      <div
+                        className={`text-[8px] font-bold ${activeLayers.fxaa ? "text-indigo-400" : "text-gray-500"}`}
+                      >
+                        AA
+                      </div>
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-xs font-medium text-gray-200">
+                        Anti-aliasing
+                      </p>
+                      <p className="text-[10px] text-gray-500">
+                        Smoother edges
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={activeLayers.fxaa}
+                      onChange={(e) =>
+                        setLayerVisibility("fxaa", e.target.checked)
+                      }
+                      className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-0"
+                    />
+                  </label>
+                  <label className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-700/50 cursor-pointer transition-colors">
+                    <div
+                      className={`w-8 h-8 rounded-lg flex items-center justify-center ${activeLayers.bloom ? "bg-pink-500/20" : "bg-gray-700/50"}`}
+                    >
+                      <div
+                        className={`w-3 h-3 rounded-full ${activeLayers.bloom ? "bg-pink-400 shadow-[0_0_8px_2px_rgba(236,72,153,0.5)]" : "bg-gray-500"}`}
+                      ></div>
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-xs font-medium text-gray-200">Bloom</p>
+                      <p className="text-[10px] text-gray-500">Glow effect</p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={activeLayers.bloom}
+                      onChange={(e) =>
+                        setLayerVisibility("bloom", e.target.checked)
+                      }
+                      className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-pink-500 focus:ring-pink-500 focus:ring-offset-0"
+                    />
+                  </label>
                 </div>
               </div>
-              <div>
-                <div className="text-gray-400 mb-1">Total Passes</div>
-                <div className="text-green-400 font-semibold">
-                  {state.missionData.total_passes}
-                </div>
-              </div>
-              <div>
-                <div className="text-gray-400 mb-1">Coverage</div>
-                <div className="text-white">
-                  {(state.missionData.coverage_percentage || 0).toFixed(1)}%
-                </div>
-              </div>
-            </div>
-          ) : (
-            <p className="text-gray-500 text-sm">No mission data available</p>
-          )}
-        </div>
-      ),
-    },
-    {
-      id: "properties",
-      title: "Properties",
-      icon: Sliders,
-      component: (
-        <div className="p-4">
-          <h3 className="text-sm font-semibold text-white mb-3">
-            View Properties
-          </h3>
-          <div className="space-y-3">
-            <div>
-              <label className="text-xs text-gray-400">Camera Speed</label>
-              <input
-                type="range"
-                min="1"
-                max="10"
-                defaultValue="5"
-                className="w-full mt-1"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-gray-400">Time Multiplier</label>
-              <input
-                type="range"
-                min="1"
-                max="1000"
-                defaultValue="10"
-                className="w-full mt-1"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-gray-400">Entity Scale</label>
-              <input
-                type="range"
-                min="0.5"
-                max="2"
-                step="0.1"
-                defaultValue="1"
-                className="w-full mt-1"
-              />
             </div>
           </div>
-        </div>
-      ),
-    },
-    {
-      id: "info",
-      title: "Information",
-      icon: Info,
-      component: (
-        <div className="p-4">
-          <h3 className="text-sm font-semibold text-white mb-3">Quick Help</h3>
-          <div className="space-y-2 text-xs text-gray-400">
-            <div className="border-b border-gray-700 pb-2">
-              <div className="font-semibold text-gray-300 mb-1">Navigation</div>
-              <p>• Left click + drag: Rotate view</p>
-              <p>• Right click + drag: Zoom</p>
-              <p>• Middle click + drag: Pan</p>
+        ),
+      },
+      {
+        id: RIGHT_SIDEBAR_PANELS.AI_ASSISTANT,
+        title: "AI Assistant",
+        icon: Bot,
+        component: (
+          <div className="p-4 h-full flex flex-col">
+            <div className="flex-1 flex flex-col items-center justify-center text-center px-4">
+              <div className="w-16 h-16 mb-4 rounded-full bg-gradient-to-br from-purple-500/10 to-blue-500/10 flex items-center justify-center">
+                <Bot className="w-8 h-8 text-purple-400/50" />
+              </div>
+              <p className="text-sm text-gray-400 mb-2">
+                Local LLM Integration
+              </p>
+              <p className="text-xs text-gray-500 mb-4">
+                Chat with an AI assistant to get mission insights, execute
+                planning commands, and analyze results using natural language.
+              </p>
+              <div className="space-y-2 text-xs text-gray-500">
+                <div className="flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-purple-500/50"></span>
+                  <span>Ask questions about your mission</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500/50"></span>
+                  <span>Execute planning workflows</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-500/50"></span>
+                  <span>Get optimization suggestions</span>
+                </div>
+              </div>
             </div>
-            <div className="border-b border-gray-700 pb-2">
-              <div className="font-semibold text-gray-300 mb-1">Selection</div>
-              <p>• Click entity: Select & view info</p>
-              <p>• Right click: Context menu</p>
-              <p>• Double click: Focus camera</p>
-            </div>
-            <div>
-              <div className="font-semibold text-gray-300 mb-1">Keyboard</div>
-              <p>• Space: Play/pause time</p>
-              <p>• R: Reset camera</p>
-              <p>• Delete: Remove selected</p>
+
+            <div className="mt-4 p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
+              <div className="flex items-center gap-2 text-xs text-gray-500">
+                <input
+                  type="text"
+                  placeholder="Ask about your mission..."
+                  disabled
+                  className="flex-1 bg-transparent border-none outline-none placeholder-gray-600"
+                />
+                <button
+                  disabled
+                  className="p-1.5 rounded bg-purple-500/20 text-purple-400/50 cursor-not-allowed"
+                >
+                  <Sparkles className="w-3 h-3" />
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      ),
-    },
-  ];
+        ),
+      },
+    ],
+    [
+      activeLayers,
+      setLayerVisibility,
+      toggleEntityVisibility,
+      state.missionData,
+    ],
+  );
+
+  // Filter panels based on UI Mode
+  // In developer mode: show all panels
+  // In simple mode: only show Inspector, Layers, Help
+  const panels = useMemo(() => {
+    if (isDeveloperMode) {
+      return allPanels; // Show all panels in developer mode
+    }
+    return allPanels.filter((panel) =>
+      (SIMPLE_MODE_RIGHT_PANELS as readonly string[]).includes(panel.id),
+    );
+  }, [allPanels, isDeveloperMode]);
 
   const handlePanelClick = (panelId: string) => {
     if (activePanel === panelId && isPanelOpen) {
@@ -371,8 +545,8 @@ const RightSidebar: React.FC = () => {
                   isActive
                     ? "bg-blue-600 text-white"
                     : isDisabled
-                    ? "text-gray-600 cursor-not-allowed"
-                    : "text-gray-400 hover:text-white hover:bg-gray-800"
+                      ? "text-gray-600 cursor-not-allowed"
+                      : "text-gray-400 hover:text-white hover:bg-gray-800"
                 }
               `}
               title={panel.title}

@@ -189,6 +189,28 @@ export default function RepairCommitModal({
             </div>
           )}
 
+          {/* Hard Lock Warnings */}
+          {repairDiff.hard_lock_warnings &&
+            repairDiff.hard_lock_warnings.length > 0 && (
+              <div className="bg-red-900/20 rounded-lg p-3 border border-red-800">
+                <h4 className="text-xs font-medium text-red-400 mb-2 flex items-center gap-1">
+                  <Shield className="w-3 h-3" />
+                  Hard Lock Conflicts ({repairDiff.hard_lock_warnings.length})
+                </h4>
+                <ul className="space-y-1 max-h-32 overflow-y-auto">
+                  {repairDiff.hard_lock_warnings.map((warning, idx) => (
+                    <li key={idx} className="text-xs text-red-300">
+                      • {warning}
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-xs text-red-400/70 mt-2">
+                  These conflicts could not be resolved due to hard-locked
+                  acquisitions.
+                </p>
+              </div>
+            )}
+
           {/* Commit Warnings */}
           {commitPreview.warnings.length > 0 && (
             <div className="bg-gray-800 rounded-lg p-3">

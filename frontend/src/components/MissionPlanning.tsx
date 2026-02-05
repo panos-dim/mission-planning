@@ -10,6 +10,8 @@ import { useSlewVisStore } from "../store/slewVisStore";
 import { useVisStore } from "../store/visStore";
 import { usePlanningStore } from "../store/planningStore";
 import { useExplorerStore } from "../store/explorerStore";
+import { useSelectionStore, useContextFilter } from "../store/selectionStore";
+import ContextFilterBar from "./ContextFilterBar";
 import { JulianDate } from "cesium";
 import {
   Eye,
@@ -34,6 +36,11 @@ import {
   type CommitPreview,
 } from "./ConflictWarningModal";
 import { RepairDiffPanel } from "./RepairDiffPanel";
+import { useRepairHighlightStore } from "../store/repairHighlightStore";
+import {
+  isAdvancedPlanningEnabled,
+  isDebugMode,
+} from "../constants/simpleMode";
 
 interface MissionPlanningProps {
   onPromoteToOrders?: (algorithm: string, result: AlgorithmResult) => void;
@@ -43,7 +50,11 @@ export default function MissionPlanning({
   onPromoteToOrders,
 }: MissionPlanningProps): JSX.Element {
   const { state } = useMission();
-  const { setClockTime } = useVisStore();
+  const { setClockTime, uiMode } = useVisStore();
+
+  // Show advanced options when: URL has ?debug=planning OR UI toggle is set to developer
+  const showAdvancedOptions =
+    isAdvancedPlanningEnabled() || uiMode === "developer" || isDebugMode();
   const {
     enabled: slewVisEnabled,
     setEnabled: setSlewVisEnabled,
@@ -51,12 +62,24 @@ export default function MissionPlanning({
     setHoveredOpportunity,
   } = useSlewVisStore();
 
+  // Selection store for unified selection sync
+  const { selectedOpportunityId, selectOpportunity } = useSelectionStore();
+  const contextFilter = useContextFilter("planning");
+
+  // Repair highlight store for clearing repair preview state (PR-REPAIR-UX-01)
+  const clearRepairState = useRepairHighlightStore((s) => s.clearRepairState);
+
+  // Check if mission data has SAR mode
+  const isSARMission = !!(
+    state.missionData?.imaging_type === "sar" || state.missionData?.sar
+  );
+
   // State for opportunities
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
 
   // State for planning mode (incremental planning)
-  const [planningMode, setPlanningMode] =
-    useState<PlanningMode>("from_scratch");
+  // PR-OPS-REPAIR-DEFAULT-01: Default to repair mode for ops-grade workflow
+  const [planningMode, setPlanningMode] = useState<PlanningMode>("repair");
   const [lockPolicy, setLockPolicy] = useState<LockPolicy>("respect_hard_only");
   const [includeTentative, setIncludeTentative] = useState(false);
 
@@ -202,6 +225,11 @@ export default function MissionPlanning({
   const [isPlanning, setIsPlanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Pagination state for results table (per UX_MINIMAL_SPEC: paginate if >50 rows)
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
+
   // Active algorithm is always roll_pitch_best_fit (others deprecated)
   const activeTab = "roll_pitch_best_fit";
 
@@ -282,7 +310,7 @@ export default function MissionPlanning({
     setError(null);
 
     try {
-      const workspaceId = "default"; // TODO: Get from workspace context
+      const workspaceId = state.activeWorkspace || "default";
 
       // Handle repair mode separately
       if (planningMode === "repair") {
@@ -415,12 +443,14 @@ export default function MissionPlanning({
           usePlanningStore.getState().setActiveAlgorithm("roll_pitch_best_fit");
 
           Object.entries(data.results).forEach(([algorithm, result]) => {
+            // Skip if result or metrics is undefined
+            if (!result?.metrics) return;
             useExplorerStore.getState().addPlanningRun({
               id: `planning_${algorithm}_${Date.now()}`,
               algorithm: algorithm,
               timestamp: new Date().toISOString(),
-              accepted: result.metrics.opportunities_accepted,
-              totalValue: result.metrics.total_value,
+              accepted: result.metrics.opportunities_accepted ?? 0,
+              totalValue: result.metrics.total_value ?? 0,
             });
           });
 
@@ -614,31 +644,28 @@ export default function MissionPlanning({
 
   return (
     <div className="h-full flex flex-col bg-gray-900 text-white">
-      {/* Header */}
-      <div className="bg-gray-800 border-b border-gray-700 p-4">
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="text-sm font-semibold text-white">
-            Mission Planning — Algorithm Suite
-          </h2>
+      {/* Status Bar */}
+      <div className="bg-gray-800 border-b border-gray-700 px-4 py-3">
+        <div className="flex items-center justify-between">
+          <p className="text-xs text-gray-400">
+            {hasOpportunities
+              ? `${uniqueTargets} targets · ${opportunities.length} opportunities`
+              : "Run Mission Analysis first"}
+          </p>
           {results && (
             <button
               onClick={() => setSlewVisEnabled(!slewVisEnabled)}
-              className={`px-3 py-1.5 rounded text-xs font-medium flex items-center gap-2 transition-colors ${
+              className={`px-2 py-1 rounded text-xs font-medium flex items-center gap-1.5 transition-colors ${
                 slewVisEnabled
                   ? "bg-blue-600 hover:bg-blue-700 text-white"
                   : "bg-gray-700 hover:bg-gray-600 text-gray-300"
               }`}
             >
-              {slewVisEnabled ? <EyeOff size={14} /> : <Eye size={14} />}
-              {slewVisEnabled ? "Hide" : "Show"} Live Slew View
+              {slewVisEnabled ? <EyeOff size={12} /> : <Eye size={12} />}
+              {slewVisEnabled ? "Hide" : "Show"} Slew
             </button>
           )}
         </div>
-        <p className="text-xs text-gray-400">
-          {hasOpportunities
-            ? `Select and run scheduling algorithms: ${uniqueTargets} targets with ${opportunities.length} opportunities from Mission Analysis`
-            : "Run Mission Analysis first to generate opportunities"}
-        </p>
       </div>
 
       {/* Main Content */}
@@ -685,271 +712,288 @@ export default function MissionPlanning({
             isDisabled ? "opacity-50 pointer-events-none" : ""
           }`}
         >
-          {/* Planning Mode Section */}
-          <div className="space-y-3 pb-3 border-b border-gray-700">
-            <h4 className="text-xs font-semibold text-blue-400 uppercase tracking-wide flex items-center gap-2">
-              <Database size={14} />
-              Planning Mode
-            </h4>
+          {/* Planning Mode Section - Only shown in advanced/debug mode */}
+          {showAdvancedOptions && (
+            <div className="space-y-3 pb-3 border-b border-gray-700">
+              <h4 className="text-xs font-semibold text-blue-400 uppercase tracking-wide flex items-center gap-2">
+                <Database size={14} />
+                Planning Mode
+              </h4>
 
-            {/* Mode Toggle */}
-            <div className="flex gap-1">
-              <button
-                onClick={() => setPlanningMode("from_scratch")}
-                className={`flex-1 px-2 py-2 rounded text-xs font-medium transition-colors ${
-                  planningMode === "from_scratch"
-                    ? "bg-blue-600 text-white"
-                    : "bg-gray-700 text-gray-300 hover:bg-gray-600"
-                }`}
-              >
-                From Scratch
-              </button>
-              <button
-                onClick={() => setPlanningMode("incremental")}
-                className={`flex-1 px-2 py-2 rounded text-xs font-medium transition-colors ${
-                  planningMode === "incremental"
-                    ? "bg-green-600 text-white"
-                    : "bg-gray-700 text-gray-300 hover:bg-gray-600"
-                }`}
-              >
-                Incremental
-              </button>
-              <button
-                onClick={() => setPlanningMode("repair")}
-                className={`flex-1 px-2 py-2 rounded text-xs font-medium transition-colors ${
-                  planningMode === "repair"
-                    ? "bg-orange-600 text-white"
-                    : "bg-gray-700 text-gray-300 hover:bg-gray-600"
-                }`}
-              >
-                Repair
-              </button>
-            </div>
+              {/* Mode Toggle */}
+              <div className="flex gap-1">
+                <button
+                  onClick={() => {
+                    setPlanningMode("from_scratch");
+                    clearRepairState(); // Clear repair highlights when switching modes
+                  }}
+                  className={`flex-1 px-2 py-2 rounded text-xs font-medium transition-colors ${
+                    planningMode === "from_scratch"
+                      ? "bg-blue-600 text-white"
+                      : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+                  }`}
+                >
+                  From Scratch
+                </button>
+                <button
+                  onClick={() => {
+                    setPlanningMode("incremental");
+                    clearRepairState(); // Clear repair highlights when switching modes
+                  }}
+                  className={`flex-1 px-2 py-2 rounded text-xs font-medium transition-colors ${
+                    planningMode === "incremental"
+                      ? "bg-green-600 text-white"
+                      : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+                  }`}
+                >
+                  Incremental
+                </button>
+                <button
+                  onClick={() => setPlanningMode("repair")}
+                  className={`flex-1 px-2 py-2 rounded text-xs font-medium transition-colors ${
+                    planningMode === "repair"
+                      ? "bg-orange-600 text-white"
+                      : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+                  }`}
+                >
+                  Repair
+                </button>
+              </div>
 
-            <p className="text-[10px] text-gray-500">
-              {planningMode === "from_scratch"
-                ? "Plan ignores existing schedule - useful for exploring alternatives"
-                : planningMode === "incremental"
-                  ? "Plan avoids conflicts with committed acquisitions"
-                  : "Repair existing schedule: keep hard locks, optionally modify soft items"}
-            </p>
+              <p className="text-[10px] text-gray-500">
+                {planningMode === "from_scratch"
+                  ? "Plan ignores existing schedule - useful for exploring alternatives"
+                  : planningMode === "incremental"
+                    ? "Plan avoids conflicts with committed acquisitions"
+                    : "Repair existing schedule: keep hard locks, optionally modify soft items"}
+              </p>
 
-            {/* Schedule Context Box (shown in incremental mode) */}
-            {planningMode === "incremental" && (
-              <div className="bg-gray-900/60 rounded-lg p-3 border border-gray-700">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-medium text-gray-300 flex items-center gap-1.5">
-                    {scheduleContext.loading ? (
+              {/* Schedule Context Box (shown in incremental mode) */}
+              {planningMode === "incremental" && (
+                <div className="bg-gray-900/60 rounded-lg p-3 border border-gray-700">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-medium text-gray-300 flex items-center gap-1.5">
+                      {scheduleContext.loading ? (
+                        <RefreshCw
+                          size={12}
+                          className="animate-spin text-blue-400"
+                        />
+                      ) : scheduleContext.count > 0 ? (
+                        <CheckCircle size={12} className="text-green-400" />
+                      ) : (
+                        <AlertTriangle size={12} className="text-yellow-400" />
+                      )}
+                      Schedule Context
+                    </span>
+                    <button
+                      onClick={loadScheduleContext}
+                      disabled={scheduleContext.loading}
+                      className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1"
+                    >
                       <RefreshCw
-                        size={12}
-                        className="animate-spin text-blue-400"
+                        size={10}
+                        className={
+                          scheduleContext.loading ? "animate-spin" : ""
+                        }
                       />
-                    ) : scheduleContext.count > 0 ? (
-                      <CheckCircle size={12} className="text-green-400" />
-                    ) : (
-                      <AlertTriangle size={12} className="text-yellow-400" />
-                    )}
-                    Schedule Context
-                  </span>
-                  <button
-                    onClick={loadScheduleContext}
-                    disabled={scheduleContext.loading}
-                    className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1"
-                  >
-                    <RefreshCw
-                      size={10}
-                      className={scheduleContext.loading ? "animate-spin" : ""}
-                    />
-                    Refresh
-                  </button>
-                </div>
+                      Refresh
+                    </button>
+                  </div>
 
-                {scheduleContext.error ? (
-                  <div className="text-xs text-red-400">
-                    {scheduleContext.error}
+                  {scheduleContext.error ? (
+                    <div className="text-xs text-red-400">
+                      {scheduleContext.error}
+                    </div>
+                  ) : scheduleContext.loading ? (
+                    <div className="text-xs text-gray-400">
+                      Loading schedule context...
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="text-xs text-gray-300">
+                        <span className="text-white font-medium">
+                          {scheduleContext.count}
+                        </span>{" "}
+                        committed acquisitions (horizon:{" "}
+                        {scheduleContext.horizonDays} days)
+                      </div>
+
+                      {/* State breakdown */}
+                      {Object.keys(scheduleContext.byState).length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {Object.entries(scheduleContext.byState).map(
+                            ([state, count]) => (
+                              <span
+                                key={state}
+                                className={`px-1.5 py-0.5 rounded text-[10px] ${
+                                  state === "committed"
+                                    ? "bg-green-900/50 text-green-300"
+                                    : state === "locked"
+                                      ? "bg-red-900/50 text-red-300"
+                                      : "bg-gray-700 text-gray-300"
+                                }`}
+                              >
+                                {state}: {count}
+                              </span>
+                            ),
+                          )}
+                        </div>
+                      )}
+
+                      {/* Lock Policy */}
+                      <div className="pt-2 border-t border-gray-700/50">
+                        <label className="block text-[10px] text-gray-400 mb-1">
+                          Lock Policy
+                        </label>
+                        <select
+                          value={lockPolicy}
+                          onChange={(e) =>
+                            setLockPolicy(e.target.value as LockPolicy)
+                          }
+                          className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs"
+                        >
+                          <option value="respect_hard_only">
+                            Hard locks only
+                          </option>
+                          <option value="respect_hard_and_soft">
+                            Hard + soft locks
+                          </option>
+                        </select>
+                      </div>
+
+                      {/* Include Tentative Toggle */}
+                      <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={includeTentative}
+                          onChange={(e) =>
+                            setIncludeTentative(e.target.checked)
+                          }
+                          className="rounded bg-gray-700 border-gray-600"
+                        />
+                        Include tentative acquisitions
+                      </label>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Repair Mode Controls (shown in repair mode) */}
+              {planningMode === "repair" && (
+                <div className="bg-orange-900/20 rounded-lg p-3 border border-orange-700/50">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-xs font-medium text-orange-300 flex items-center gap-1.5">
+                      <AlertTriangle size={12} />
+                      Repair Configuration
+                    </span>
+                    <button
+                      onClick={loadScheduleContext}
+                      disabled={scheduleContext.loading}
+                      className="text-xs text-orange-400 hover:text-orange-300 flex items-center gap-1"
+                    >
+                      <RefreshCw
+                        size={10}
+                        className={
+                          scheduleContext.loading ? "animate-spin" : ""
+                        }
+                      />
+                      Load Schedule
+                    </button>
                   </div>
-                ) : scheduleContext.loading ? (
-                  <div className="text-xs text-gray-400">
-                    Loading schedule context...
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    <div className="text-xs text-gray-300">
+
+                  {/* Schedule summary */}
+                  {scheduleContext.count > 0 && (
+                    <div className="text-xs text-gray-300 mb-3 pb-2 border-b border-orange-700/30">
                       <span className="text-white font-medium">
                         {scheduleContext.count}
                       </span>{" "}
-                      committed acquisitions (horizon:{" "}
-                      {scheduleContext.horizonDays} days)
+                      acquisitions in horizon ({scheduleContext.horizonDays}{" "}
+                      days)
                     </div>
+                  )}
 
-                    {/* State breakdown */}
-                    {Object.keys(scheduleContext.byState).length > 0 && (
-                      <div className="flex flex-wrap gap-1.5">
-                        {Object.entries(scheduleContext.byState).map(
-                          ([state, count]) => (
-                            <span
-                              key={state}
-                              className={`px-1.5 py-0.5 rounded text-[10px] ${
-                                state === "committed"
-                                  ? "bg-green-900/50 text-green-300"
-                                  : state === "locked"
-                                    ? "bg-red-900/50 text-red-300"
-                                    : "bg-gray-700 text-gray-300"
-                              }`}
-                            >
-                              {state}: {count}
-                            </span>
-                          ),
-                        )}
-                      </div>
-                    )}
+                  {/* Soft Lock Policy */}
+                  <div className="space-y-2 mb-3">
+                    <label className="block text-[10px] text-gray-400">
+                      Soft Lock Policy
+                    </label>
+                    <select
+                      value={softLockPolicy}
+                      onChange={(e) =>
+                        setSoftLockPolicy(e.target.value as SoftLockPolicy)
+                      }
+                      className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs"
+                    >
+                      <option value="allow_replace">
+                        Allow Replace (drop soft for better)
+                      </option>
+                      <option value="allow_shift">
+                        Allow Shift (move timing only)
+                      </option>
+                      <option value="freeze_soft">
+                        Freeze Soft (treat as hard)
+                      </option>
+                    </select>
+                  </div>
 
-                    {/* Lock Policy */}
-                    <div className="pt-2 border-t border-gray-700/50">
-                      <label className="block text-[10px] text-gray-400 mb-1">
-                        Lock Policy
+                  {/* Max Changes Slider */}
+                  <div className="space-y-2 mb-3">
+                    <div className="flex justify-between">
+                      <label className="text-[10px] text-gray-400">
+                        Max Changes
                       </label>
-                      <select
-                        value={lockPolicy}
-                        onChange={(e) =>
-                          setLockPolicy(e.target.value as LockPolicy)
-                        }
-                        className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs"
-                      >
-                        <option value="respect_hard_only">
-                          Hard locks only
-                        </option>
-                        <option value="respect_hard_and_soft">
-                          Hard + soft locks
-                        </option>
-                      </select>
+                      <span className="text-[10px] text-orange-300 font-medium">
+                        {maxChanges}
+                      </span>
                     </div>
-
-                    {/* Include Tentative Toggle */}
-                    <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={includeTentative}
-                        onChange={(e) => setIncludeTentative(e.target.checked)}
-                        className="rounded bg-gray-700 border-gray-600"
-                      />
-                      Include tentative acquisitions
-                    </label>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Repair Mode Controls (shown in repair mode) */}
-            {planningMode === "repair" && (
-              <div className="bg-orange-900/20 rounded-lg p-3 border border-orange-700/50">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-medium text-orange-300 flex items-center gap-1.5">
-                    <AlertTriangle size={12} />
-                    Repair Configuration
-                  </span>
-                  <button
-                    onClick={loadScheduleContext}
-                    disabled={scheduleContext.loading}
-                    className="text-xs text-orange-400 hover:text-orange-300 flex items-center gap-1"
-                  >
-                    <RefreshCw
-                      size={10}
-                      className={scheduleContext.loading ? "animate-spin" : ""}
+                    <input
+                      type="range"
+                      min="1"
+                      max="200"
+                      value={maxChanges}
+                      onChange={(e) => setMaxChanges(parseInt(e.target.value))}
+                      className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
                     />
-                    Load Schedule
-                  </button>
-                </div>
-
-                {/* Schedule summary */}
-                {scheduleContext.count > 0 && (
-                  <div className="text-xs text-gray-300 mb-3 pb-2 border-b border-orange-700/30">
-                    <span className="text-white font-medium">
-                      {scheduleContext.count}
-                    </span>{" "}
-                    acquisitions in horizon ({scheduleContext.horizonDays} days)
+                    <div className="flex justify-between text-[9px] text-gray-500">
+                      <span>Conservative</span>
+                      <span>Aggressive</span>
+                    </div>
                   </div>
-                )}
 
-                {/* Soft Lock Policy */}
-                <div className="space-y-2 mb-3">
-                  <label className="block text-[10px] text-gray-400">
-                    Soft Lock Policy
-                  </label>
-                  <select
-                    value={softLockPolicy}
-                    onChange={(e) =>
-                      setSoftLockPolicy(e.target.value as SoftLockPolicy)
-                    }
-                    className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs"
-                  >
-                    <option value="allow_replace">
-                      Allow Replace (drop soft for better)
-                    </option>
-                    <option value="allow_shift">
-                      Allow Shift (move timing only)
-                    </option>
-                    <option value="freeze_soft">
-                      Freeze Soft (treat as hard)
-                    </option>
-                  </select>
-                </div>
-
-                {/* Max Changes Slider */}
-                <div className="space-y-2 mb-3">
-                  <div className="flex justify-between">
-                    <label className="text-[10px] text-gray-400">
-                      Max Changes
+                  {/* Objective */}
+                  <div className="space-y-2">
+                    <label className="block text-[10px] text-gray-400">
+                      Optimization Objective
                     </label>
-                    <span className="text-[10px] text-orange-300 font-medium">
-                      {maxChanges}
-                    </span>
+                    <select
+                      value={repairObjective}
+                      onChange={(e) =>
+                        setRepairObjective(e.target.value as RepairObjective)
+                      }
+                      className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs"
+                    >
+                      <option value="maximize_score">Maximize Score</option>
+                      <option value="maximize_priority">
+                        Maximize Priority
+                      </option>
+                      <option value="minimize_changes">Minimize Changes</option>
+                    </select>
                   </div>
-                  <input
-                    type="range"
-                    min="1"
-                    max="200"
-                    value={maxChanges}
-                    onChange={(e) => setMaxChanges(parseInt(e.target.value))}
-                    className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
-                  />
-                  <div className="flex justify-between text-[9px] text-gray-500">
-                    <span>Conservative</span>
-                    <span>Aggressive</span>
-                  </div>
-                </div>
 
-                {/* Objective */}
-                <div className="space-y-2">
-                  <label className="block text-[10px] text-gray-400">
-                    Optimization Objective
+                  {/* Include Tentative Toggle */}
+                  <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mt-3 pt-2 border-t border-orange-700/30">
+                    <input
+                      type="checkbox"
+                      checked={includeTentative}
+                      onChange={(e) => setIncludeTentative(e.target.checked)}
+                      className="rounded bg-gray-700 border-gray-600"
+                    />
+                    Include tentative acquisitions
                   </label>
-                  <select
-                    value={repairObjective}
-                    onChange={(e) =>
-                      setRepairObjective(e.target.value as RepairObjective)
-                    }
-                    className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs"
-                  >
-                    <option value="maximize_score">Maximize Score</option>
-                    <option value="maximize_priority">Maximize Priority</option>
-                    <option value="minimize_changes">Minimize Changes</option>
-                  </select>
                 </div>
-
-                {/* Include Tentative Toggle */}
-                <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mt-3 pt-2 border-t border-orange-700/30">
-                  <input
-                    type="checkbox"
-                    checked={includeTentative}
-                    onChange={(e) => setIncludeTentative(e.target.checked)}
-                    className="rounded bg-gray-700 border-gray-600"
-                  />
-                  Include tentative acquisitions
-                </label>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          )}
 
           <h3 className="text-sm font-semibold text-white border-b border-gray-700 pb-2">
             Planning Parameters
@@ -1013,391 +1057,407 @@ export default function MissionPlanning({
             </div>
           </div>
 
-          {/* Spacecraft Agility */}
-          <div className="space-y-3 pt-2">
-            <h4 className="text-xs font-semibold text-blue-400 uppercase tracking-wide">
-              Spacecraft Agility
-            </h4>
+          {/* Spacecraft Agility - Advanced only */}
+          {showAdvancedOptions && (
+            <div className="space-y-3 pt-2">
+              <h4 className="text-xs font-semibold text-blue-400 uppercase tracking-wide">
+                Spacecraft Agility
+              </h4>
 
-            {/* Roll Axis */}
-            <div className="bg-gray-750 rounded-lg p-3 border border-gray-700">
-              <div className="flex items-center gap-2 mb-2">
-                <div className="w-2 h-2 rounded-full bg-purple-500"></div>
-                <h5 className="text-xs font-semibold text-gray-300">
-                  Roll Axis (Cross-Track)
-                </h5>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs text-gray-400 mb-1">
-                    Rate
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      value={config.max_roll_rate_dps}
-                      onChange={(e) =>
-                        setConfig({
-                          ...config,
-                          max_roll_rate_dps: parseFloat(e.target.value),
-                        })
-                      }
-                      className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
-                      step="0.1"
-                      min="0.1"
-                    />
-                    <span className="absolute right-2 top-1.5 text-xs text-gray-500">
-                      °/s
-                    </span>
-                  </div>
+              {/* Roll Axis */}
+              <div className="bg-gray-750 rounded-lg p-3 border border-gray-700">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-2 h-2 rounded-full bg-purple-500"></div>
+                  <h5 className="text-xs font-semibold text-gray-300">
+                    Roll Axis (Cross-Track)
+                  </h5>
                 </div>
-                <div>
-                  <label className="block text-xs text-gray-400 mb-1">
-                    Acceleration
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      value={config.max_roll_accel_dps2}
-                      onChange={(e) =>
-                        setConfig({
-                          ...config,
-                          max_roll_accel_dps2: parseFloat(e.target.value),
-                        })
-                      }
-                      className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
-                      step="0.1"
-                      min="0.1"
-                    />
-                    <span className="absolute right-2 top-1.5 text-xs text-gray-500">
-                      °/s²
-                    </span>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">
+                      Rate
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        value={config.max_roll_rate_dps}
+                        onChange={(e) =>
+                          setConfig({
+                            ...config,
+                            max_roll_rate_dps: parseFloat(e.target.value),
+                          })
+                        }
+                        className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
+                        step="0.1"
+                        min="0.1"
+                      />
+                      <span className="absolute right-2 top-1.5 text-xs text-gray-500">
+                        °/s
+                      </span>
+                    </div>
                   </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Pitch Axis (Along-Track) */}
-            <div className="bg-gray-750 rounded-lg p-3 border border-green-900/50">
-              <div className="flex items-center gap-2 mb-2">
-                <div className="w-2 h-2 rounded-full bg-green-500"></div>
-                <h5 className="text-xs font-semibold text-gray-300">
-                  Pitch Axis (Along-Track)
-                </h5>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-xs text-gray-400 mb-1">
-                    Rate
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      value={config.max_pitch_rate_dps}
-                      onChange={(e) =>
-                        setConfig({
-                          ...config,
-                          max_pitch_rate_dps: parseFloat(e.target.value),
-                        })
-                      }
-                      className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm focus:border-green-500 focus:ring-1 focus:ring-green-500"
-                      step="0.1"
-                      min="0"
-                    />
-                    <span className="absolute right-2 top-1.5 text-xs text-gray-500">
-                      °/s
-                    </span>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-400 mb-1">
-                    Acceleration
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      value={config.max_pitch_accel_dps2}
-                      onChange={(e) =>
-                        setConfig({
-                          ...config,
-                          max_pitch_accel_dps2: parseFloat(e.target.value),
-                        })
-                      }
-                      className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm focus:border-green-500 focus:ring-1 focus:ring-green-500"
-                      step="0.1"
-                      min="0"
-                    />
-                    <span className="absolute right-2 top-1.5 text-xs text-gray-500">
-                      °/s²
-                    </span>
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">
+                      Acceleration
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        value={config.max_roll_accel_dps2}
+                        onChange={(e) =>
+                          setConfig({
+                            ...config,
+                            max_roll_accel_dps2: parseFloat(e.target.value),
+                          })
+                        }
+                        className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
+                        step="0.1"
+                        min="0.1"
+                      />
+                      <span className="absolute right-2 top-1.5 text-xs text-gray-500">
+                        °/s²
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          </div>
 
-          {/* Value Source */}
-          <div className="pt-2">
-            <label className="block text-xs font-medium text-gray-300 mb-1.5">
-              Target Value Source
-            </label>
-            <select
-              value={config.value_source}
-              onChange={(e) =>
-                setConfig({ ...config, value_source: e.target.value as any })
-              }
-              className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-            >
-              <option value="uniform">Uniform (all = 1)</option>
-              <option value="target_priority">
-                Target Priority (from analysis)
-              </option>
-              <option value="custom">Custom Values (CSV upload)</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Value Scoring Weights */}
-        <div
-          className={`bg-gray-800 rounded-lg p-3 space-y-3 ${
-            isDisabled ? "opacity-50 pointer-events-none" : ""
-          }`}
-        >
-          <h3 className="text-sm font-semibold text-white mb-2">
-            Value Scoring Weights
-          </h3>
-
-          {/* Preset Buttons */}
-          <div className="flex flex-wrap gap-1.5 mb-3">
-            {Object.entries(WEIGHT_PRESETS).map(([key, preset]) => (
-              <button
-                key={key}
-                onClick={() => applyPreset(key)}
-                className={`px-2 py-1 text-xs rounded transition-colors ${
-                  config.weight_preset === key
-                    ? "bg-blue-600 text-white"
-                    : "bg-gray-700 text-gray-300 hover:bg-gray-600"
-                }`}
-                title={preset.desc}
-              >
-                {preset.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Weight Sliders */}
-          <div className="space-y-2">
-            {/* Priority Weight */}
-            <div>
-              <div className="flex justify-between items-center mb-0.5">
-                <label className="text-xs text-gray-400">Priority</label>
-                <span className="text-xs text-blue-400">
-                  {getNormalizedWeights().priority.toFixed(0)}%
-                </span>
-              </div>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                step="5"
-                value={config.weight_priority}
-                onChange={(e) =>
-                  setConfig({
-                    ...config,
-                    weight_priority: parseInt(e.target.value),
-                    weight_preset: null,
-                  })
-                }
-                className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-              />
-            </div>
-
-            {/* Geometry Weight */}
-            <div>
-              <div className="flex justify-between items-center mb-0.5">
-                <label className="text-xs text-gray-400">Geometry</label>
-                <span className="text-xs text-green-400">
-                  {getNormalizedWeights().geometry.toFixed(0)}%
-                </span>
-              </div>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                step="5"
-                value={config.weight_geometry}
-                onChange={(e) =>
-                  setConfig({
-                    ...config,
-                    weight_geometry: parseInt(e.target.value),
-                    weight_preset: null,
-                  })
-                }
-                className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-green-500"
-              />
-            </div>
-
-            {/* Timing Weight */}
-            <div>
-              <div className="flex justify-between items-center mb-0.5">
-                <label className="text-xs text-gray-400">Timing</label>
-                <span className="text-xs text-orange-400">
-                  {getNormalizedWeights().timing.toFixed(0)}%
-                </span>
-              </div>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                step="5"
-                value={config.weight_timing}
-                onChange={(e) =>
-                  setConfig({
-                    ...config,
-                    weight_timing: parseInt(e.target.value),
-                    weight_preset: null,
-                  })
-                }
-                className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
-              />
-            </div>
-          </div>
-
-          {/* Weight Visualization Bar */}
-          <div className="h-2 flex rounded overflow-hidden mt-2">
-            <div
-              className="bg-blue-500 transition-all"
-              style={{ width: `${getNormalizedWeights().priority}%` }}
-              title={`Priority: ${getNormalizedWeights().priority.toFixed(0)}%`}
-            />
-            <div
-              className="bg-green-500 transition-all"
-              style={{ width: `${getNormalizedWeights().geometry}%` }}
-              title={`Geometry: ${getNormalizedWeights().geometry.toFixed(0)}%`}
-            />
-            <div
-              className="bg-orange-500 transition-all"
-              style={{ width: `${getNormalizedWeights().timing}%` }}
-              title={`Timing: ${getNormalizedWeights().timing.toFixed(0)}%`}
-            />
-          </div>
-          <div className="flex justify-between text-[10px] text-gray-500">
-            <span>Priority</span>
-            <span>Geometry</span>
-            <span>Timing</span>
-          </div>
-
-          {/* Formula Display */}
-          <div className="mt-3 p-3 bg-gray-900/80 rounded-lg border border-gray-600">
-            <div className="text-xs font-medium text-gray-300 mb-2">
-              📐 Value Calculation
-            </div>
-            <div className="font-mono text-sm text-white bg-gray-800 px-3 py-2 rounded mb-2">
-              Value ={" "}
-              <span className="text-blue-400">
-                {getNormalizedWeights().priority.toFixed(0)}%
-              </span>
-              ×priority +{" "}
-              <span className="text-green-400">
-                {getNormalizedWeights().geometry.toFixed(0)}%
-              </span>
-              ×geometry +{" "}
-              <span className="text-orange-400">
-                {getNormalizedWeights().timing.toFixed(0)}%
-              </span>
-              ×timing
-            </div>
-            <div className="text-[11px] text-gray-400 space-y-1 mt-2">
-              <div className="font-medium text-gray-300 mb-1">
-                Score Components (all normalized 0-1):
-              </div>
-              <div>
-                • <span className="text-blue-400">priority</span> =
-                (target_priority - 1) / 4{" "}
-                <span className="text-gray-500">← maps 1-5 to 0-1</span>
-              </div>
-              <div>
-                • <span className="text-green-400">geometry</span> = exp(-0.02 ×
-                off_nadir°){" "}
-                <span className="text-gray-500">
-                  ← lower angle = higher score
-                </span>
-              </div>
-              <div>
-                • <span className="text-orange-400">timing</span> = 1 - (index /
-                total){" "}
-                <span className="text-gray-500">← earlier = higher score</span>
-              </div>
-            </div>
-            <div className="text-[10px] text-gray-500 mt-2 pt-2 border-t border-gray-700">
-              Output range: 0-1 (higher = better opportunity)
-            </div>
-          </div>
-
-          {/* Quality Model Dropdown */}
-          <div className="pt-2 border-t border-gray-700">
-            <label className="block text-xs font-medium text-gray-400 mb-1">
-              Quality Model
-            </label>
-            <select
-              value={config.quality_model}
-              onChange={(e) =>
-                setConfig({ ...config, quality_model: e.target.value as any })
-              }
-              className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm"
-            >
-              <option value="off">Off (no quality adjustment)</option>
-              <option value="monotonic">
-                Monotonic (lower off-nadir = better) — Optical
-              </option>
-              <option value="band">Band (ideal ± width) — SAR</option>
-            </select>
-          </div>
-
-          {/* Band Model Parameters (conditional) */}
-          {config.quality_model === "band" && (
-            <div className="grid grid-cols-2 gap-3 pt-2 border-t border-gray-700">
-              <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1">
-                  Ideal Off-Nadir (°)
-                </label>
-                <input
-                  type="number"
-                  value={config.ideal_incidence_deg}
-                  onChange={(e) =>
-                    setConfig({
-                      ...config,
-                      ideal_incidence_deg: parseFloat(e.target.value),
-                    })
-                  }
-                  className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm"
-                  step="1"
-                  min="0"
-                  max="90"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1">
-                  Band Width (°)
-                </label>
-                <input
-                  type="number"
-                  value={config.band_width_deg}
-                  onChange={(e) =>
-                    setConfig({
-                      ...config,
-                      band_width_deg: parseFloat(e.target.value),
-                    })
-                  }
-                  className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm"
-                  step="0.5"
-                  min="0.5"
-                  max="45"
-                />
+              {/* Pitch Axis (Along-Track) */}
+              <div className="bg-gray-750 rounded-lg p-3 border border-green-900/50">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-2 h-2 rounded-full bg-green-500"></div>
+                  <h5 className="text-xs font-semibold text-gray-300">
+                    Pitch Axis (Along-Track)
+                  </h5>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">
+                      Rate
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        value={config.max_pitch_rate_dps}
+                        onChange={(e) =>
+                          setConfig({
+                            ...config,
+                            max_pitch_rate_dps: parseFloat(e.target.value),
+                          })
+                        }
+                        className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm focus:border-green-500 focus:ring-1 focus:ring-green-500"
+                        step="0.1"
+                        min="0"
+                      />
+                      <span className="absolute right-2 top-1.5 text-xs text-gray-500">
+                        °/s
+                      </span>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">
+                      Acceleration
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        value={config.max_pitch_accel_dps2}
+                        onChange={(e) =>
+                          setConfig({
+                            ...config,
+                            max_pitch_accel_dps2: parseFloat(e.target.value),
+                          })
+                        }
+                        className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm focus:border-green-500 focus:ring-1 focus:ring-green-500"
+                        step="0.1"
+                        min="0"
+                      />
+                      <span className="absolute right-2 top-1.5 text-xs text-gray-500">
+                        °/s²
+                      </span>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           )}
+
+          {/* Value Source - Advanced only */}
+          {showAdvancedOptions && (
+            <div className="pt-2">
+              <label className="block text-xs font-medium text-gray-300 mb-1.5">
+                Target Value Source
+              </label>
+              <select
+                value={config.value_source}
+                onChange={(e) =>
+                  setConfig({
+                    ...config,
+                    value_source: e.target
+                      .value as PlanningRequest["value_source"],
+                  })
+                }
+                className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="uniform">Uniform (all = 1)</option>
+                <option value="target_priority">
+                  Target Priority (from analysis)
+                </option>
+                <option value="custom">Custom Values (CSV upload)</option>
+              </select>
+            </div>
+          )}
         </div>
+
+        {/* Value Scoring Weights - Advanced only */}
+        {showAdvancedOptions && (
+          <div
+            className={`bg-gray-800 rounded-lg p-3 space-y-3 ${
+              isDisabled ? "opacity-50 pointer-events-none" : ""
+            }`}
+          >
+            <h3 className="text-sm font-semibold text-white mb-2">
+              Value Scoring Weights
+            </h3>
+
+            {/* Preset Buttons */}
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              {Object.entries(WEIGHT_PRESETS).map(([key, preset]) => (
+                <button
+                  key={key}
+                  onClick={() => applyPreset(key)}
+                  className={`px-2 py-1 text-xs rounded transition-colors ${
+                    config.weight_preset === key
+                      ? "bg-blue-600 text-white"
+                      : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+                  }`}
+                  title={preset.desc}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Weight Sliders */}
+            <div className="space-y-2">
+              {/* Priority Weight */}
+              <div>
+                <div className="flex justify-between items-center mb-0.5">
+                  <label className="text-xs text-gray-400">Priority</label>
+                  <span className="text-xs text-blue-400">
+                    {getNormalizedWeights().priority.toFixed(0)}%
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="5"
+                  value={config.weight_priority}
+                  onChange={(e) =>
+                    setConfig({
+                      ...config,
+                      weight_priority: parseInt(e.target.value),
+                      weight_preset: null,
+                    })
+                  }
+                  className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                />
+              </div>
+
+              {/* Geometry Weight */}
+              <div>
+                <div className="flex justify-between items-center mb-0.5">
+                  <label className="text-xs text-gray-400">Geometry</label>
+                  <span className="text-xs text-green-400">
+                    {getNormalizedWeights().geometry.toFixed(0)}%
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="5"
+                  value={config.weight_geometry}
+                  onChange={(e) =>
+                    setConfig({
+                      ...config,
+                      weight_geometry: parseInt(e.target.value),
+                      weight_preset: null,
+                    })
+                  }
+                  className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-green-500"
+                />
+              </div>
+
+              {/* Timing Weight */}
+              <div>
+                <div className="flex justify-between items-center mb-0.5">
+                  <label className="text-xs text-gray-400">Timing</label>
+                  <span className="text-xs text-orange-400">
+                    {getNormalizedWeights().timing.toFixed(0)}%
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="5"
+                  value={config.weight_timing}
+                  onChange={(e) =>
+                    setConfig({
+                      ...config,
+                      weight_timing: parseInt(e.target.value),
+                      weight_preset: null,
+                    })
+                  }
+                  className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
+                />
+              </div>
+            </div>
+
+            {/* Weight Visualization Bar */}
+            <div className="h-2 flex rounded overflow-hidden mt-2">
+              <div
+                className="bg-blue-500 transition-all"
+                style={{ width: `${getNormalizedWeights().priority}%` }}
+                title={`Priority: ${getNormalizedWeights().priority.toFixed(0)}%`}
+              />
+              <div
+                className="bg-green-500 transition-all"
+                style={{ width: `${getNormalizedWeights().geometry}%` }}
+                title={`Geometry: ${getNormalizedWeights().geometry.toFixed(0)}%`}
+              />
+              <div
+                className="bg-orange-500 transition-all"
+                style={{ width: `${getNormalizedWeights().timing}%` }}
+                title={`Timing: ${getNormalizedWeights().timing.toFixed(0)}%`}
+              />
+            </div>
+            <div className="flex justify-between text-[10px] text-gray-500">
+              <span>Priority</span>
+              <span>Geometry</span>
+              <span>Timing</span>
+            </div>
+
+            {/* Formula Display */}
+            <div className="mt-3 p-3 bg-gray-900/80 rounded-lg border border-gray-600">
+              <div className="text-xs font-medium text-gray-300 mb-2">
+                📐 Value Calculation
+              </div>
+              <div className="font-mono text-sm text-white bg-gray-800 px-3 py-2 rounded mb-2">
+                Value ={" "}
+                <span className="text-blue-400">
+                  {getNormalizedWeights().priority.toFixed(0)}%
+                </span>
+                ×priority +{" "}
+                <span className="text-green-400">
+                  {getNormalizedWeights().geometry.toFixed(0)}%
+                </span>
+                ×geometry +{" "}
+                <span className="text-orange-400">
+                  {getNormalizedWeights().timing.toFixed(0)}%
+                </span>
+                ×timing
+              </div>
+              <div className="text-[11px] text-gray-400 space-y-1 mt-2">
+                <div className="font-medium text-gray-300 mb-1">
+                  Score Components (all normalized 0-1):
+                </div>
+                <div>
+                  • <span className="text-blue-400">priority</span> =
+                  (target_priority - 1) / 4{" "}
+                  <span className="text-gray-500">← maps 1-5 to 0-1</span>
+                </div>
+                <div>
+                  • <span className="text-green-400">geometry</span> = exp(-0.02
+                  × off_nadir°){" "}
+                  <span className="text-gray-500">
+                    ← lower angle = higher score
+                  </span>
+                </div>
+                <div>
+                  • <span className="text-orange-400">timing</span> = 1 - (index
+                  / total){" "}
+                  <span className="text-gray-500">
+                    ← earlier = higher score
+                  </span>
+                </div>
+              </div>
+              <div className="text-[10px] text-gray-500 mt-2 pt-2 border-t border-gray-700">
+                Output range: 0-1 (higher = better opportunity)
+              </div>
+            </div>
+
+            {/* Quality Model Dropdown */}
+            <div className="pt-2 border-t border-gray-700">
+              <label className="block text-xs font-medium text-gray-400 mb-1">
+                Quality Model
+              </label>
+              <select
+                value={config.quality_model}
+                onChange={(e) =>
+                  setConfig({
+                    ...config,
+                    quality_model: e.target
+                      .value as PlanningRequest["quality_model"],
+                  })
+                }
+                className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm"
+              >
+                <option value="off">Off (no quality adjustment)</option>
+                <option value="monotonic">
+                  Monotonic (lower off-nadir = better) — Optical
+                </option>
+                <option value="band">Band (ideal ± width) — SAR</option>
+              </select>
+            </div>
+
+            {/* Band Model Parameters (conditional) */}
+            {config.quality_model === "band" && (
+              <div className="grid grid-cols-2 gap-3 pt-2 border-t border-gray-700">
+                <div>
+                  <label className="block text-xs font-medium text-gray-400 mb-1">
+                    Ideal Off-Nadir (°)
+                  </label>
+                  <input
+                    type="number"
+                    value={config.ideal_incidence_deg}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        ideal_incidence_deg: parseFloat(e.target.value),
+                      })
+                    }
+                    className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm"
+                    step="1"
+                    min="0"
+                    max="90"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-400 mb-1">
+                    Band Width (°)
+                  </label>
+                  <input
+                    type="number"
+                    value={config.band_width_deg}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        band_width_deg: parseFloat(e.target.value),
+                      })
+                    }
+                    className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm"
+                    step="0.5"
+                    min="0.5"
+                    max="45"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Action Button */}
         <div
@@ -1411,7 +1471,7 @@ export default function MissionPlanning({
               disabled={isPlanning}
               className="w-full px-3 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-medium"
             >
-              {isPlanning ? "Planning..." : "▶ Run Mission Planning"}
+              {isPlanning ? "Optimizing..." : "▶ Repair Schedule"}
             </button>
           ) : (
             <button
@@ -1436,9 +1496,9 @@ export default function MissionPlanning({
                 onClick={handleAcceptPlan}
                 disabled={!results[activeTab]}
                 className="px-2 py-1 bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-xs font-medium"
-                title="Accept plan and create order"
+                title="Commit plan to schedule"
               >
-                Accept Plan → Orders
+                Commit to Schedule
               </button>
             </div>
 
@@ -1624,228 +1684,380 @@ export default function MissionPlanning({
 
                 {/* Schedule Table */}
                 <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <h4 className="font-semibold">
-                      Schedule ({results[activeTab].schedule.length}{" "}
-                      opportunities)
-                    </h4>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => exportToCsv(activeTab)}
-                        className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm"
-                      >
-                        Export CSV
-                      </button>
-                      <button
-                        onClick={() => exportToJson(activeTab)}
-                        className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm"
-                      >
-                        Export JSON
-                      </button>
-                    </div>
-                  </div>
+                  {(() => {
+                    const rawSchedule = results[activeTab].schedule;
 
-                  <div className="overflow-x-auto bg-gray-700 rounded">
-                    <table className="w-full text-xs">
-                      <thead className="border-b border-gray-600">
-                        <tr>
-                          <th className="text-left py-1 px-2">#</th>
-                          <th className="text-left py-1 px-2">Satellite</th>
-                          <th className="text-left py-1 px-2">Target</th>
-                          {/* SAR columns - show if any scheduled item has SAR data */}
-                          {results[activeTab].schedule.some(
-                            (s) => s.look_side,
-                          ) && (
-                            <>
-                              <th
-                                className="text-center py-1 px-2"
-                                title="Look Side"
+                    // Apply context filters
+                    const schedule = rawSchedule.filter((item) => {
+                      if (
+                        contextFilter.targetId &&
+                        item.target_id !== contextFilter.targetId
+                      ) {
+                        return false;
+                      }
+                      if (
+                        contextFilter.satelliteId &&
+                        item.satellite_id !== contextFilter.satelliteId
+                      ) {
+                        return false;
+                      }
+                      if (
+                        contextFilter.lookSide &&
+                        item.look_side !== contextFilter.lookSide
+                      ) {
+                        return false;
+                      }
+                      if (
+                        contextFilter.passDirection &&
+                        item.pass_direction !== contextFilter.passDirection
+                      ) {
+                        return false;
+                      }
+                      return true;
+                    });
+
+                    const totalRows = schedule.length;
+                    const totalPages = Math.ceil(totalRows / pageSize);
+                    const startIndex = (currentPage - 1) * pageSize;
+                    const endIndex = Math.min(startIndex + pageSize, totalRows);
+                    const paginatedSchedule = schedule.slice(
+                      startIndex,
+                      endIndex,
+                    );
+                    const showPagination = totalRows > 50;
+                    const isFiltered = rawSchedule.length !== schedule.length;
+
+                    return (
+                      <>
+                        {/* Context Filter Bar */}
+                        <ContextFilterBar
+                          view="planning"
+                          showSarFilters={isSARMission}
+                        />
+
+                        <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                          <h4 className="font-semibold">
+                            Schedule ({totalRows} opportunities
+                            {isFiltered ? ` of ${rawSchedule.length}` : ""})
+                            {showPagination && (
+                              <span className="text-gray-400 font-normal ml-2 text-xs">
+                                showing {startIndex + 1}-{endIndex}
+                              </span>
+                            )}
+                          </h4>
+                          <div className="flex gap-2 items-center">
+                            {showPagination && (
+                              <select
+                                value={pageSize}
+                                onChange={(e) => {
+                                  setPageSize(Number(e.target.value));
+                                  setCurrentPage(1);
+                                }}
+                                className="px-2 py-1 bg-gray-700 border border-gray-600 rounded text-xs"
+                                title="Rows per page"
                               >
-                                L/R
-                              </th>
-                              <th
-                                className="text-center py-1 px-2"
-                                title="Pass Direction"
-                              >
-                                Dir
-                              </th>
-                            </>
-                          )}
-                          <th className="text-left py-1 px-2">Time (UTC)</th>
-                          <th
-                            className="text-right py-1 px-2"
-                            title="Off-nadir angle"
-                          >
-                            Off-Nadir
-                          </th>
-                          <th
-                            className="text-right py-1 px-2"
-                            title="Delta roll"
-                          >
-                            Δroll
-                          </th>
-                          <th
-                            className="text-right py-1 px-2"
-                            title="Delta pitch"
-                          >
-                            Δpitch
-                          </th>
-                          <th
-                            className="text-right py-1 px-2"
-                            title="Roll angle"
-                          >
-                            Roll
-                          </th>
-                          <th
-                            className="text-right py-1 px-2"
-                            title="Pitch angle"
-                          >
-                            Pitch
-                          </th>
-                          <th className="text-right py-1 px-2">Slew</th>
-                          <th className="text-right py-1 px-2">Slack</th>
-                          <th className="text-right py-1 px-2">Val</th>
-                          <th className="text-right py-1 px-2">Dens</th>
-                        </tr>
-                      </thead>
-                      <tbody className="text-gray-300">
-                        {results[activeTab].schedule.map((sched, idx) => {
-                          // Recalculate delta based on displayed rows (not actual scheduled sequence)
-                          // This makes deltas intuitive when viewing filtered schedules
-                          let displayDeltaRoll = sched.delta_roll;
-                          let displayDeltaPitch = sched.delta_pitch;
-
-                          if (idx > 0) {
-                            const prevSched =
-                              results[activeTab].schedule[idx - 1];
-                            if (
-                              sched.roll_angle !== undefined &&
-                              prevSched.roll_angle !== undefined
-                            ) {
-                              displayDeltaRoll = Math.abs(
-                                sched.roll_angle - prevSched.roll_angle,
-                              );
-                            }
-                            if (
-                              sched.pitch_angle !== undefined &&
-                              prevSched.pitch_angle !== undefined
-                            ) {
-                              displayDeltaPitch = Math.abs(
-                                sched.pitch_angle - prevSched.pitch_angle,
-                              );
-                            }
-                          }
-
-                          // Calculate true off-nadir angle: sqrt(roll² + pitch²)
-                          const roll = Math.abs(sched.roll_angle ?? 0);
-                          const pitch = Math.abs(sched.pitch_angle ?? 0);
-                          const offNadirAngle = Math.sqrt(
-                            roll * roll + pitch * pitch,
-                          );
-
-                          return (
-                            <tr
-                              key={idx}
-                              className="border-b border-gray-600 hover:bg-gray-600 cursor-pointer"
-                              onClick={() =>
-                                handleScheduleRowClick(
-                                  sched.start_time,
-                                  activeTab,
-                                )
-                              }
-                              onMouseEnter={() =>
-                                setHoveredOpportunity(sched.opportunity_id)
-                              }
-                              onMouseLeave={() => setHoveredOpportunity(null)}
-                              title="Click to navigate to this pass"
+                                {PAGE_SIZE_OPTIONS.map((size) => (
+                                  <option key={size} value={size}>
+                                    {size} rows
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                            <button
+                              onClick={() => exportToCsv(activeTab)}
+                              className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm"
                             >
-                              <td className="py-1 px-2">{idx + 1}</td>
-                              <td className="py-1 px-2">
-                                {sched.satellite_id}
-                              </td>
-                              <td className="py-1 px-2">{sched.target_id}</td>
-                              {/* SAR data cells */}
-                              {results[activeTab].schedule.some(
-                                (s) => s.look_side,
-                              ) && (
-                                <>
-                                  <td className="text-center py-1 px-2">
-                                    {sched.look_side ? (
-                                      <span
-                                        className={`px-1 py-0.5 rounded text-[9px] font-bold ${
-                                          sched.look_side === "LEFT"
-                                            ? "bg-red-900/50 text-red-300"
-                                            : "bg-blue-900/50 text-blue-300"
-                                        }`}
-                                      >
-                                        {sched.look_side === "LEFT" ? "L" : "R"}
-                                      </span>
-                                    ) : (
-                                      "-"
+                              Export CSV
+                            </button>
+                            <button
+                              onClick={() => exportToJson(activeTab)}
+                              className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm"
+                            >
+                              Export JSON
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="overflow-x-auto bg-gray-700 rounded">
+                          <table className="w-full text-xs">
+                            <thead className="border-b border-gray-600">
+                              <tr>
+                                <th className="text-left py-1 px-2">#</th>
+                                <th className="text-left py-1 px-2">
+                                  Satellite
+                                </th>
+                                <th className="text-left py-1 px-2">Target</th>
+                                {/* SAR columns - show if any scheduled item has SAR data */}
+                                {schedule.some((s) => s.look_side) && (
+                                  <>
+                                    <th
+                                      className="text-center py-1 px-2"
+                                      title="Look Side"
+                                    >
+                                      L/R
+                                    </th>
+                                    <th
+                                      className="text-center py-1 px-2"
+                                      title="Pass Direction"
+                                    >
+                                      Dir
+                                    </th>
+                                  </>
+                                )}
+                                <th className="text-left py-1 px-2">
+                                  Time (UTC)
+                                </th>
+                                <th
+                                  className="text-right py-1 px-2"
+                                  title="Off-nadir angle"
+                                >
+                                  Off-Nadir
+                                </th>
+                                <th
+                                  className="text-right py-1 px-2"
+                                  title="Delta roll"
+                                >
+                                  Δroll
+                                </th>
+                                <th
+                                  className="text-right py-1 px-2"
+                                  title="Delta pitch"
+                                >
+                                  Δpitch
+                                </th>
+                                <th
+                                  className="text-right py-1 px-2"
+                                  title="Roll angle"
+                                >
+                                  Roll
+                                </th>
+                                <th
+                                  className="text-right py-1 px-2"
+                                  title="Pitch angle"
+                                >
+                                  Pitch
+                                </th>
+                                <th className="text-right py-1 px-2">Slew</th>
+                                <th className="text-right py-1 px-2">Slack</th>
+                                <th className="text-right py-1 px-2">Val</th>
+                                <th className="text-right py-1 px-2">Dens</th>
+                              </tr>
+                            </thead>
+                            <tbody className="text-gray-300">
+                              {paginatedSchedule.map((sched, pageIdx) => {
+                                const idx = startIndex + pageIdx;
+                                // Recalculate delta based on displayed rows (not actual scheduled sequence)
+                                // This makes deltas intuitive when viewing filtered schedules
+                                let displayDeltaRoll = sched.delta_roll;
+                                let displayDeltaPitch = sched.delta_pitch;
+
+                                if (idx > 0) {
+                                  const prevSched =
+                                    results[activeTab].schedule[idx - 1];
+                                  if (
+                                    sched.roll_angle !== undefined &&
+                                    prevSched.roll_angle !== undefined
+                                  ) {
+                                    displayDeltaRoll = Math.abs(
+                                      sched.roll_angle - prevSched.roll_angle,
+                                    );
+                                  }
+                                  if (
+                                    sched.pitch_angle !== undefined &&
+                                    prevSched.pitch_angle !== undefined
+                                  ) {
+                                    displayDeltaPitch = Math.abs(
+                                      sched.pitch_angle - prevSched.pitch_angle,
+                                    );
+                                  }
+                                }
+
+                                // Calculate true off-nadir angle: sqrt(roll² + pitch²)
+                                const roll = Math.abs(sched.roll_angle ?? 0);
+                                const pitch = Math.abs(sched.pitch_angle ?? 0);
+                                const offNadirAngle = Math.sqrt(
+                                  roll * roll + pitch * pitch,
+                                );
+
+                                // Check if this row is selected
+                                const isSelected =
+                                  selectedOpportunityId ===
+                                  sched.opportunity_id;
+
+                                return (
+                                  <tr
+                                    key={sched.opportunity_id || idx}
+                                    className={`border-b border-gray-600 cursor-pointer transition-colors ${
+                                      isSelected
+                                        ? "bg-blue-900/50 hover:bg-blue-800/50"
+                                        : "hover:bg-gray-600"
+                                    }`}
+                                    onClick={() => {
+                                      // Navigate to the time
+                                      handleScheduleRowClick(
+                                        sched.start_time,
+                                        activeTab,
+                                      );
+                                      // Also select the opportunity in the unified store
+                                      selectOpportunity(
+                                        sched.opportunity_id,
+                                        "table",
+                                      );
+                                    }}
+                                    onMouseEnter={() =>
+                                      setHoveredOpportunity(
+                                        sched.opportunity_id,
+                                      )
+                                    }
+                                    onMouseLeave={() =>
+                                      setHoveredOpportunity(null)
+                                    }
+                                    title="Click to navigate to this pass"
+                                  >
+                                    <td className="py-1 px-2">{idx + 1}</td>
+                                    <td className="py-1 px-2">
+                                      {sched.satellite_id}
+                                    </td>
+                                    <td className="py-1 px-2">
+                                      {sched.target_id}
+                                    </td>
+                                    {/* SAR data cells */}
+                                    {results[activeTab].schedule.some(
+                                      (s) => s.look_side,
+                                    ) && (
+                                      <>
+                                        <td className="text-center py-1 px-2">
+                                          {sched.look_side ? (
+                                            <span
+                                              className={`px-1 py-0.5 rounded text-[9px] font-bold ${
+                                                sched.look_side === "LEFT"
+                                                  ? "bg-red-900/50 text-red-300"
+                                                  : "bg-blue-900/50 text-blue-300"
+                                              }`}
+                                            >
+                                              {sched.look_side === "LEFT"
+                                                ? "L"
+                                                : "R"}
+                                            </span>
+                                          ) : (
+                                            "-"
+                                          )}
+                                        </td>
+                                        <td className="text-center py-1 px-2">
+                                          {sched.pass_direction ? (
+                                            <span className="text-gray-300">
+                                              {sched.pass_direction ===
+                                              "ASCENDING"
+                                                ? "↑"
+                                                : "↓"}
+                                            </span>
+                                          ) : (
+                                            "-"
+                                          )}
+                                        </td>
+                                      </>
                                     )}
-                                  </td>
-                                  <td className="text-center py-1 px-2">
-                                    {sched.pass_direction ? (
-                                      <span className="text-gray-300">
-                                        {sched.pass_direction === "ASCENDING"
-                                          ? "↑"
-                                          : "↓"}
-                                      </span>
-                                    ) : (
-                                      "-"
-                                    )}
-                                  </td>
-                                </>
-                              )}
-                              <td className="py-1 px-2 whitespace-nowrap">
-                                {sched.start_time.substring(5, 10)}{" "}
-                                {sched.start_time.substring(11, 19)}
-                              </td>
-                              <td className="text-right py-1 px-2">
-                                {offNadirAngle.toFixed(1)}°
-                              </td>
-                              <td className="text-right py-1 px-2">
-                                {displayDeltaRoll?.toFixed(1) ?? "-"}
-                              </td>
-                              <td className="text-right py-1 px-2">
-                                {displayDeltaPitch?.toFixed(1) ?? "-"}
-                              </td>
-                              <td className="text-right py-1 px-2">
-                                {sched.roll_angle !== undefined
-                                  ? `${
-                                      sched.roll_angle >= 0 ? "+" : ""
-                                    }${sched.roll_angle.toFixed(1)}`
-                                  : "-"}
-                              </td>
-                              <td className="text-right py-1 px-2">
-                                {sched.pitch_angle !== undefined
-                                  ? `${
-                                      sched.pitch_angle >= 0 ? "+" : ""
-                                    }${sched.pitch_angle.toFixed(1)}`
-                                  : "-"}
-                              </td>
-                              <td className="text-right py-1 px-2">
-                                {sched.maneuver_time?.toFixed(2) ?? "-"}
-                              </td>
-                              <td className="text-right py-1 px-2">
-                                {sched.slack_time?.toFixed(1) ?? "-"}
-                              </td>
-                              <td className="text-right py-1 px-2">
-                                {sched.value?.toFixed(2) ?? "-"}
-                              </td>
-                              <td className="text-right py-1 px-2">
-                                {sched.density === "inf"
-                                  ? "∞"
-                                  : typeof sched.density === "number"
-                                    ? sched.density.toFixed(2)
-                                    : "-"}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
+                                    <td className="py-1 px-2 whitespace-nowrap">
+                                      {sched.start_time.substring(5, 10)}{" "}
+                                      {sched.start_time.substring(11, 19)}
+                                    </td>
+                                    <td className="text-right py-1 px-2">
+                                      {offNadirAngle.toFixed(1)}°
+                                    </td>
+                                    <td className="text-right py-1 px-2">
+                                      {displayDeltaRoll?.toFixed(1) ?? "-"}
+                                    </td>
+                                    <td className="text-right py-1 px-2">
+                                      {displayDeltaPitch?.toFixed(1) ?? "-"}
+                                    </td>
+                                    <td className="text-right py-1 px-2">
+                                      {sched.roll_angle !== undefined
+                                        ? `${
+                                            sched.roll_angle >= 0 ? "+" : ""
+                                          }${sched.roll_angle.toFixed(1)}`
+                                        : "-"}
+                                    </td>
+                                    <td className="text-right py-1 px-2">
+                                      {sched.pitch_angle !== undefined
+                                        ? `${
+                                            sched.pitch_angle >= 0 ? "+" : ""
+                                          }${sched.pitch_angle.toFixed(1)}`
+                                        : "-"}
+                                    </td>
+                                    <td className="text-right py-1 px-2">
+                                      {sched.maneuver_time?.toFixed(2) ?? "-"}
+                                    </td>
+                                    <td className="text-right py-1 px-2">
+                                      {sched.slack_time?.toFixed(1) ?? "-"}
+                                    </td>
+                                    <td className="text-right py-1 px-2">
+                                      {sched.value?.toFixed(2) ?? "-"}
+                                    </td>
+                                    <td className="text-right py-1 px-2">
+                                      {sched.density === "inf"
+                                        ? "∞"
+                                        : typeof sched.density === "number"
+                                          ? sched.density.toFixed(2)
+                                          : "-"}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        {/* Pagination Controls */}
+                        {showPagination && (
+                          <div className="flex items-center justify-between mt-2 text-xs">
+                            <div className="text-gray-400">
+                              Page {currentPage} of {totalPages}
+                            </div>
+                            <div className="flex gap-1">
+                              <button
+                                onClick={() => setCurrentPage(1)}
+                                disabled={currentPage === 1}
+                                className="px-2 py-1 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 rounded"
+                                title="First page"
+                              >
+                                ⟪
+                              </button>
+                              <button
+                                onClick={() =>
+                                  setCurrentPage((p) => Math.max(1, p - 1))
+                                }
+                                disabled={currentPage === 1}
+                                className="px-2 py-1 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 rounded"
+                                title="Previous page"
+                              >
+                                ←
+                              </button>
+                              <button
+                                onClick={() =>
+                                  setCurrentPage((p) =>
+                                    Math.min(totalPages, p + 1),
+                                  )
+                                }
+                                disabled={currentPage === totalPages}
+                                className="px-2 py-1 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 rounded"
+                                title="Next page"
+                              >
+                                →
+                              </button>
+                              <button
+                                onClick={() => setCurrentPage(totalPages)}
+                                disabled={currentPage === totalPages}
+                                className="px-2 py-1 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 rounded"
+                                title="Last page"
+                              >
+                                ⟫
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
             )}

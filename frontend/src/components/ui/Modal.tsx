@@ -1,29 +1,29 @@
-import React, { useEffect, useCallback } from 'react'
-import { cn } from './utils'
-import { X } from 'lucide-react'
-import { Button } from './Button'
+import React, { useEffect, useCallback } from "react";
+import { cn } from "./utils";
+import { X } from "lucide-react";
+import { Button } from "./Button";
 
 export interface ModalProps {
-  isOpen: boolean
-  onClose: () => void
-  title?: string
-  description?: string
-  children: React.ReactNode
-  size?: 'sm' | 'md' | 'lg' | 'xl' | 'full'
-  showCloseButton?: boolean
-  closeOnOverlayClick?: boolean
-  closeOnEscape?: boolean
-  footer?: React.ReactNode
-  className?: string
+  isOpen: boolean;
+  onClose: () => void;
+  title?: string;
+  description?: string;
+  children: React.ReactNode;
+  size?: "sm" | "md" | "lg" | "xl" | "full";
+  showCloseButton?: boolean;
+  closeOnOverlayClick?: boolean;
+  closeOnEscape?: boolean;
+  footer?: React.ReactNode;
+  className?: string;
 }
 
 const sizeStyles = {
-  sm: 'max-w-sm',
-  md: 'max-w-md',
-  lg: 'max-w-lg',
-  xl: 'max-w-xl',
-  full: 'max-w-4xl',
-}
+  sm: "max-w-sm",
+  md: "max-w-md",
+  lg: "max-w-lg",
+  xl: "max-w-xl",
+  full: "max-w-4xl",
+};
 
 export const Modal: React.FC<ModalProps> = ({
   isOpen,
@@ -31,7 +31,7 @@ export const Modal: React.FC<ModalProps> = ({
   title,
   description,
   children,
-  size = 'md',
+  size = "md",
   showCloseButton = true,
   closeOnOverlayClick = true,
   closeOnEscape = true,
@@ -40,32 +40,32 @@ export const Modal: React.FC<ModalProps> = ({
 }) => {
   const handleEscape = useCallback(
     (e: KeyboardEvent) => {
-      if (closeOnEscape && e.key === 'Escape') {
-        onClose()
+      if (closeOnEscape && e.key === "Escape") {
+        onClose();
       }
     },
-    [closeOnEscape, onClose]
-  )
+    [closeOnEscape, onClose],
+  );
 
   useEffect(() => {
     if (isOpen) {
-      document.addEventListener('keydown', handleEscape)
-      document.body.style.overflow = 'hidden'
+      document.addEventListener("keydown", handleEscape);
+      document.body.style.overflow = "hidden";
     }
 
     return () => {
-      document.removeEventListener('keydown', handleEscape)
-      document.body.style.overflow = 'unset'
-    }
-  }, [isOpen, handleEscape])
+      document.removeEventListener("keydown", handleEscape);
+      document.body.style.overflow = "unset";
+    };
+  }, [isOpen, handleEscape]);
 
-  if (!isOpen) return null
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       {/* Overlay */}
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/80 backdrop-blur-sm"
         onClick={closeOnOverlayClick ? onClose : undefined}
         aria-hidden="true"
       />
@@ -73,15 +73,15 @@ export const Modal: React.FC<ModalProps> = ({
       {/* Modal */}
       <div
         className={cn(
-          'relative w-full mx-4 bg-gray-900 rounded-lg shadow-xl border border-gray-700',
-          'animate-in fade-in-0 zoom-in-95 duration-200',
+          "relative w-full mx-4 bg-gray-900 rounded-lg shadow-xl border border-gray-700",
+          "animate-in fade-in-0 zoom-in-95 duration-200",
           sizeStyles[size],
-          className
+          className,
         )}
         role="dialog"
         aria-modal="true"
-        aria-labelledby={title ? 'modal-title' : undefined}
-        aria-describedby={description ? 'modal-description' : undefined}
+        aria-labelledby={title ? "modal-title" : undefined}
+        aria-describedby={description ? "modal-description" : undefined}
       >
         {/* Header */}
         {(title || showCloseButton) && (
@@ -129,7 +129,7 @@ export const Modal: React.FC<ModalProps> = ({
         )}
       </div>
     </div>
-  )
-}
+  );
+};
 
-Modal.displayName = 'Modal'
+Modal.displayName = "Modal";

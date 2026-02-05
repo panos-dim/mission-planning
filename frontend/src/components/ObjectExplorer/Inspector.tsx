@@ -32,11 +32,24 @@ import {
   Info,
   Hash,
   Layers,
+  AlertTriangle,
+  AlertCircle,
+  ArrowLeft,
+  ArrowRight,
+  ChevronRight,
 } from "lucide-react";
 import { useExplorerStore } from "../../store/explorerStore";
 import { usePlanningStore } from "../../store/planningStore";
 import { useOrdersStore } from "../../store/ordersStore";
+import { useSelectionStore } from "../../store/selectionStore";
+import { useConflictStore } from "../../store/conflictStore";
+import { useConflictHighlightStore } from "../../store/conflictHighlightStore";
+import {
+  useRepairHighlightStore,
+  getRepairDiffBadgeInfo,
+} from "../../store/repairHighlightStore";
 import { useMission } from "../../context/MissionContext";
+import { useGroundStations } from "../../hooks/queries";
 import type { TreeNodeType } from "../../types/explorer";
 
 // =============================================================================
@@ -69,6 +82,10 @@ const ICON_MAP: Record<string, React.ElementType> = {
   Info,
   Hash,
   Layers,
+  AlertTriangle,
+  AlertCircle,
+  ArrowLeft,
+  ChevronRight,
 };
 
 // =============================================================================
@@ -1153,6 +1170,246 @@ const OrderInspector: React.FC<{
 };
 
 // =============================================================================
+// Repair Change Badge Component (PR-REPAIR-UX-01)
+// =============================================================================
+
+interface RepairChangeBadgeProps {
+  type: "kept" | "dropped" | "added" | "moved";
+  movedInfo?: {
+    from_start: string;
+    to_start: string;
+    from_roll_deg?: number;
+    to_roll_deg?: number;
+  };
+}
+
+const RepairChangeBadge: React.FC<RepairChangeBadgeProps> = ({
+  type,
+  movedInfo,
+}) => {
+  const badgeInfo = getRepairDiffBadgeInfo(type);
+
+  return (
+    <div
+      className={`px-3 py-2 rounded-lg border ${badgeInfo.bgColor} border-opacity-50`}
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className={`text-xs font-medium uppercase px-2 py-0.5 rounded ${badgeInfo.bgColor} ${badgeInfo.color}`}
+        >
+          Repair: {badgeInfo.label}
+        </span>
+      </div>
+      {type === "moved" && movedInfo && (
+        <div className="mt-2 text-xs text-gray-400">
+          <div className="flex items-center gap-2">
+            <span className="text-gray-500">Time shift:</span>
+            <span>{formatDateTime(movedInfo.from_start)}</span>
+            <ArrowRight className="w-3 h-3" />
+            <span className={badgeInfo.color}>
+              {formatDateTime(movedInfo.to_start)}
+            </span>
+          </div>
+          {movedInfo.from_roll_deg !== undefined &&
+            movedInfo.to_roll_deg !== undefined && (
+              <div className="flex items-center gap-2 mt-1">
+                <span className="text-gray-500">Roll:</span>
+                <span>{movedInfo.from_roll_deg.toFixed(1)}°</span>
+                <ArrowRight className="w-3 h-3" />
+                <span className={badgeInfo.color}>
+                  {movedInfo.to_roll_deg.toFixed(1)}°
+                </span>
+              </div>
+            )}
+        </div>
+      )}
+      <div className="mt-1 text-[10px] text-gray-500 italic">
+        Preview only — not committed
+      </div>
+    </div>
+  );
+};
+
+// =============================================================================
+// Conflict Inspector Component
+// =============================================================================
+
+interface ConflictInspectorProps {
+  conflictId: string;
+  conflictData?: {
+    type?: string;
+    severity?: string;
+    description?: string;
+    acquisition_ids?: string[];
+    detected_at?: string;
+    satellite_id?: string;
+  };
+  onAcquisitionClick?: (acquisitionId: string) => void;
+  onBackToSchedule?: () => void;
+  onFocusMap?: () => void;
+  onFocusTimeline?: () => void;
+}
+
+const ConflictInspector: React.FC<ConflictInspectorProps> = ({
+  conflictId,
+  conflictData,
+  onAcquisitionClick,
+  onBackToSchedule,
+  onFocusMap,
+  onFocusTimeline,
+}) => {
+  const getSeverityColor = (severity?: string) => {
+    switch (severity) {
+      case "error":
+        return "text-red-400";
+      case "warning":
+        return "text-yellow-400";
+      default:
+        return "text-blue-400";
+    }
+  };
+
+  const getSeverityBgColor = (severity?: string) => {
+    switch (severity) {
+      case "error":
+        return "bg-red-900/30";
+      case "warning":
+        return "bg-yellow-900/30";
+      default:
+        return "bg-blue-900/30";
+    }
+  };
+
+  const getTypeLabel = (type?: string) => {
+    switch (type) {
+      case "temporal_overlap":
+        return "Time Overlap";
+      case "slew_infeasible":
+        return "Slew Infeasible";
+      default:
+        return type || "Unknown";
+    }
+  };
+
+  const SeverityIcon =
+    conflictData?.severity === "error" ? AlertCircle : AlertTriangle;
+
+  return (
+    <>
+      {/* Back to Schedule link */}
+      {onBackToSchedule && (
+        <div className="px-4 py-2 border-b border-gray-700">
+          <button
+            onClick={onBackToSchedule}
+            className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+          >
+            <ArrowLeft className="w-3 h-3" />
+            Back to schedule
+          </button>
+        </div>
+      )}
+
+      {/* Conflict Summary */}
+      <InspectorSection title="Conflict Details" icon="AlertTriangle">
+        <div className="flex items-center gap-2 mb-2">
+          <SeverityIcon
+            className={`w-4 h-4 ${getSeverityColor(conflictData?.severity)}`}
+          />
+          <span
+            className={`text-xs font-medium uppercase ${getSeverityColor(conflictData?.severity)}`}
+          >
+            {conflictData?.severity || "info"}
+          </span>
+          <span
+            className={`text-xs px-2 py-0.5 rounded ${getSeverityBgColor(conflictData?.severity)}`}
+          >
+            {getTypeLabel(conflictData?.type)}
+          </span>
+        </div>
+        <Field label="Conflict ID" value={conflictId} copyable />
+        {conflictData?.satellite_id && (
+          <Field label="Satellite" value={conflictData.satellite_id} />
+        )}
+        {conflictData?.detected_at && (
+          <Field
+            label="Detected"
+            value={formatDateTime(conflictData.detected_at)}
+          />
+        )}
+      </InspectorSection>
+
+      {/* Description */}
+      {conflictData?.description && (
+        <InspectorSection title="Description" icon="Info">
+          <p className="text-xs text-gray-300 leading-relaxed">
+            {conflictData.description}
+          </p>
+        </InspectorSection>
+      )}
+
+      {/* Involved Acquisitions */}
+      <InspectorSection
+        title={`Involved Acquisitions (${conflictData?.acquisition_ids?.length || 0})`}
+        icon="Calendar"
+      >
+        {conflictData?.acquisition_ids &&
+        conflictData.acquisition_ids.length > 0 ? (
+          <div className="space-y-1">
+            {conflictData.acquisition_ids.map((acqId, index) => (
+              <button
+                key={acqId}
+                onClick={() => onAcquisitionClick?.(acqId)}
+                className="w-full flex items-center gap-2 px-2 py-1.5 text-left rounded
+                         bg-gray-800/50 hover:bg-gray-700/50 transition-colors group"
+              >
+                <span className="text-xs text-gray-500 w-4">{index + 1}.</span>
+                <span className="flex-1 text-xs text-gray-300 font-mono truncate">
+                  {acqId.length > 20 ? `${acqId.slice(0, 20)}...` : acqId}
+                </span>
+                <ChevronRight className="w-3 h-3 text-gray-500 group-hover:text-blue-400 transition-colors" />
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-gray-500">No acquisitions linked</p>
+        )}
+      </InspectorSection>
+
+      {/* Quick Actions (PR-CONFLICT-UX-02) */}
+      {(onFocusMap || onFocusTimeline) && (
+        <div className="px-4 py-3 border-t border-gray-700">
+          <div className="text-xs text-gray-500 mb-2">Quick Actions</div>
+          <div className="flex gap-2">
+            {onFocusMap && (
+              <ActionButton
+                label="Focus on Map"
+                icon="MapPin"
+                onClick={onFocusMap}
+                variant="secondary"
+              />
+            )}
+            {onFocusTimeline && (
+              <ActionButton
+                label="Focus Timeline"
+                icon="Clock"
+                onClick={onFocusTimeline}
+                variant="secondary"
+              />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Action hint */}
+      <div className="px-4 py-3 text-xs text-gray-500 italic">
+        Click an acquisition above to view its details and navigate on the
+        timeline.
+      </div>
+    </>
+  );
+};
+
+// =============================================================================
 // Main Inspector Component
 // =============================================================================
 
@@ -1169,19 +1426,167 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
   const orders = useOrdersStore((s) => s.orders);
   const { removeOrder } = useOrdersStore();
 
-  // Find selected node metadata from tree
+  // Ground stations count for Inspector metadata
+  const { data: groundStationsData } = useGroundStations();
+  const groundStationsCount = groundStationsData?.ground_stations?.length ?? 0;
+
+  // Unified selection store for map/table selections
+  const {
+    selectedType: unifiedSelectedType,
+    selectedTargetId,
+    selectedOpportunityId,
+    selectedAcquisitionId,
+    selectedConflictId,
+    clearSelection,
+    selectAcquisition,
+  } = useSelectionStore();
+
+  // Conflict store for conflict details
+  const conflicts = useConflictStore((s) => s.conflicts);
+
+  // Get selected conflict data
+  const selectedConflictData = useMemo(() => {
+    if (!selectedConflictId) return undefined;
+    return conflicts.find((c) => c.id === selectedConflictId);
+  }, [selectedConflictId, conflicts]);
+
+  // Handle acquisition click from conflict inspector
+  const handleConflictAcquisitionClick = (acquisitionId: string) => {
+    console.log(
+      "[Inspector] Navigate to acquisition from conflict:",
+      acquisitionId,
+    );
+    selectAcquisition(acquisitionId, "inspector");
+  };
+
+  // Handle back to schedule (clear conflict selection)
+  const handleBackToSchedule = () => {
+    clearSelection();
+  };
+
+  // Conflict highlight store for focus actions (PR-CONFLICT-UX-02)
+  const { focusTimelineOnConflict } = useConflictHighlightStore();
+
+  // Repair highlight store for repair diff item display (PR-REPAIR-UX-01)
+  const selectedRepairItem = useRepairHighlightStore((s) => s.selectedDiffItem);
+  const clearRepairSelection = useRepairHighlightStore((s) => s.clearSelection);
+  const focusTimelineOnRepairItem = useRepairHighlightStore(
+    (s) => s.focusTimelineOnRepairItem,
+  );
+
+  // Handle focus on map for conflict (PR-CONFLICT-UX-02)
+  const handleConflictFocusMap = () => {
+    if (!selectedConflictData?.acquisition_ids?.length) return;
+
+    console.log(
+      "[Inspector] Focus map on conflict:",
+      selectedConflictId,
+      "acquisitions:",
+      selectedConflictData.acquisition_ids.length,
+    );
+
+    // Fly to the first acquisition's target if available
+    const firstAcqId = selectedConflictData.acquisition_ids[0];
+    if (firstAcqId) {
+      // Try to fly to target associated with the acquisition
+      flyToObject(`target_${firstAcqId}`);
+    }
+  };
+
+  // Handle focus timeline on conflict (PR-CONFLICT-UX-02)
+  const handleConflictFocusTimeline = () => {
+    if (!selectedConflictData) return;
+
+    console.log("[Inspector] Focus timeline on conflict:", selectedConflictId);
+
+    // Trigger timeline focus via the conflict highlight store
+    focusTimelineOnConflict();
+  };
+
+  // Find selected node metadata from tree or unified selection
   const metadata = useMemo(() => {
+    // First check unified selection store (from map/table clicks)
+    if (unifiedSelectedType === "target" && selectedTargetId) {
+      const target = state.missionData?.targets?.find(
+        (t) => t.name === selectedTargetId,
+      );
+      if (target) {
+        return {
+          name: target.name || selectedTargetId,
+          latitude: target.latitude,
+          longitude: target.longitude,
+          priority: target.priority,
+          type: "target",
+        };
+      }
+    }
+
+    if (unifiedSelectedType === "opportunity" && selectedOpportunityId) {
+      // Find opportunity in planning results
+      for (const algo of Object.keys(planningResults || {})) {
+        const result = planningResults?.[algo];
+        const opp = result?.schedule?.find(
+          (s) => s.opportunity_id === selectedOpportunityId,
+        );
+        if (opp) {
+          return {
+            name: `${opp.target_id} - ${opp.satellite_id}`,
+            ...opp,
+            type: "opportunity",
+          };
+        }
+      }
+    }
+
+    if (unifiedSelectedType === "acquisition" && selectedAcquisitionId) {
+      // Find acquisition in orders
+      for (const order of orders || []) {
+        const acq = order.schedule?.find(
+          (s) => s.opportunity_id === selectedAcquisitionId,
+        );
+        if (acq) {
+          return {
+            name: `${acq.target_id} - ${acq.satellite_id}`,
+            ...acq,
+            order_id: order.order_id,
+            type: "acquisition",
+          };
+        }
+      }
+    }
+
+    if (unifiedSelectedType === "conflict" && selectedConflictId) {
+      return {
+        name: `Conflict ${selectedConflictId}`,
+        conflict_id: selectedConflictId,
+        type: "conflict",
+      };
+    }
+
+    // Fall back to tree selection
     if (!selectedNodeId) return undefined;
 
-    // Extract metadata based on node type and ID
     return findNodeMetadata(
       selectedNodeId,
       selectedNodeType,
       state,
       planningResults,
-      orders
+      orders,
+      groundStationsCount,
     );
-  }, [selectedNodeId, selectedNodeType, state, planningResults, orders]);
+  }, [
+    selectedNodeId,
+    selectedNodeType,
+    state,
+    planningResults,
+    orders,
+    groundStationsCount,
+    unifiedSelectedType,
+    selectedTargetId,
+    selectedOpportunityId,
+    selectedAcquisitionId,
+    selectedConflictId,
+  ]);
 
   // Handle action from inspector buttons
   const handleAction = (action: string) => {
@@ -1227,7 +1632,7 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
           setFilterByTarget(targetName);
           console.log(
             "[Inspector] Filter opportunities by target:",
-            targetName
+            targetName,
           );
         }
         break;
@@ -1265,7 +1670,7 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
           if (order) {
             downloadJson(
               order,
-              `order_${order.name.replace(/\s+/g, "_")}_${Date.now()}.json`
+              `order_${order.name.replace(/\s+/g, "_")}_${Date.now()}.json`,
             );
             console.log("[Inspector] Export order:", orderId);
           }
@@ -1303,13 +1708,150 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
     }
   };
 
-  if (!selectedNodeId || !selectedNodeType) {
+  // Check if we have any selection (tree or unified)
+  const hasTreeSelection = selectedNodeId && selectedNodeType;
+  const hasUnifiedSelection = unifiedSelectedType !== null;
+
+  if (!hasTreeSelection && !hasUnifiedSelection) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-gray-500 p-4">
         <Info className="w-8 h-8 mb-2 opacity-50" />
         <p className="text-sm text-center">
-          Select an object in the tree to view its properties
+          Select an object to view its properties
         </p>
+      </div>
+    );
+  }
+
+  // For unified selection without tree selection, render simplified content
+  if (!hasTreeSelection && hasUnifiedSelection && metadata) {
+    const typeLabels: Record<string, string> = {
+      target: "Target",
+      opportunity: "Opportunity",
+      acquisition: "Acquisition",
+      conflict: "Conflict",
+    };
+    const TypeIcon = unifiedSelectedType === "target" ? MapPin : Zap;
+
+    return (
+      <div className="flex flex-col h-full bg-gray-900">
+        {/* Header with clear button */}
+        <div className="px-4 py-3 border-b border-gray-700">
+          <div className="flex items-center gap-2">
+            <TypeIcon className="w-5 h-5 text-blue-400" />
+            <div className="flex-1 min-w-0">
+              <h3 className="text-sm font-semibold text-white truncate">
+                {(metadata.name as string) || "Selected Item"}
+              </h3>
+              <p className="text-xs text-gray-500">
+                {typeLabels[unifiedSelectedType || ""] || "Unknown"}
+              </p>
+            </div>
+            <button
+              onClick={clearSelection}
+              className="p-1 rounded hover:bg-gray-700 text-gray-400 hover:text-white transition-colors"
+              title="Clear selection (Esc)"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Content based on unified type */}
+        <div className="flex-1 overflow-y-auto">
+          {unifiedSelectedType === "target" && (
+            <>
+              <InspectorSection title="Location" icon="MapPin">
+                <CoordinateField
+                  label="Position"
+                  latitude={metadata.latitude as number}
+                  longitude={metadata.longitude as number}
+                />
+              </InspectorSection>
+              {metadata.priority !== undefined && (
+                <InspectorSection title="Properties" icon="Settings">
+                  <Field label="Priority" value={metadata.priority as number} />
+                </InspectorSection>
+              )}
+            </>
+          )}
+          {unifiedSelectedType === "opportunity" && (
+            <>
+              {/* Repair Change Badge (PR-REPAIR-UX-01) */}
+              {selectedRepairItem && (
+                <div className="px-4 py-2">
+                  <RepairChangeBadge
+                    type={selectedRepairItem.type}
+                    movedInfo={selectedRepairItem.movedInfo}
+                  />
+                </div>
+              )}
+              <InspectorSection title="Overview" icon="Target">
+                <Field label="Target" value={metadata.target_id as string} />
+                <Field
+                  label="Satellite"
+                  value={metadata.satellite_id as string}
+                />
+              </InspectorSection>
+              <InspectorSection title="Timing" icon="Clock">
+                <Field
+                  label="Start"
+                  value={formatDateTime(metadata.start_time as string)}
+                />
+                <Field
+                  label="End"
+                  value={formatDateTime(metadata.end_time as string)}
+                />
+              </InspectorSection>
+              {metadata.roll_angle !== undefined && (
+                <InspectorSection title="Attitude" icon="Gauge">
+                  <Field
+                    label="Roll"
+                    value={(metadata.roll_angle as number)?.toFixed(1)}
+                    unit="°"
+                  />
+                  <Field
+                    label="Pitch"
+                    value={(metadata.pitch_angle as number)?.toFixed(1)}
+                    unit="°"
+                  />
+                </InspectorSection>
+              )}
+              {/* Quick Actions for repair items */}
+              {selectedRepairItem && (
+                <div className="px-4 py-3 border-t border-gray-700">
+                  <div className="text-xs text-gray-500 mb-2">
+                    Quick Actions
+                  </div>
+                  <div className="flex gap-2">
+                    <ActionButton
+                      label="Focus Timeline"
+                      icon="Clock"
+                      onClick={focusTimelineOnRepairItem}
+                      variant="secondary"
+                    />
+                    <ActionButton
+                      label="Clear"
+                      icon="X"
+                      onClick={clearRepairSelection}
+                      variant="secondary"
+                    />
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+          {unifiedSelectedType === "conflict" && selectedConflictId && (
+            <ConflictInspector
+              conflictId={selectedConflictId}
+              conflictData={selectedConflictData}
+              onAcquisitionClick={handleConflictAcquisitionClick}
+              onBackToSchedule={handleBackToSchedule}
+              onFocusMap={handleConflictFocusMap}
+              onFocusTimeline={handleConflictFocusTimeline}
+            />
+          )}
+        </div>
       </div>
     );
   }
@@ -1347,12 +1889,13 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
     return iconMap[type] || Info;
   };
 
-  const NodeIcon = getNodeIcon(selectedNodeType);
+  // At this point we know hasTreeSelection is true, so selectedNodeType is not null
+  const NodeIcon = getNodeIcon(selectedNodeType!);
 
   // Get subtitle for node type - only show when it adds info beyond the name
   const getNodeSubtitle = (
     type: TreeNodeType,
-    _name?: string
+    _name?: string,
   ): string | null => {
     // Container nodes where name IS the type - no subtitle needed
     const containerTypes: TreeNodeType[] = [
@@ -1391,7 +1934,7 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
     return labelMap[type] || null;
   };
 
-  const subtitle = getNodeSubtitle(selectedNodeType, metadata?.name as string);
+  const subtitle = getNodeSubtitle(selectedNodeType!, metadata?.name as string);
 
   return (
     <div className="flex flex-col h-full bg-gray-900">
@@ -1410,7 +1953,7 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto">
-        {renderInspectorContent(selectedNodeType, metadata, handleAction)}
+        {renderInspectorContent(selectedNodeType!, metadata, handleAction)}
       </div>
     </div>
   );
@@ -1507,7 +2050,8 @@ function findNodeMetadata(
     string,
     import("../../types").AlgorithmResult
   > | null,
-  orders?: import("../../types").AcceptedOrder[]
+  orders?: import("../../types").AcceptedOrder[],
+  groundStationsCount: number = 0,
 ): Record<string, unknown> | undefined {
   if (!nodeType) return undefined;
 
@@ -1621,13 +2165,13 @@ function findNodeMetadata(
       const satObj = state.sceneObjects.find(
         (o) =>
           o.type === "satellite" &&
-          (nodeId.includes(o.id) || o.name === satName)
+          (nodeId.includes(o.id) || o.name === satName),
       );
 
       // Find satellite in mission data satellites array for color
       const satellites = missionData?.satellites || [];
       const missionSat = satellites.find(
-        (s) => s.name === satName || s.id === satName
+        (s) => s.name === satName || s.id === satName,
       );
 
       // Get capabilities from mission data
@@ -1651,7 +2195,7 @@ function findNodeMetadata(
       // nodeId format: "target_target_1_Istanbul" or "target_mission_1_Istanbul"
       // We need to extract just "Istanbul"
       const targetNameMatch = nodeId.match(
-        /target_(?:target_|mission_)?(?:\d+_)?(.+)$/
+        /target_(?:target_|mission_)?(?:\d+_)?(.+)$/,
       );
       const targetName = targetNameMatch
         ? targetNameMatch[1]
@@ -1661,12 +2205,12 @@ function findNodeMetadata(
       const targetObj = state.sceneObjects.find(
         (o) =>
           o.type === "target" &&
-          (nodeId.includes(o.id) || o.name === targetName)
+          (nodeId.includes(o.id) || o.name === targetName),
       );
 
       // Find in mission data targets for priority/color
       const missionTarget = missionData?.targets?.find(
-        (t) => t.name === targetName
+        (t) => t.name === targetName,
       );
 
       // Calculate statistics from passes
@@ -1752,7 +2296,7 @@ function findNodeMetadata(
           // Get satellite color
           const satellites = missionData.satellites || [];
           const satIndex = satellites.findIndex(
-            (s) => s.id === pass.satellite_id || s.name === pass.satellite_id
+            (s) => s.id === pass.satellite_id || s.name === pass.satellite_id,
           );
           const satelliteColor =
             satIndex >= 0 ? satellites[satIndex]?.color : undefined;
@@ -1786,7 +2330,7 @@ function findNodeMetadata(
       return {
         name: "Ground Stations",
         description: "Ground-based communication stations",
-        count: 0, // TODO: Get from config when available
+        count: groundStationsCount,
       };
     }
 
@@ -1838,7 +2382,7 @@ function findNodeMetadata(
           status: "Complete",
           algorithm: algorithms
             .map((a) =>
-              a.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase())
+              a.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase()),
             )
             .join(", "),
           accepted: result?.metrics?.opportunities_accepted,
@@ -2013,7 +2557,7 @@ function findNodeMetadata(
 function renderInspectorContent(
   nodeType: TreeNodeType,
   metadata: Record<string, unknown> | undefined,
-  onAction: (action: string) => void
+  onAction: (action: string) => void,
 ): React.ReactNode {
   switch (nodeType) {
     // Top-level containers

@@ -1,0 +1,357 @@
+{
+  "version": "1.0",
+  "generated": "2026-02-05",
+  "description": "Frontend navigation graph for mission planner audit",
+  "nodes": {
+    "app": {
+      "id": "app",
+      "type": "root",
+      "component": "App.tsx",
+      "children": ["left_sidebar", "cesium_viewer", "right_sidebar", "admin_panel_modal"]
+    },
+    "left_sidebar": {
+      "id": "left_sidebar",
+      "type": "sidebar",
+      "component": "LeftSidebar.tsx",
+      "panels": [
+        {
+          "id": "explorer",
+          "name": "Object Explorer",
+          "icon": "FolderTree",
+          "component": "ObjectExplorerTree",
+          "api_calls": [],
+          "status": "active",
+          "simple_mode": false
+        },
+        {
+          "id": "workspaces",
+          "name": "Workspaces",
+          "icon": "FolderOpen",
+          "component": "WorkspacePanel",
+          "api_calls": [
+            "GET /api/v1/workspaces",
+            "GET /api/v1/workspaces/{id}",
+            "POST /api/v1/workspaces/save-current",
+            "DELETE /api/v1/workspaces/{id}",
+            "POST /api/v1/workspaces/{id}/export",
+            "POST /api/v1/workspaces/import"
+          ],
+          "status": "active",
+          "simple_mode": true
+        },
+        {
+          "id": "mission",
+          "name": "Mission Analysis",
+          "icon": "Rocket",
+          "component": "MissionControls",
+          "api_calls": [
+            "GET /api/satellites",
+            "POST /api/analyze"
+          ],
+          "status": "active",
+          "simple_mode": true
+        },
+        {
+          "id": "planning",
+          "name": "Mission Planning",
+          "icon": "Calendar",
+          "component": "MissionPlanning",
+          "api_calls": [
+            "POST /api/planning/schedule",
+            "POST /api/v1/schedule/context",
+            "POST /api/v1/schedule/repair",
+            "POST /api/v1/schedule/commit/direct"
+          ],
+          "status": "active",
+          "simple_mode": true
+        },
+        {
+          "id": "orders",
+          "name": "Orders",
+          "icon": "CheckSquare",
+          "component": "AcceptedOrders",
+          "api_calls": [],
+          "status": "active",
+          "simple_mode": true,
+          "note": "Uses localStorage, should migrate to DB"
+        },
+        {
+          "id": "conflicts",
+          "name": "Conflicts",
+          "icon": "AlertTriangle",
+          "component": "ConflictsPanel",
+          "api_calls": [
+            "GET /api/v1/schedule/conflicts",
+            "POST /api/v1/schedule/conflicts/recompute"
+          ],
+          "status": "active",
+          "simple_mode": true
+        }
+      ]
+    },
+    "right_sidebar": {
+      "id": "right_sidebar",
+      "type": "sidebar",
+      "component": "RightSidebar.tsx",
+      "panels": [
+        {
+          "id": "inspector",
+          "name": "Inspector",
+          "icon": "FileSearch",
+          "component": "Inspector",
+          "api_calls": [],
+          "status": "active",
+          "simple_mode": true
+        },
+        {
+          "id": "mission_results",
+          "name": "Mission Results",
+          "icon": "BarChart2",
+          "component": "MissionResultsPanel",
+          "api_calls": [],
+          "status": "active",
+          "simple_mode": false,
+          "note": "Requires mission data"
+        },
+        {
+          "id": "layers",
+          "name": "Layers",
+          "icon": "Layers",
+          "component": "inline",
+          "api_calls": [],
+          "status": "active",
+          "simple_mode": true
+        },
+        {
+          "id": "data",
+          "name": "Data Window",
+          "icon": "Database",
+          "component": "inline",
+          "api_calls": [],
+          "status": "active",
+          "simple_mode": false
+        },
+        {
+          "id": "properties",
+          "name": "Properties",
+          "icon": "Sliders",
+          "component": "inline",
+          "api_calls": [],
+          "status": "dead",
+          "simple_mode": false,
+          "note": "Sliders non-functional - HIDE"
+        },
+        {
+          "id": "info",
+          "name": "Information",
+          "icon": "Info",
+          "component": "inline",
+          "api_calls": [],
+          "status": "active",
+          "simple_mode": true
+        }
+      ]
+    },
+    "cesium_viewer": {
+      "id": "cesium_viewer",
+      "type": "canvas",
+      "component": "MultiViewContainer → CesiumViewer",
+      "data_sources": ["MissionContext.czmlData", "MissionContext.sceneObjects"],
+      "interactions": [
+        {
+          "trigger": "entity_click",
+          "action": "select_entity",
+          "updates": ["explorerStore.selectedNodeId", "inspector"]
+        },
+        {
+          "trigger": "timeline_scrub",
+          "action": "update_clock",
+          "updates": ["cesium.clock.currentTime"]
+        }
+      ]
+    },
+    "admin_panel_modal": {
+      "id": "admin_panel_modal",
+      "type": "modal",
+      "component": "AdminPanel.tsx",
+      "trigger": "header_settings_button",
+      "tabs": [
+        {
+          "id": "satellites",
+          "name": "Satellites",
+          "api_calls": [
+            "GET /api/satellites",
+            "PUT /api/satellites/{id}",
+            "DELETE /api/satellites/{id}"
+          ]
+        },
+        {
+          "id": "sar_modes",
+          "name": "SAR Modes",
+          "api_calls": ["GET /api/config/sar-modes"]
+        },
+        {
+          "id": "ground_stations",
+          "name": "Ground Stations",
+          "api_calls": ["GET /api/config/ground-stations"]
+        },
+        {
+          "id": "batching",
+          "name": "Batch Planning",
+          "api_calls": [
+            "GET /api/v1/batches/policies",
+            "GET /api/v1/batches",
+            "POST /api/v1/batches/create",
+            "POST /api/v1/batches/{id}/plan",
+            "POST /api/v1/batches/{id}/commit"
+          ],
+          "simple_mode": false,
+          "note": "Admin only"
+        }
+      ]
+    }
+  },
+  "edges": [
+    {
+      "from": "mission",
+      "to": "planning",
+      "trigger": "analysis_complete",
+      "data_passed": ["opportunities", "missionData"]
+    },
+    {
+      "from": "planning",
+      "to": "orders",
+      "trigger": "commit_success",
+      "data_passed": ["acquisitions", "planId"]
+    },
+    {
+      "from": "planning",
+      "to": "conflicts",
+      "trigger": "conflict_detected",
+      "data_passed": ["conflictIds"]
+    },
+    {
+      "from": "workspaces",
+      "to": "mission",
+      "trigger": "workspace_load",
+      "data_passed": ["scenarioConfig", "analysisState", "missionData"]
+    },
+    {
+      "from": "conflicts",
+      "to": "planning",
+      "trigger": "repair_requested",
+      "data_passed": ["conflictIds", "acquisitionIds"]
+    }
+  ],
+  "stores": {
+    "MissionContext": {
+      "type": "react_context",
+      "file": "context/MissionContext.tsx",
+      "state_keys": [
+        "missionData",
+        "czmlData",
+        "sceneObjects",
+        "activeWorkspace",
+        "opportunities"
+      ]
+    },
+    "planningStore": {
+      "type": "zustand",
+      "file": "store/planningStore.ts",
+      "state_keys": ["results", "activeAlgorithm", "isPlanning"]
+    },
+    "ordersStore": {
+      "type": "zustand",
+      "file": "store/ordersStore.ts",
+      "state_keys": ["orders", "selectedOrderId"]
+    },
+    "conflictStore": {
+      "type": "zustand",
+      "file": "store/conflictStore.ts",
+      "state_keys": ["conflicts", "selectedConflictId", "highlightedAcquisitionIds"]
+    },
+    "visStore": {
+      "type": "zustand",
+      "file": "store/visStore.ts",
+      "state_keys": ["activeLayers", "rightSidebarOpen", "rightSidebarWidth"]
+    },
+    "explorerStore": {
+      "type": "zustand",
+      "file": "store/explorerStore.ts",
+      "state_keys": ["selectedNodeId", "expandedNodeIds", "planningRuns"]
+    }
+  },
+  "user_journeys": {
+    "J1": {
+      "name": "Create/Load Workspace → Run Analysis",
+      "steps": [
+        {"panel": "workspaces", "action": "load_or_create"},
+        {"panel": "mission", "action": "configure_satellites"},
+        {"panel": "mission", "action": "add_targets"},
+        {"panel": "mission", "action": "analyze_mission"}
+      ],
+      "status": "verified"
+    },
+    "J2": {
+      "name": "Plan → Commit → View Horizon",
+      "steps": [
+        {"panel": "planning", "action": "select_mode"},
+        {"panel": "planning", "action": "run_planning"},
+        {"panel": "planning", "action": "review_results"},
+        {"panel": "planning", "action": "commit_plan"},
+        {"panel": "orders", "action": "view_committed"}
+      ],
+      "status": "verified"
+    },
+    "J3": {
+      "name": "Detect Conflicts → Repair → Commit",
+      "steps": [
+        {"panel": "conflicts", "action": "view_conflicts"},
+        {"panel": "conflicts", "action": "select_conflict"},
+        {"panel": "planning", "action": "switch_to_repair_mode"},
+        {"panel": "planning", "action": "run_repair"},
+        {"panel": "planning", "action": "commit_repair"}
+      ],
+      "status": "verified"
+    },
+    "J4": {
+      "name": "SAR Workflow Parity",
+      "steps": [
+        {"panel": "mission", "action": "select_sar_mode"},
+        {"panel": "mission", "action": "analyze_mission"},
+        {"panel": "planning", "action": "run_planning"},
+        {"panel": "planning", "action": "verify_sar_fields"},
+        {"panel": "planning", "action": "commit_plan"}
+      ],
+      "status": "verified"
+    }
+  },
+  "dead_paths": [
+    {
+      "location": "right_sidebar.properties",
+      "reason": "Sliders have no effect (defaultValue only)",
+      "recommendation": "HIDE in simple mode"
+    },
+    {
+      "location": "orders_inbox",
+      "reason": "API exists but no UI panel",
+      "recommendation": "DEFER - not critical for MVP"
+    },
+    {
+      "location": "order_reject_defer",
+      "reason": "API endpoints exist but no UI buttons",
+      "recommendation": "DEFER - admin workflow"
+    }
+  ],
+  "simple_mode_config": {
+    "left_sidebar_panels": ["workspaces", "mission", "planning", "orders", "conflicts"],
+    "hidden_panels": ["explorer"],
+    "right_sidebar_panels": ["inspector", "layers", "info"],
+    "hidden_right_panels": ["properties", "data", "mission_results"],
+    "collapsed_by_default": {
+      "planning_advanced": true,
+      "weight_sliders": true,
+      "repair_settings": true
+    }
+  }
+}

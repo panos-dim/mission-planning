@@ -1,0 +1,92 @@
+# Batch Planning Policies Configuration
+# These policies control how orders are batched and planned.
+# Each policy defines weights for scoring, selection rules, and planning behavior.
+
+policies:
+  # Default balanced policy - good for general operations
+  default:
+    name: "Default Balanced"
+    description: "Balanced approach for general mission planning"
+    weights:
+      priority_weight: 1.0      # Weight for order priority (1-5 scale)
+      deadline_weight: 0.8      # Weight for deadline urgency
+      age_weight: 0.3           # Weight for order age (older = higher score)
+      quality_weight: 0.5       # Weight for imaging quality metrics
+    selection_rules:
+      max_orders_per_batch: 50          # Maximum orders in a single batch
+      horizon_hours: 24                  # Default planning horizon in hours
+      include_soft_lock_replace: true   # Allow replacing soft-locked items
+      min_priority: 1                    # Minimum order priority to include
+    repair_preset: "Balanced"           # Conservative | Balanced | Aggressive
+    planning_mode: "incremental"        # incremental | repair
+
+  # High-priority urgent policy - prioritizes deadlines
+  urgent:
+    name: "Urgent Priority"
+    description: "Prioritizes orders with approaching deadlines"
+    weights:
+      priority_weight: 1.5
+      deadline_weight: 2.0
+      age_weight: 0.5
+      quality_weight: 0.2
+    selection_rules:
+      max_orders_per_batch: 30
+      horizon_hours: 12
+      include_soft_lock_replace: true
+      min_priority: 3
+    repair_preset: "Aggressive"
+    planning_mode: "repair"
+
+  # Quality-focused policy - maximizes imaging quality
+  quality_first:
+    name: "Quality First"
+    description: "Prioritizes imaging quality over throughput"
+    weights:
+      priority_weight: 0.5
+      deadline_weight: 0.5
+      age_weight: 0.2
+      quality_weight: 2.0
+    selection_rules:
+      max_orders_per_batch: 25
+      horizon_hours: 48
+      include_soft_lock_replace: false
+      min_priority: 1
+    repair_preset: "Conservative"
+    planning_mode: "incremental"
+
+  # Conservative policy - minimal schedule disruption
+  conservative:
+    name: "Conservative"
+    description: "Minimizes changes to existing schedule"
+    weights:
+      priority_weight: 1.0
+      deadline_weight: 0.6
+      age_weight: 0.4
+      quality_weight: 0.4
+    selection_rules:
+      max_orders_per_batch: 20
+      horizon_hours: 24
+      include_soft_lock_replace: false
+      min_priority: 2
+    repair_preset: "Conservative"
+    planning_mode: "incremental"
+
+  # High-throughput policy - maximizes number of orders planned
+  throughput:
+    name: "High Throughput"
+    description: "Maximizes the number of orders planned"
+    weights:
+      priority_weight: 0.8
+      deadline_weight: 0.8
+      age_weight: 0.8
+      quality_weight: 0.3
+    selection_rules:
+      max_orders_per_batch: 100
+      horizon_hours: 72
+      include_soft_lock_replace: true
+      min_priority: 1
+    repair_preset: "Balanced"
+    planning_mode: "repair"
+
+# Default policy to use when none specified
+default_policy: "default"

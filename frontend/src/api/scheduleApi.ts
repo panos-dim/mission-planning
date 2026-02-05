@@ -204,6 +204,16 @@ export interface Order {
   notes?: string;
   external_ref?: string;
   workspace_id?: string;
+  // PS2.5 Extended fields
+  order_type?: string;
+  due_time?: string;
+  earliest_start?: string;
+  latest_end?: string;
+  batch_id?: string;
+  tags?: string[];
+  requested_satellite_group?: string;
+  user_notes?: string;
+  reject_reason?: string;
 }
 
 export interface OrderListResponse {
@@ -623,6 +633,7 @@ export interface RepairDiff {
     moved?: Array<{ id: string; reason: string }>;
   };
   change_score: ChangeScore;
+  hard_lock_warnings?: string[];
 }
 
 export interface MetricsComparison {
@@ -919,6 +930,407 @@ export async function getCommitHistory(params?: {
   const url = `${API_BASE_URL}/api/v1/schedule/commit-history${queryString ? `?${queryString}` : ""}`;
 
   const response = await fetch(url);
+
+  if (!response.ok) {
+    const error = await response
+      .json()
+      .catch(() => ({ detail: "Unknown error" }));
+    throw new Error(error.detail || `HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// =============================================================================
+// PS2.5 - Order Inbox & Batching API
+// =============================================================================
+
+export interface InboxOrder {
+  order: Order;
+  score: number;
+  score_breakdown: Record<string, number>;
+}
+
+export interface InboxListResponse {
+  success: boolean;
+  orders: InboxOrder[];
+  total: number;
+  policy_id: string;
+}
+
+export interface BatchPolicy {
+  id: string;
+  name: string;
+  description: string;
+  weights: {
+    priority_weight: number;
+    deadline_weight: number;
+    age_weight: number;
+    quality_weight: number;
+  };
+  selection_rules: {
+    max_orders_per_batch: number;
+    horizon_hours: number;
+    include_soft_lock_replace: boolean;
+    min_priority: number;
+  };
+  repair_preset: string;
+  planning_mode: string;
+}
+
+export interface PolicyListResponse {
+  success: boolean;
+  policies: BatchPolicy[];
+  default_policy: string;
+}
+
+export interface BatchOrder {
+  id: string;
+  target_id: string;
+  priority: number;
+  status: string;
+  due_time?: string;
+  role: string;
+  score?: number;
+}
+
+export interface Batch {
+  id: string;
+  workspace_id: string;
+  created_at: string;
+  updated_at: string;
+  policy_id: string;
+  horizon_from: string;
+  horizon_to: string;
+  status: string;
+  plan_id?: string;
+  notes?: string;
+  metrics?: {
+    orders_satisfied?: number;
+    orders_unsatisfied?: number;
+    unsatisfied_reasons?: Record<string, number>;
+    acquisitions_planned?: number;
+  };
+  orders?: BatchOrder[];
+}
+
+export interface BatchListResponse {
+  success: boolean;
+  batches: Batch[];
+  total: number;
+}
+
+export interface CreateBatchResponse {
+  success: boolean;
+  batch: Batch;
+  selected_orders: number;
+}
+
+export interface PlanMetrics {
+  orders_satisfied: number;
+  orders_unsatisfied: number;
+  unsatisfied_reasons: Record<string, number>;
+  acquisitions_planned: number;
+  acquisitions_dropped: number;
+  conflicts_predicted: number;
+  compute_time_ms: number;
+}
+
+export interface PlanBatchResponse {
+  success: boolean;
+  batch_id: string;
+  plan_id: string;
+  status: string;
+  metrics: PlanMetrics;
+  satisfied_order_ids: string[];
+  unsatisfied_orders: Array<{ order_id: string; reason: string }>;
+}
+
+export interface CommitBatchResponse {
+  success: boolean;
+  batch_id: string;
+  plan_id: string;
+  acquisitions_created: number;
+  acquisitions_dropped: number;
+  orders_updated: number;
+  audit_id?: string;
+}
+
+/**
+ * Get orders inbox with scoring.
+ */
+export async function getOrdersInbox(params: {
+  workspace_id: string;
+  priority_min?: number;
+  due_within_hours?: number;
+  order_type?: string;
+  tags?: string;
+  policy_id?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<InboxListResponse> {
+  const searchParams = new URLSearchParams();
+  searchParams.set("workspace_id", params.workspace_id);
+
+  if (params.priority_min)
+    searchParams.set("priority_min", String(params.priority_min));
+  if (params.due_within_hours)
+    searchParams.set("due_within_hours", String(params.due_within_hours));
+  if (params.order_type) searchParams.set("order_type", params.order_type);
+  if (params.tags) searchParams.set("tags", params.tags);
+  if (params.policy_id) searchParams.set("policy_id", params.policy_id);
+  if (params.limit) searchParams.set("limit", String(params.limit));
+  if (params.offset) searchParams.set("offset", String(params.offset));
+
+  const url = `${API_BASE_URL}/api/v1/orders/inbox?${searchParams.toString()}`;
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    const error = await response
+      .json()
+      .catch(() => ({ detail: "Unknown error" }));
+    throw new Error(error.detail || `HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Import orders in bulk.
+ */
+export async function importOrders(params: {
+  workspace_id: string;
+  orders: Array<{
+    target_id: string;
+    priority?: number;
+    constraints?: Record<string, unknown>;
+    due_time?: string;
+    tags?: string[];
+    order_type?: string;
+  }>;
+}): Promise<{ success: boolean; imported_count: number; orders: Order[] }> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/orders/import`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+
+  if (!response.ok) {
+    const error = await response
+      .json()
+      .catch(() => ({ detail: "Unknown error" }));
+    throw new Error(error.detail || `HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Reject an order with reason.
+ */
+export async function rejectOrder(
+  orderId: string,
+  reason: string,
+): Promise<{ success: boolean; message: string; order?: Order }> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/v1/orders/${orderId}/reject`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    },
+  );
+
+  if (!response.ok) {
+    const error = await response
+      .json()
+      .catch(() => ({ detail: "Unknown error" }));
+    throw new Error(error.detail || `HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Defer an order.
+ */
+export async function deferOrder(
+  orderId: string,
+  params: { new_due_time?: string; defer_hours?: number; notes?: string },
+): Promise<{ success: boolean; message: string; order?: Order }> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/v1/orders/${orderId}/defer`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    },
+  );
+
+  if (!response.ok) {
+    const error = await response
+      .json()
+      .catch(() => ({ detail: "Unknown error" }));
+    throw new Error(error.detail || `HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * List available batch policies.
+ */
+export async function listPolicies(): Promise<PolicyListResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/batches/policies`);
+
+  if (!response.ok) {
+    const error = await response
+      .json()
+      .catch(() => ({ detail: "Unknown error" }));
+    throw new Error(error.detail || `HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Create a new batch.
+ */
+export async function createBatch(params: {
+  workspace_id: string;
+  policy_id: string;
+  horizon_hours?: number;
+  order_ids?: string[];
+  priority_min?: number;
+  due_before?: string;
+  max_orders?: number;
+  notes?: string;
+}): Promise<CreateBatchResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/batches/create`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+
+  if (!response.ok) {
+    const error = await response
+      .json()
+      .catch(() => ({ detail: "Unknown error" }));
+    throw new Error(error.detail || `HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * List batches.
+ */
+export async function listBatches(params?: {
+  workspace_id?: string;
+  status?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<BatchListResponse> {
+  const searchParams = new URLSearchParams();
+
+  if (params?.workspace_id)
+    searchParams.set("workspace_id", params.workspace_id);
+  if (params?.status) searchParams.set("status", params.status);
+  if (params?.limit) searchParams.set("limit", String(params.limit));
+  if (params?.offset) searchParams.set("offset", String(params.offset));
+
+  const queryString = searchParams.toString();
+  const url = `${API_BASE_URL}/api/v1/batches${queryString ? `?${queryString}` : ""}`;
+
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    const error = await response
+      .json()
+      .catch(() => ({ detail: "Unknown error" }));
+    throw new Error(error.detail || `HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Get batch details.
+ */
+export async function getBatch(batchId: string): Promise<CreateBatchResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/batches/${batchId}`);
+
+  if (!response.ok) {
+    const error = await response
+      .json()
+      .catch(() => ({ detail: "Unknown error" }));
+    throw new Error(error.detail || `HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Plan a batch.
+ */
+export async function planBatch(
+  batchId: string,
+  params?: { use_repair_mode?: boolean; include_soft_lock_replace?: boolean },
+): Promise<PlanBatchResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/v1/batches/${batchId}/plan`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params || {}),
+    },
+  );
+
+  if (!response.ok) {
+    const error = await response
+      .json()
+      .catch(() => ({ detail: "Unknown error" }));
+    throw new Error(error.detail || `HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Commit a batch plan.
+ */
+export async function commitBatch(
+  batchId: string,
+  params?: { lock_level?: string; notes?: string },
+): Promise<CommitBatchResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/v1/batches/${batchId}/commit`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params || {}),
+    },
+  );
+
+  if (!response.ok) {
+    const error = await response
+      .json()
+      .catch(() => ({ detail: "Unknown error" }));
+    throw new Error(error.detail || `HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Cancel a batch.
+ */
+export async function cancelBatch(
+  batchId: string,
+): Promise<{ success: boolean; batch_id: string; orders_returned: number }> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/batches/${batchId}`, {
+    method: "DELETE",
+  });
 
   if (!response.ok) {
     const error = await response

@@ -54,10 +54,16 @@ class RepairScope(str, Enum):
 
 
 class SoftLockPolicy(str, Enum):
-    """Policy for handling soft-locked acquisitions during repair."""
+    """Policy for handling soft-locked acquisitions during repair.
+
+    PR-OPS-REPAIR-DEFAULT-01: Soft locks are deprecated. All non-hard-locked
+    items are now treated as fully flexible (ALLOW_REPLACE behavior).
+    """
 
     ALLOW_SHIFT = "allow_shift"  # May move timing within original window
-    ALLOW_REPLACE = "allow_replace"  # May drop and replace with better candidates
+    ALLOW_REPLACE = (
+        "allow_replace"  # May drop and replace with better candidates (DEFAULT)
+    )
     FREEZE_SOFT = (
         "freeze_soft"  # Treat soft locks like hard locks (repair = incremental)
     )
@@ -525,6 +531,10 @@ class RepairDiff(BaseModel):
         description="Reasons for drops and moves",
     )
     change_score: ChangeScore = Field(default_factory=ChangeScore)
+    hard_lock_warnings: List[str] = Field(
+        default_factory=list,
+        description="Warnings about hard-locked acquisitions that could not be resolved",
+    )
 
 
 class MetricsComparison(BaseModel):
@@ -1228,6 +1238,7 @@ def execute_repair_planning(
     moved_items: List[MovedAcquisitionInfo] = []
     drop_reasons: List[Dict[str, str]] = []
     move_reasons: List[Dict[str, str]] = []
+    hard_lock_warnings: List[str] = []
 
     # All hard-locked items are kept by definition
     for interval in repair_context.fixed_set:
@@ -1274,6 +1285,12 @@ def execute_repair_planning(
                     "id": flex.acquisition_id,
                     "reason": f"Conflicts with hard-locked acquisition {blocking.acquisition_id}",
                 }
+            )
+            # Add warning about hard lock conflict
+            hard_lock_warnings.append(
+                f"Cannot resolve conflict: acquisition {flex.acquisition_id} ({flex.target_id}) "
+                f"conflicts with hard-locked {blocking.acquisition_id} ({blocking.target_id}). "
+                f"The soft-locked acquisition will be dropped."
             )
             changes_made += 1
         elif changes_made >= max_changes:
@@ -1463,6 +1480,7 @@ def execute_repair_planning(
             num_changes=changes_made,
             percent_changed=round(percent_changed, 2),
         ),
+        hard_lock_warnings=hard_lock_warnings,
     )
 
     metrics = {

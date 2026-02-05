@@ -1,19 +1,17 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
-  BarChart3,
+  Satellite,
   ChevronRight,
   Shield,
   Calendar,
-  Package,
+  CheckSquare,
   FolderOpen,
   GitBranch,
-  AlertTriangle,
 } from "lucide-react";
 import MissionControls from "./MissionControls";
 import MissionPlanning from "./MissionPlanning";
-import AcceptedOrders from "./AcceptedOrders";
+import SchedulePanel from "./SchedulePanel";
 import WorkspacePanel from "./WorkspacePanel";
-import ConflictsPanel from "./ConflictsPanel";
 import { ObjectExplorerTree } from "./ObjectExplorer";
 import ResizeHandle from "./ResizeHandle";
 import { useVisStore } from "../store/visStore";
@@ -30,6 +28,11 @@ import {
   TargetData,
 } from "../types";
 import { commitScheduleDirect, DirectCommitItem } from "../api/scheduleApi";
+import {
+  LEFT_SIDEBAR_PANELS,
+  SIMPLE_MODE_LEFT_PANELS,
+  isDebugMode,
+} from "../constants/simpleMode";
 
 interface SidebarPanel {
   id: string;
@@ -56,8 +59,11 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
     const stored = localStorage.getItem("acceptedOrders");
     return stored ? JSON.parse(stored) : [];
   });
-  const { setLeftSidebarOpen, leftSidebarWidth, setLeftSidebarWidth } =
+  const { setLeftSidebarOpen, leftSidebarWidth, setLeftSidebarWidth, uiMode } =
     useVisStore();
+
+  // Get UI mode - in developer mode, show all panels
+  const isDeveloperMode = uiMode === "developer" || isDebugMode();
   const { state, dispatch } = useMission();
   const { setTargets: setPreviewTargets, setHidePreview } =
     usePreviewTargetsStore();
@@ -214,11 +220,12 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
     result: AlgorithmResult,
   ) => {
     const timestamp = new Date().toISOString();
-    const dateStr = new Date()
-      .toISOString()
-      .replace(/T/, "-")
-      .replace(/:/g, "-")
-      .substring(0, 19);
+    // Get existing order count for sequential naming
+    const existingCount = orders.length + 1;
+    const dateFormatted = new Date().toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+    });
 
     // Extract unique satellites and targets
     const satellites = [...new Set(result.schedule.map((s) => s.satellite_id))];
@@ -279,7 +286,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
       order_id:
         planId ||
         `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      name: `${algorithm.replace("_", "-")}-${dateStr}`,
+      name: `Schedule #${existingCount} - ${dateFormatted}`,
       created_at: timestamp,
       algorithm: algorithm as "first_fit" | "best_fit" | "optimal",
       metrics: {
@@ -309,7 +316,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
     };
 
     setOrders((prev) => [...prev, newOrder]);
-    setActivePanel("orders");
+    setActivePanel(LEFT_SIDEBAR_PANELS.SCHEDULE);
 
     // Show feedback to user
     if (backendCommitSuccess) {
@@ -321,95 +328,121 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
 
   const conflictSummary = useConflictStore((s) => s.summary);
 
-  const panels: SidebarPanel[] = [
-    {
-      id: "explorer",
-      title: "Object Explorer",
-      icon: GitBranch,
-      component: (
-        <ObjectExplorerTree
-          algorithmResults={{}}
-          acceptedOrders={orders}
-          onNodeSelect={(nodeId, nodeType, _metadata) => {
-            // Handle map/timeline sync based on node type
-            if (
-              nodeType === "satellite" ||
-              nodeType === "target" ||
-              nodeType === "ground_station"
-            ) {
-              // These objects can be focused on the map
-              const objectId = nodeId
-                .replace("satellite_", "")
-                .replace("target_", "")
-                .replace("ground_station_", "");
-              console.log("[ObjectExplorer] Focus on map:", objectId, nodeType);
-            }
-
-            if (nodeType === "opportunity" || nodeType === "plan_item") {
-              // These have timing info - extract pass index for timeline jump
-              const match = nodeId.match(
-                /opportunity_(\d+)_|plan_item_\w+_(\d+)/,
-              );
-              if (match) {
-                const passIndex = parseInt(match[1] || match[2], 10);
+  // Filter panels based on Simple Mode configuration
+  const panels: SidebarPanel[] = useMemo(() => {
+    const allPanels: SidebarPanel[] = [
+      // Object Explorer - visible to all planners
+      {
+        id: LEFT_SIDEBAR_PANELS.EXPLORER,
+        title: "Object Explorer",
+        icon: GitBranch,
+        component: (
+          <ObjectExplorerTree
+            algorithmResults={{}}
+            acceptedOrders={orders}
+            onNodeSelect={(nodeId, nodeType, _metadata) => {
+              // Handle map/timeline sync based on node type
+              if (
+                nodeType === "satellite" ||
+                nodeType === "target" ||
+                nodeType === "ground_station"
+              ) {
+                // These objects can be focused on the map
+                const objectId = nodeId
+                  .replace("satellite_", "")
+                  .replace("target_", "")
+                  .replace("ground_station_", "");
                 console.log(
-                  "[ObjectExplorer] Jump to time, pass index:",
-                  passIndex,
+                  "[ObjectExplorer] Focus on map:",
+                  objectId,
+                  nodeType,
                 );
               }
-            }
-          }}
-        />
-      ),
-    },
-    {
-      id: "workspaces",
-      title: "Workspaces",
-      icon: FolderOpen,
-      component: (
-        <WorkspacePanel
-          hasMissionData={hasMissionData}
-          onWorkspaceLoad={handleWorkspaceLoad}
-        />
-      ),
-    },
-    {
-      id: "mission",
-      title: "Mission Analysis",
-      icon: BarChart3,
-      component: <MissionControls key={refreshKey} />,
-    },
-    {
-      id: "planning",
-      title: "Mission Planning",
-      icon: Calendar,
-      component: <MissionPlanning onPromoteToOrders={handlePromoteToOrders} />,
-    },
-    {
-      id: "orders",
-      title: "Orders",
-      icon: Package,
-      component: <AcceptedOrders orders={orders} onOrdersChange={setOrders} />,
-    },
-    {
-      id: "conflicts",
-      title: "Conflicts",
-      icon: AlertTriangle,
-      component: <ConflictsPanel />,
-      badge:
-        conflictSummary.errorCount > 0
-          ? conflictSummary.errorCount
-          : conflictSummary.warningCount > 0
-            ? conflictSummary.warningCount
-            : undefined,
-      badgeColor:
-        conflictSummary.errorCount > 0
-          ? "red"
-          : conflictSummary.warningCount > 0
-            ? "yellow"
-            : undefined,
-    },
-  ];
+
+              if (nodeType === "opportunity" || nodeType === "plan_item") {
+                // These have timing info - extract pass index for timeline jump
+                const match = nodeId.match(
+                  /opportunity_(\d+)_|plan_item_\w+_(\d+)/,
+                );
+                if (match) {
+                  const passIndex = parseInt(match[1] || match[2], 10);
+                  console.log(
+                    "[ObjectExplorer] Jump to time, pass index:",
+                    passIndex,
+                  );
+                }
+              }
+            }}
+          />
+        ),
+      },
+      // Simple Mode panels (4 visible by default)
+      {
+        id: LEFT_SIDEBAR_PANELS.WORKSPACES,
+        title: "Workspaces",
+        icon: FolderOpen,
+        component: (
+          <WorkspacePanel
+            hasMissionData={hasMissionData}
+            onWorkspaceLoad={handleWorkspaceLoad}
+          />
+        ),
+      },
+      {
+        id: LEFT_SIDEBAR_PANELS.MISSION_ANALYSIS,
+        title: "Mission Analysis",
+        icon: Satellite,
+        component: <MissionControls key={refreshKey} />,
+      },
+      {
+        id: LEFT_SIDEBAR_PANELS.PLANNING,
+        title: "Planning",
+        icon: Calendar,
+        component: (
+          <MissionPlanning onPromoteToOrders={handlePromoteToOrders} />
+        ),
+      },
+      {
+        id: LEFT_SIDEBAR_PANELS.SCHEDULE,
+        title: "Schedule",
+        icon: CheckSquare,
+        component: (
+          <SchedulePanel
+            orders={orders}
+            onOrdersChange={setOrders}
+            showHistoryTab={isDeveloperMode}
+          />
+        ),
+        badge:
+          conflictSummary.total > 0 ? conflictSummary.warningCount : undefined,
+        badgeColor:
+          conflictSummary.errorCount > 0
+            ? "red"
+            : conflictSummary.warningCount > 0
+              ? "yellow"
+              : undefined,
+      },
+    ];
+
+    // Filter panels based on UI Mode
+    // In developer mode: show all panels
+    // In simple mode: only show SIMPLE_MODE_LEFT_PANELS
+    if (isDeveloperMode) {
+      return allPanels; // Show all panels in developer mode
+    }
+    return allPanels.filter((panel) =>
+      (SIMPLE_MODE_LEFT_PANELS as readonly string[]).includes(panel.id),
+    );
+  }, [
+    orders,
+    hasMissionData,
+    handleWorkspaceLoad,
+    refreshKey,
+    handlePromoteToOrders,
+    setOrders,
+    conflictSummary,
+    isDeveloperMode,
+  ]);
 
   const handlePanelClick = (panelId: string) => {
     if (activePanel === panelId && isPanelOpen) {
@@ -461,8 +494,8 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
                   </span>
                 )}
 
-                {/* Tooltip */}
-                <div className="absolute left-full ml-2 px-2 py-1 bg-gray-800 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity">
+                {/* Tooltip - positioned on right side for left sidebar */}
+                <div className="absolute left-full ml-2 px-2 py-1 bg-gray-800 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
                   {panel.title}
                 </div>
               </button>
@@ -479,8 +512,8 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
           >
             <Shield className="w-5 h-5" />
 
-            {/* Tooltip */}
-            <div className="absolute left-full ml-2 px-2 py-1 bg-gray-800 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity">
+            {/* Tooltip - positioned on right side for left sidebar */}
+            <div className="absolute left-full ml-2 px-2 py-1 bg-gray-800 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
               Admin Panel
             </div>
           </button>
