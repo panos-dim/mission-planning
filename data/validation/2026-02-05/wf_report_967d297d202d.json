@@ -1,0 +1,119 @@
+{
+  "report_id": "wf_report_967d297d202d",
+  "scenario_id": "sar_multisat_stress",
+  "scenario_name": "SAR Multi-Satellite Stress Test",
+  "timestamp": "2026-02-05T12:46:40.253648Z",
+  "config_hash": "1bd2feb3e6b9ee7e",
+  "passed": false,
+  "total_invariants": 3,
+  "passed_invariants": 2,
+  "failed_invariants": 1,
+  "stages": [
+    {
+      "stage": "analysis",
+      "runtime_ms": 1115.0,
+      "success": true,
+      "error_message": null,
+      "input_count": 8,
+      "output_count": 75,
+      "details": {
+        "mode": "SAR"
+      }
+    },
+    {
+      "stage": "planning",
+      "runtime_ms": 0.46,
+      "success": true,
+      "error_message": null,
+      "input_count": 75,
+      "output_count": 8,
+      "details": {
+        "algorithm": "first_fit"
+      }
+    },
+    {
+      "stage": "commit_preview",
+      "runtime_ms": 0.01,
+      "success": true,
+      "error_message": null,
+      "input_count": 8,
+      "output_count": 0,
+      "details": {
+        "conflict_count": 0,
+        "by_type": {}
+      }
+    },
+    {
+      "stage": "conflict_recompute",
+      "runtime_ms": 0.0,
+      "success": true,
+      "error_message": null,
+      "input_count": 8,
+      "output_count": 0,
+      "details": {
+        "conflict_count": 0,
+        "by_type": {}
+      }
+    }
+  ],
+  "invariants": [
+    {
+      "invariant": "no_temporal_overlap",
+      "passed": true,
+      "message": "No temporal overlaps detected",
+      "details": {
+        "acquisitions_checked": 8
+      },
+      "violations": []
+    },
+    {
+      "invariant": "slew_feasibility",
+      "passed": false,
+      "message": "1 slew infeasibility violation(s)",
+      "details": {
+        "acquisitions_checked": 8
+      },
+      "violations": [
+        {
+          "satellite_id": "sat_ICEYE-X67",
+          "acq1_id": "acq_sat_ICEYE-X67_Heraklion_0",
+          "acq2_id": "acq_sat_ICEYE-X67_Athens_0",
+          "roll_delta_deg": 22.9,
+          "pitch_delta_deg": 0.0,
+          "required_time_s": 27.9,
+          "available_time_s": 26.1,
+          "deficit_s": 1.9
+        }
+      ]
+    },
+    {
+      "invariant": "conflict_preview_match",
+      "passed": true,
+      "message": "Conflict preview matches detection (0 conflicts)",
+      "details": {
+        "preview_count": 0,
+        "detected_count": 0
+      },
+      "violations": []
+    }
+  ],
+  "counts": {
+    "opportunities": 75,
+    "planned": 8,
+    "committed": 8,
+    "conflicts": 0
+  },
+  "metrics": {
+    "total_value": 0.0,
+    "total_score": 0.0,
+    "mean_incidence_deg": 32.45,
+    "left_swath_count": 45,
+    "right_swath_count": 30,
+    "ascending_count": 33,
+    "descending_count": 42
+  },
+  "repair_diff": null,
+  "total_runtime_ms": 1115.6,
+  "report_hash": "e36f23ed6b22d128",
+  "errors": []
+}

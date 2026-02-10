@@ -11,6 +11,7 @@ interface LockToggleProps {
   className?: string;
 }
 
+// PR-OPS-REPAIR-DEFAULT-01: Simplified lock model - only hard/none
 const LOCK_CONFIG: Record<
   LockLevel,
   {
@@ -26,21 +27,22 @@ const LOCK_CONFIG: Record<
     color: "text-gray-400",
     bgColor: "bg-gray-700",
     label: "Unlocked",
-    description: "Fully flexible, can be modified or dropped by repair",
+    description: "Fully flexible, can be rearranged by repair",
   },
   soft: {
-    icon: Lock,
-    color: "text-yellow-400",
-    bgColor: "bg-yellow-900/30",
-    label: "Soft Lock",
-    description: "Modifiable based on repair policy",
+    // Deprecated: kept for backwards compatibility, treated as 'none'
+    icon: Unlock,
+    color: "text-gray-400",
+    bgColor: "bg-gray-700",
+    label: "Unlocked",
+    description: "Fully flexible, can be rearranged by repair",
   },
   hard: {
     icon: Shield,
     color: "text-red-400",
     bgColor: "bg-red-900/30",
     label: "Hard Lock",
-    description: "Immutable, never touched by repair mode",
+    description: "Immutable, never touched by repair",
   },
 };
 
@@ -64,12 +66,12 @@ export default function LockToggle({
   const sizeConfig = SIZES[size];
   const Icon = config.icon;
 
+  // PR-OPS-REPAIR-DEFAULT-01: Simplified lock toggle - only none <-> hard
   const cycleLock = () => {
     if (disabled) return;
-    const levels: LockLevel[] = ["none", "soft", "hard"];
-    const currentIndex = levels.indexOf(lockLevel);
-    const nextIndex = (currentIndex + 1) % levels.length;
-    onChange(levels[nextIndex]);
+    // Toggle between none and hard only (soft is deprecated)
+    const newLevel: LockLevel = lockLevel === "hard" ? "none" : "hard";
+    onChange(newLevel);
   };
 
   return (
@@ -145,6 +147,7 @@ interface BulkLockActionsProps {
   disabled?: boolean;
 }
 
+// PR-OPS-REPAIR-DEFAULT-01: Simplified bulk lock actions - only hard/none
 export function BulkLockActions({
   selectedIds,
   onBulkLock,
@@ -164,14 +167,6 @@ export function BulkLockActions({
       >
         <Unlock className="w-3 h-3 inline mr-1" />
         Unlock
-      </button>
-      <button
-        onClick={() => onBulkLock("soft")}
-        disabled={disabled}
-        className="px-2 py-1 text-xs bg-yellow-900/30 hover:bg-yellow-900/50 text-yellow-400 rounded disabled:opacity-50"
-      >
-        <Lock className="w-3 h-3 inline mr-1" />
-        Soft Lock
       </button>
       <button
         onClick={() => onBulkLock("hard")}

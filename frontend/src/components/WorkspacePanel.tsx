@@ -50,7 +50,7 @@ export function WorkspacePanel({
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [saveName, setSaveName] = useState("");
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(
-    null
+    null,
   );
 
   // Load workspaces on mount
@@ -62,7 +62,7 @@ export function WorkspacePanel({
       setWorkspaces(result.workspaces);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Failed to load workspaces"
+        err instanceof Error ? err.message : "Failed to load workspaces",
       );
     } finally {
       setIsLoading(false);
@@ -159,7 +159,7 @@ export function WorkspacePanel({
       await loadWorkspaces();
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Failed to delete workspace"
+        err instanceof Error ? err.message : "Failed to delete workspace",
       );
     } finally {
       setIsLoading(false);
@@ -175,7 +175,7 @@ export function WorkspacePanel({
       setSuccessMessage("Workspace exported");
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Failed to export workspace"
+        err instanceof Error ? err.message : "Failed to export workspace",
       );
     } finally {
       setIsLoading(false);
@@ -197,7 +197,7 @@ export function WorkspacePanel({
       await loadWorkspaces();
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Failed to import workspace"
+        err instanceof Error ? err.message : "Failed to import workspace",
       );
     } finally {
       setIsLoading(false);
@@ -240,35 +240,30 @@ export function WorkspacePanel({
       {/* Scrollable Content */}
       <div className="flex-1 overflow-y-auto">
         <div className="p-4 space-y-4">
-          {/* Header */}
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-gray-200">
-              Saved Workspaces
-            </h3>
-            <div className="flex gap-1">
-              <button
-                onClick={loadWorkspaces}
-                disabled={isLoading}
-                className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
-                title="Refresh"
-              >
-                <RefreshCw
-                  className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`}
-                />
-              </button>
-              <label
-                className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors cursor-pointer"
-                title="Import workspace"
-              >
-                <Upload className="w-4 h-4" />
-                <input
-                  type="file"
-                  accept=".json"
-                  onChange={handleImport}
-                  className="hidden"
-                />
-              </label>
-            </div>
+          {/* Action buttons */}
+          <div className="flex items-center justify-end gap-1">
+            <button
+              onClick={loadWorkspaces}
+              disabled={isLoading}
+              className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
+              title="Refresh"
+            >
+              <RefreshCw
+                className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`}
+              />
+            </button>
+            <label
+              className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors cursor-pointer"
+              title="Import workspace"
+            >
+              <Upload className="w-4 h-4" />
+              <input
+                type="file"
+                accept=".json"
+                onChange={handleImport}
+                className="hidden"
+              />
+            </label>
           </div>
 
           {/* Messages */}
@@ -369,7 +364,7 @@ export function WorkspacePanel({
                     {ws.mission_mode && (
                       <span
                         className={`px-2 py-0.5 text-xs font-medium rounded ${getModeColor(
-                          ws.mission_mode
+                          ws.mission_mode,
                         )} text-white`}
                       >
                         {ws.mission_mode}
@@ -427,8 +422,8 @@ export function WorkspacePanel({
                             ws.sar_params.look_side === "LEFT"
                               ? "bg-red-900/40 text-red-300"
                               : ws.sar_params.look_side === "RIGHT"
-                              ? "bg-blue-900/40 text-blue-300"
-                              : "bg-gray-700 text-gray-300"
+                                ? "bg-blue-900/40 text-blue-300"
+                                : "bg-gray-700 text-gray-300"
                           }`}
                         >
                           {ws.sar_params.look_side}

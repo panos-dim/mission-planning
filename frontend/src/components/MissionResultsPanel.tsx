@@ -42,14 +42,14 @@ const SectionHeader: React.FC<SectionHeaderProps> = React.memo(
         <ChevronRight className="w-4 h-4 text-gray-400" />
       )}
     </button>
-  )
+  ),
 );
 
 // Get satellite color - uses shared color constants
 // Supports any constellation size with automatic color generation for 9+ satellites
 const getSatelliteColor = (
   satelliteIndex: number,
-  satellites?: Array<{ id: string; name: string; color?: string }>
+  satellites?: Array<{ id: string; name: string; color?: string }>,
 ): string => {
   // If we have satellite info with colors from backend, use it
   if (
@@ -69,7 +69,7 @@ const getSatelliteColor = (
 const getOpportunityColor = (
   pass: any,
   _passIndex: number,
-  satellites?: Array<{ id: string; name: string; color?: string }>
+  satellites?: Array<{ id: string; name: string; color?: string }>,
 ): string => {
   // If pass has satellite_id, find matching satellite color
   if (pass.satellite_id && satellites) {
@@ -159,9 +159,54 @@ const MissionResultsPanel: React.FC = () => {
 
   if (!state.missionData) {
     return (
-      <div className="p-4 text-center text-gray-500">
-        <p className="text-sm">No mission data available</p>
-        <p className="text-xs mt-2">Analyze a mission to see results here</p>
+      <div className="h-full flex flex-col items-center justify-center p-6 text-center">
+        <div className="w-20 h-20 mb-6 rounded-full bg-gradient-to-br from-blue-500/10 to-green-500/10 flex items-center justify-center">
+          <BarChart2 className="w-10 h-10 text-blue-400/40" />
+        </div>
+        <h3 className="text-lg font-semibold text-white mb-2">
+          No Mission Results Yet
+        </h3>
+        <p className="text-sm text-gray-400 mb-4 max-w-[240px]">
+          Run a mission analysis to see opportunities, schedules, and detailed
+          metrics here.
+        </p>
+        <div className="space-y-3 text-left w-full max-w-[260px]">
+          <div className="flex items-start gap-3 p-3 bg-gray-800/50 rounded-lg">
+            <div className="w-6 h-6 rounded-full bg-blue-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+              <span className="text-blue-400 text-xs font-bold">1</span>
+            </div>
+            <div>
+              <p className="text-xs font-medium text-gray-300">
+                Configure Mission
+              </p>
+              <p className="text-[10px] text-gray-500">
+                Set satellite, targets, and time window
+              </p>
+            </div>
+          </div>
+          <div className="flex items-start gap-3 p-3 bg-gray-800/50 rounded-lg">
+            <div className="w-6 h-6 rounded-full bg-green-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+              <span className="text-green-400 text-xs font-bold">2</span>
+            </div>
+            <div>
+              <p className="text-xs font-medium text-gray-300">Run Analysis</p>
+              <p className="text-[10px] text-gray-500">
+                Click Analyze Mission in the left panel
+              </p>
+            </div>
+          </div>
+          <div className="flex items-start gap-3 p-3 bg-gray-800/50 rounded-lg">
+            <div className="w-6 h-6 rounded-full bg-purple-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+              <span className="text-purple-400 text-xs font-bold">3</span>
+            </div>
+            <div>
+              <p className="text-xs font-medium text-gray-300">View Results</p>
+              <p className="text-[10px] text-gray-500">
+                Explore opportunities and plan your mission
+              </p>
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
@@ -211,7 +256,7 @@ const MissionResultsPanel: React.FC = () => {
             onClick={() =>
               downloadJSON(
                 state.missionData,
-                `mission_${state.missionData?.satellite_name}.json`
+                `mission_${state.missionData?.satellite_name}.json`,
               )
             }
             className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors"
@@ -377,8 +422,8 @@ const MissionResultsPanel: React.FC = () => {
                       const targetsWithOpportunities =
                         state.missionData!.targets.filter((target) =>
                           state.missionData!.passes.some(
-                            (pass) => pass.target === target.name
-                          )
+                            (pass) => pass.target === target.name,
+                          ),
                         );
                       return `${targetsWithOpportunities.length}/${
                         state.missionData!.targets.length
@@ -389,10 +434,10 @@ const MissionResultsPanel: React.FC = () => {
                 <div className="space-y-1">
                   {state.missionData.targets.map((target, index) => {
                     const hasOpportunities = state.missionData!.passes.some(
-                      (pass) => pass.target === target.name
+                      (pass) => pass.target === target.name,
                     );
                     const opportunityCount = state.missionData!.passes.filter(
-                      (pass) => pass.target === target.name
+                      (pass) => pass.target === target.name,
                     ).length;
                     return (
                       <div
@@ -456,7 +501,7 @@ const MissionResultsPanel: React.FC = () => {
                       value={lookSideFilter}
                       onChange={(e) =>
                         setLookSideFilter(
-                          e.target.value as "ALL" | "LEFT" | "RIGHT"
+                          e.target.value as "ALL" | "LEFT" | "RIGHT",
                         )
                       }
                       className="px-2 py-0.5 bg-gray-700 border border-gray-600 rounded text-xs text-white focus:border-blue-500 focus:outline-none"
@@ -469,7 +514,7 @@ const MissionResultsPanel: React.FC = () => {
                       value={passDirectionFilter}
                       onChange={(e) =>
                         setPassDirectionFilter(
-                          e.target.value as "ALL" | "ASCENDING" | "DESCENDING"
+                          e.target.value as "ALL" | "ASCENDING" | "DESCENDING",
                         )
                       }
                       className="px-2 py-0.5 bg-gray-700 border border-gray-600 rounded text-xs text-white focus:border-blue-500 focus:outline-none"
@@ -487,7 +532,7 @@ const MissionResultsPanel: React.FC = () => {
                 const opportunityColor = getOpportunityColor(
                   pass,
                   index,
-                  satellites
+                  satellites,
                 );
                 // Generate stable opportunity ID for cross-panel sync
                 const passTime = new Date(pass.start_time);
@@ -511,7 +556,7 @@ const MissionResultsPanel: React.FC = () => {
                       const originalIndex = state.missionData!.passes.findIndex(
                         (p) =>
                           p.start_time === pass.start_time &&
-                          p.target === pass.target
+                          p.target === pass.target,
                       );
                       navigateToPassWindow(originalIndex);
 
@@ -598,7 +643,7 @@ const MissionResultsPanel: React.FC = () => {
                                   <span className="text-gray-500 ml-1">
                                     (
                                     {pass.sar_data.incidence_near_deg.toFixed(
-                                      0
+                                      0,
                                     )}
                                     °-
                                     {pass.sar_data.incidence_far_deg.toFixed(0)}
@@ -649,7 +694,7 @@ const MissionResultsPanel: React.FC = () => {
                     <span className="text-gray-400">Mission Start:</span>
                     <span className="text-white">
                       {new Date(
-                        state.missionData.start_time.replace("+00:00", "Z")
+                        state.missionData.start_time.replace("+00:00", "Z"),
                       )
                         .toISOString()
                         .substring(0, 16)
@@ -660,7 +705,7 @@ const MissionResultsPanel: React.FC = () => {
                     <span className="text-gray-400">Mission End:</span>
                     <span className="text-white">
                       {new Date(
-                        state.missionData.end_time.replace("+00:00", "Z")
+                        state.missionData.end_time.replace("+00:00", "Z"),
                       )
                         .toISOString()
                         .substring(0, 16)
@@ -677,7 +722,7 @@ const MissionResultsPanel: React.FC = () => {
                     {/* Time scale header */}
                     {(() => {
                       const allPassTimes = sortedPasses.map((p) =>
-                        new Date(p.start_time.replace("+00:00", "Z")).getTime()
+                        new Date(p.start_time.replace("+00:00", "Z")).getTime(),
                       );
                       const firstMs = Math.min(...allPassTimes);
                       const lastMs = Math.max(...allPassTimes);
@@ -693,7 +738,7 @@ const MissionResultsPanel: React.FC = () => {
                       const formatTime = (d: Date) => {
                         const month = String(d.getUTCMonth() + 1).padStart(
                           2,
-                          "0"
+                          "0",
                         );
                         const day = String(d.getUTCDate()).padStart(2, "0");
                         const hours = String(d.getUTCHours()).padStart(2, "0");
@@ -734,7 +779,7 @@ const MissionResultsPanel: React.FC = () => {
                     <div className="space-y-4">
                       {state.missionData.targets.map((target, targetIdx) => {
                         const targetPasses = sortedPasses.filter(
-                          (pass) => pass.target === target.name
+                          (pass) => pass.target === target.name,
                         );
 
                         if (targetPasses.length === 0) return null;
@@ -742,8 +787,8 @@ const MissionResultsPanel: React.FC = () => {
                         // Pre-calculate all marker positions for collision detection
                         const allPassTimes = sortedPasses.map((p) =>
                           new Date(
-                            p.start_time.replace("+00:00", "Z")
-                          ).getTime()
+                            p.start_time.replace("+00:00", "Z"),
+                          ).getTime(),
                         );
                         const firstOpportunityMs = Math.min(...allPassTimes);
                         const lastOpportunityMs = Math.max(...allPassTimes);
@@ -758,7 +803,7 @@ const MissionResultsPanel: React.FC = () => {
                         const markerData = targetPasses
                           .map((pass, passIdx) => {
                             const startMs = new Date(
-                              pass.start_time.replace("+00:00", "Z")
+                              pass.start_time.replace("+00:00", "Z"),
                             ).getTime();
                             const position =
                               ((startMs - paddedStart) /
@@ -767,7 +812,7 @@ const MissionResultsPanel: React.FC = () => {
                             const globalIndex = sortedPasses.findIndex(
                               (p) =>
                                 p.start_time === pass.start_time &&
-                                p.target === pass.target
+                                p.target === pass.target,
                             );
                             return {
                               pass,
@@ -828,7 +873,7 @@ const MissionResultsPanel: React.FC = () => {
                                 const clusterCenter =
                                   cluster.reduce(
                                     (sum, m) => sum + m.position,
-                                    0
+                                    0,
                                   ) / cluster.length;
 
                                 if (cluster.length === 1) {
@@ -837,11 +882,11 @@ const MissionResultsPanel: React.FC = () => {
                                   const markerColor = getOpportunityColor(
                                     pass,
                                     globalIndex,
-                                    satellites
+                                    satellites,
                                   );
                                   const position = Math.max(
                                     2,
-                                    Math.min(98, cluster[0].position)
+                                    Math.min(98, cluster[0].position),
                                   );
 
                                   return (
@@ -863,7 +908,7 @@ const MissionResultsPanel: React.FC = () => {
                                               (p) =>
                                                 p.start_time ===
                                                   pass.start_time &&
-                                                p.target === pass.target
+                                                p.target === pass.target,
                                             );
                                           navigateToPassWindow(originalIndex);
                                         }}
@@ -873,7 +918,7 @@ const MissionResultsPanel: React.FC = () => {
                                           pass.target
                                         } - ${pass.start_time.substring(
                                           11,
-                                          19
+                                          19,
                                         )} UTC`}
                                       />
                                       <div
@@ -888,7 +933,7 @@ const MissionResultsPanel: React.FC = () => {
                                   // Multiple markers (2+): show stacked dots with colored number labels
                                   const position = Math.max(
                                     3,
-                                    Math.min(97, clusterCenter)
+                                    Math.min(97, clusterCenter),
                                   );
 
                                   return (
@@ -914,7 +959,7 @@ const MissionResultsPanel: React.FC = () => {
                                               getOpportunityColor(
                                                 marker.pass,
                                                 marker.globalIndex,
-                                                satellites
+                                                satellites,
                                               );
                                             return (
                                               <div
@@ -935,10 +980,10 @@ const MissionResultsPanel: React.FC = () => {
                                                           marker.pass
                                                             .start_time &&
                                                         p.target ===
-                                                          marker.pass.target
+                                                          marker.pass.target,
                                                     );
                                                   navigateToPassWindow(
-                                                    originalIndex
+                                                    originalIndex,
                                                   );
                                                 }}
                                                 title={`Opportunity ${
@@ -947,7 +992,7 @@ const MissionResultsPanel: React.FC = () => {
                                                   marker.pass.target
                                                 } - ${marker.pass.start_time.substring(
                                                   11,
-                                                  19
+                                                  19,
                                                 )} UTC`}
                                               />
                                             );
@@ -960,7 +1005,7 @@ const MissionResultsPanel: React.FC = () => {
                                             getOpportunityColor(
                                               marker.pass,
                                               marker.globalIndex,
-                                              satellites
+                                              satellites,
                                             );
                                           return (
                                             <span
@@ -987,12 +1032,12 @@ const MissionResultsPanel: React.FC = () => {
                     <div className="mt-6 space-y-2">
                       {sortedPasses.map((pass, index) => {
                         const passDate = new Date(
-                          pass.start_time.replace("+00:00", "Z")
+                          pass.start_time.replace("+00:00", "Z"),
                         );
                         const passColor = getOpportunityColor(
                           pass,
                           index,
-                          satellites
+                          satellites,
                         );
                         return (
                           <div
@@ -1067,8 +1112,8 @@ const MissionResultsPanel: React.FC = () => {
                       const targetsWithOpportunities =
                         state.missionData.targets.filter((target) =>
                           state.missionData!.passes.some(
-                            (pass) => pass.target === target.name
-                          )
+                            (pass) => pass.target === target.name,
+                          ),
                         );
                       return `${targetsWithOpportunities.length}/${state.missionData.targets.length}`;
                     })()}
@@ -1081,7 +1126,7 @@ const MissionResultsPanel: React.FC = () => {
                     state.missionData.sensor_fov_half_angle_deg
                       ? `${state.missionData.sensor_fov_half_angle_deg}°`
                       : `${(state.missionData.coverage_percentage || 0).toFixed(
-                          1
+                          1,
                         )}%`}
                   </div>
                   <div className="text-xs text-gray-400">
@@ -1149,7 +1194,7 @@ const MissionResultsPanel: React.FC = () => {
                               {count as number}
                             </span>
                           </div>
-                        )
+                        ),
                       )}
                     </div>
                   </div>

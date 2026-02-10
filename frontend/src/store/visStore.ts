@@ -3,8 +3,10 @@ import { JulianDate } from "cesium";
 
 export type SceneMode = "2D" | "3D";
 export type ViewMode = "single" | "split";
+export type UIMode = "simple" | "developer";
 
 interface LayerVisibility {
+  // Entity layers
   orbitLine: boolean;
   groundTrack: boolean;
   targets: boolean;
@@ -14,13 +16,26 @@ interface LayerVisibility {
   pointingCone: boolean;
   dayNightLighting: boolean;
   sarSwaths: boolean;
+  // Globe settings
+  terrain: boolean;
+  atmosphere: boolean;
+  gridLines: boolean;
+  fog: boolean;
+  // Post-processing
+  bloom: boolean;
+  fxaa: boolean;
 }
+
+export type BaseMapType = "cesium_ion" | "osm" | "dark";
 
 interface VisStore {
   // View configuration
   sceneModePrimary: SceneMode;
   sceneModeSecondary: SceneMode;
   viewMode: ViewMode;
+
+  // UI Mode (simple = mission planner, developer = all panels)
+  uiMode: UIMode;
 
   // Sidebar state
   leftSidebarOpen: boolean;
@@ -50,11 +65,13 @@ interface VisStore {
   setSceneModePrimary: (mode: SceneMode) => void;
   setSceneModeSecondary: (mode: SceneMode) => void;
   setViewMode: (mode: ViewMode) => void;
+  setUIMode: (mode: UIMode) => void;
+  toggleUIMode: () => void;
   setClockTime: (time: JulianDate | null) => void;
   setClockState: (
     time: JulianDate | null,
     shouldAnimate: boolean,
-    multiplier: number
+    multiplier: number,
   ) => void;
   setTimeWindow: (start: JulianDate | null, stop: JulianDate | null) => void;
   setSelectedOpportunity: (id: string | null) => void;
@@ -72,6 +89,9 @@ export const useVisStore = create<VisStore>((set) => ({
   sceneModeSecondary: "3D",
   viewMode: "single",
 
+  // UI Mode - simple (mission planner) by default
+  uiMode: "simple",
+
   // Sidebar state
   leftSidebarOpen: true,
   rightSidebarOpen: false,
@@ -87,15 +107,24 @@ export const useVisStore = create<VisStore>((set) => ({
   },
   selectedOpportunityId: null,
   activeLayers: {
-    orbitLine: true, // Default ON (satellite path with dynamic trail)
-    groundTrack: true, // Kept for compatibility
+    // Entity layers
+    orbitLine: true,
+    groundTrack: true,
     targets: true,
     footprints: true,
     labels: true,
     coverageAreas: false,
     pointingCone: true,
     dayNightLighting: true,
-    sarSwaths: true, // Default ON for SAR missions
+    sarSwaths: true,
+    // Globe settings
+    terrain: false, // Off by default for performance
+    atmosphere: true,
+    gridLines: false,
+    fog: false,
+    // Post-processing
+    bloom: false,
+    fxaa: true, // Anti-aliasing on by default
   },
   cameraPosition: null,
 
@@ -112,6 +141,11 @@ export const useVisStore = create<VisStore>((set) => ({
   setSceneModeSecondary: (mode) => set({ sceneModeSecondary: mode }),
 
   setViewMode: (mode) => set({ viewMode: mode }),
+  setUIMode: (mode) => set({ uiMode: mode }),
+  toggleUIMode: () =>
+    set((state) => ({
+      uiMode: state.uiMode === "simple" ? "developer" : "simple",
+    })),
   setClockTime: (time) => set({ clockTime: time }),
   setClockState: (time, shouldAnimate, multiplier) =>
     set({

@@ -8,6 +8,16 @@ export interface RepairSettings {
   objective: RepairObjective;
 }
 
+/**
+ * Default "safe" repair settings - Conservative preset.
+ * Use this as initial state for repair mode UI.
+ */
+export const DEFAULT_SAFE_REPAIR_SETTINGS: RepairSettings = {
+  soft_lock_policy: "freeze_soft",
+  max_changes: 10,
+  objective: "minimize_changes",
+};
+
 interface PresetConfig {
   name: string;
   icon: typeof Shield;
@@ -26,7 +36,7 @@ const PRESETS: Record<string, PresetConfig> = {
     description: "Minimal changes. Freeze soft locks, minimize disruption.",
     settings: {
       soft_lock_policy: "freeze_soft",
-      max_changes: 5,
+      max_changes: 10,
       objective: "minimize_changes",
     },
   },

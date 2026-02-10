@@ -15,7 +15,17 @@ import {
   Radio,
   History,
   RotateCcw,
+  FlaskConical,
+  CheckCircle,
+  XCircle,
+  Play,
 } from "lucide-react";
+import {
+  listWorkflowScenarios,
+  runWorkflowValidation,
+  WorkflowScenario,
+  WorkflowValidationReport,
+} from "../api/workflowValidation";
 import * as yaml from "js-yaml";
 import debug from "../utils/debug";
 
@@ -153,8 +163,22 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   onConfigUpdate,
 }) => {
   const [activeTab, setActiveTab] = useState<
-    "ground-stations" | "satellites" | "sar-modes" | "settings" | "snapshots"
+    | "ground-stations"
+    | "satellites"
+    | "sar-modes"
+    | "settings"
+    | "snapshots"
+    | "validation"
   >("ground-stations");
+  // Validation state (PR-VALIDATION-01)
+  const [validationScenarios, setValidationScenarios] = useState<
+    WorkflowScenario[]
+  >([]);
+  const [selectedScenarioId, setSelectedScenarioId] = useState<string>("");
+  const [isRunningValidation, setIsRunningValidation] = useState(false);
+  const [validationReport, setValidationReport] =
+    useState<WorkflowValidationReport | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
   const [config, setConfig] = useState<Config | null>(null);
   const [editingStation, setEditingStation] =
     useState<EditableGroundStation | null>(null);
@@ -183,7 +207,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const [sarModes, setSarModes] = useState<Record<string, SARMode>>({});
   const [editingSarMode, setEditingSarMode] = useState<string | null>(null);
   const [editingSarModeData, setEditingSarModeData] = useState<SARMode | null>(
-    null
+    null,
   );
   const [isSavingSarMode, setIsSavingSarMode] = useState(false);
   // Config snapshots state
@@ -192,7 +216,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const [snapshotDescription, setSnapshotDescription] = useState("");
   const [isCreatingSnapshot, setIsCreatingSnapshot] = useState(false);
   const [isRestoringSnapshot, setIsRestoringSnapshot] = useState<string | null>(
-    null
+    null,
   );
   // Multi-satellite selection for constellation support
   const [selectedSatelliteIds, setSelectedSatelliteIds] = useState<string[]>(
@@ -200,7 +224,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
       // Load selected satellites from localStorage on mount
       const stored = localStorage.getItem("selectedSatelliteIds");
       return stored ? JSON.parse(stored) : [];
-    }
+    },
   );
 
   useEffect(() => {
@@ -211,9 +235,44 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
       fetchMissionSettings();
       fetchSarModes();
       fetchSnapshots();
+      fetchValidationScenarios();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
+
+  const fetchValidationScenarios = async () => {
+    try {
+      const scenarios = await listWorkflowScenarios();
+      setValidationScenarios(scenarios);
+      if (scenarios.length > 0 && !selectedScenarioId) {
+        setSelectedScenarioId(scenarios[0].id);
+      }
+    } catch (error) {
+      console.error("Error fetching validation scenarios:", error);
+    }
+  };
+
+  const handleRunValidation = async () => {
+    if (!selectedScenarioId) return;
+
+    setIsRunningValidation(true);
+    setValidationError(null);
+    setValidationReport(null);
+
+    try {
+      const report = await runWorkflowValidation({
+        scenario_id: selectedScenarioId,
+        dry_run: true,
+      });
+      setValidationReport(report);
+    } catch (error) {
+      setValidationError(
+        error instanceof Error ? error.message : "Validation failed",
+      );
+    } finally {
+      setIsRunningValidation(false);
+    }
+  };
 
   const fetchConfig = async () => {
     try {
@@ -251,7 +310,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         // If no satellites are selected yet, auto-select the first active one
         if (selectedSatelliteIds.length === 0 && fetchedSatellites.length > 0) {
           const firstActive = fetchedSatellites.find(
-            (s: SatelliteConfig) => s.active
+            (s: SatelliteConfig) => s.active,
           );
           if (firstActive) {
             handleToggleSatellite(firstActive);
@@ -270,10 +329,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
             }));
           localStorage.setItem(
             "selectedSatellites",
-            JSON.stringify(selectedSats)
+            JSON.stringify(selectedSats),
           );
           debug.info(
-            `Synced constellation to localStorage: ${selectedSats.length} satellites`
+            `Synced constellation to localStorage: ${selectedSats.length} satellites`,
           );
         }
       }
@@ -371,7 +430,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         `/api/v1/config/snapshots/${snapshotId}/restore`,
         {
           method: "POST",
-        }
+        },
       );
       const data = await response.json();
       if (data.success) {
@@ -381,7 +440,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         await fetchSatellites();
         if (onConfigUpdate) onConfigUpdate();
         alert(
-          `Config restored from snapshot. Backup created: ${data.backup_id}`
+          `Config restored from snapshot. Backup created: ${data.backup_id}`,
         );
       }
     } catch (error) {
@@ -409,7 +468,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const updateMissionSetting = async (
     section: string,
     key: string,
-    value: string | number | boolean | Record<string, unknown>
+    value: string | number | boolean | Record<string, unknown>,
   ) => {
     if (!isEditingSettings) return;
     setHasUnsavedChanges(true);
@@ -461,7 +520,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const saveGroundStation = async (
     station: EditableGroundStation,
-    isNew: boolean = false
+    isNew: boolean = false,
   ) => {
     try {
       // Convert form values to proper numeric types for API
@@ -514,14 +573,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     try {
       const response = await fetch(
         `/api/config/ground-stations/${encodeURIComponent(
-          deleteConfirmation.station.name
+          deleteConfirmation.station.name,
         )}`,
-        { method: "DELETE" }
+        { method: "DELETE" },
       );
 
       if (response.ok) {
         debug.info(
-          `Deleted ground station: ${deleteConfirmation.station?.name}`
+          `Deleted ground station: ${deleteConfirmation.station?.name}`,
         );
         await fetchConfig();
         if (onConfigUpdate) onConfigUpdate();
@@ -550,7 +609,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   const handleFileUpload = async (
-    event: React.ChangeEvent<HTMLInputElement>
+    event: React.ChangeEvent<HTMLInputElement>,
   ) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -714,7 +773,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         // If the deleted satellite was selected, remove it from selection
         if (selectedSatelliteIds.includes(satelliteId)) {
           const newIds = selectedSatelliteIds.filter(
-            (id) => id !== satelliteId
+            (id) => id !== satelliteId,
           );
           setSelectedSatelliteIds(newIds);
           localStorage.setItem("selectedSatelliteIds", JSON.stringify(newIds));
@@ -766,7 +825,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     window.dispatchEvent(
       new CustomEvent("constellationSelectionChanged", {
         detail: { satellites: selectedSats },
-      })
+      }),
     );
   };
 
@@ -825,7 +884,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-        }
+        },
       );
 
       if (response.ok) {
@@ -835,14 +894,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
           data,
           {
             summary: `✅ TLE updated for ${data.satellite?.name}`,
-          }
+          },
         );
         await fetchSatellites(); // Refresh satellite list
       } else {
         const errorData = await response.json().catch(() => ({}));
         debug.apiError(
           `POST /api/satellites/${satelliteId}/refresh-tle`,
-          errorData
+          errorData,
         );
       }
     } catch (error) {
@@ -947,6 +1006,17 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
           >
             <History className="w-4 h-4" />
             <span>Snapshots</span>
+          </button>
+          <button
+            className={`px-4 py-2 rounded flex items-center space-x-2 ${
+              activeTab === "validation"
+                ? "bg-blue-600 text-white"
+                : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+            }`}
+            onClick={() => setActiveTab("validation")}
+          >
+            <FlaskConical className="w-4 h-4" />
+            <span>Validation</span>
           </button>
         </div>
 
@@ -1412,7 +1482,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                                 setEditingSatellite({
                                   ...editingSatellite,
                                   sensor_fov_half_angle_deg: parseFloat(
-                                    e.target.value
+                                    e.target.value,
                                   ),
                                 })
                               }
@@ -1508,13 +1578,13 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                                 <span className="text-xs text-gray-500">
                                   TLE Updated:{" "}
                                   {new Date(
-                                    satellite.tle_updated_at
+                                    satellite.tle_updated_at,
                                   ).toLocaleDateString()}
                                 </span>
                                 <div className="relative group">
                                   <span
                                     className={`text-xs px-2 py-1 rounded font-medium ${getTleAgeColor(
-                                      getTleAgeDays(satellite.tle_updated_at)
+                                      getTleAgeDays(satellite.tle_updated_at),
                                     )}`}
                                   >
                                     {getTleAgeDays(satellite.tle_updated_at)}{" "}
@@ -1526,7 +1596,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                                   </span>
                                   <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-1 px-2 py-1 bg-gray-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-10">
                                     {getTleAgeTooltip(
-                                      getTleAgeDays(satellite.tle_updated_at)
+                                      getTleAgeDays(satellite.tle_updated_at),
                                     )}
                                   </div>
                                 </div>
@@ -1711,7 +1781,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                                       "Content-Type": "application/json",
                                     },
                                     body: JSON.stringify(missionSettings),
-                                  }
+                                  },
                                 );
                                 if (response.ok) {
                                   setIsEditingSettings(false);
@@ -1721,7 +1791,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                               } catch (error) {
                                 console.error(
                                   "Failed to save mission settings:",
-                                  error
+                                  error,
                                 );
                               }
                             }}
@@ -1768,7 +1838,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                             </h4>
                             <div className="grid grid-cols-3 gap-3">
                               {Object.entries(
-                                durations as Record<string, number>
+                                durations as Record<string, number>,
                               ).map(([durationType, value]) => (
                                 <div key={durationType} className="space-y-2">
                                   <label className="text-gray-300 text-sm capitalize">
@@ -1789,7 +1859,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                                       updateMissionSetting(
                                         "pass_duration",
                                         missionType,
-                                        updatedDurations
+                                        updatedDurations,
                                       );
                                     }}
                                     disabled={!isEditingSettings}
@@ -1814,7 +1884,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                     </h3>
                     <div className="space-y-4">
                       {Object.entries(
-                        missionSettings.elevation_constraints || {}
+                        missionSettings.elevation_constraints || {},
                       )
                         .filter(([missionType]) => missionType !== "tracking")
                         .map(([missionType, constraints]) => (
@@ -1827,7 +1897,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                             </h4>
                             <div className="grid grid-cols-3 gap-3">
                               {Object.entries(
-                                constraints as Record<string, number>
+                                constraints as Record<string, number>,
                               ).map(([constraintType, value]) => (
                                 <div key={constraintType} className="space-y-2">
                                   <label className="text-gray-300 text-sm capitalize">
@@ -1838,7 +1908,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                                     value={String(value || "")}
                                     onChange={(e) => {
                                       const newValue = parseFloat(
-                                        e.target.value
+                                        e.target.value,
                                       );
                                       const updatedConstraints = {
                                         ...(constraints as Record<
@@ -1850,7 +1920,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                                       updateMissionSetting(
                                         "elevation_constraints",
                                         missionType,
-                                        updatedConstraints
+                                        updatedConstraints,
                                       );
                                     }}
                                     disabled={!isEditingSettings}
@@ -1876,7 +1946,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                     </h3>
                     <div className="space-y-4">
                       {Object.entries(
-                        missionSettings.planning_constraints || {}
+                        missionSettings.planning_constraints || {},
                       ).map(([constraintType, value]) => (
                         <div
                           key={constraintType}
@@ -1889,7 +1959,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                           typeof value === "object" ? (
                             <div className="flex space-x-4">
                               {Object.entries(
-                                value as Record<string, number>
+                                value as Record<string, number>,
                               ).map(([weatherKey, weatherValue]) => (
                                 <div
                                   key={weatherKey}
@@ -1909,7 +1979,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                                       updateMissionSetting(
                                         "planning_constraints",
                                         constraintType,
-                                        updatedWeather
+                                        updatedWeather,
                                       );
                                     }}
                                     disabled={!isEditingSettings}
@@ -1928,8 +1998,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                                 typeof value === "boolean"
                                   ? "checkbox"
                                   : typeof value === "number"
-                                  ? "number"
-                                  : "text"
+                                    ? "number"
+                                    : "text"
                               }
                               checked={
                                 typeof value === "boolean"
@@ -1947,12 +2017,12 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                                   typeof value === "boolean"
                                     ? e.target.checked
                                     : typeof value === "number"
-                                    ? Number(e.target.value)
-                                    : e.target.value;
+                                      ? Number(e.target.value)
+                                      : e.target.value;
                                 updateMissionSetting(
                                   "planning_constraints",
                                   constraintType,
-                                  newValue
+                                  newValue,
                                 );
                               }}
                               disabled={!isEditingSettings}
@@ -1979,7 +2049,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                     </h3>
                     <div className="space-y-4">
                       {Object.entries(
-                        missionSettings.output_settings || {}
+                        missionSettings.output_settings || {},
                       ).map(([key, value]) => (
                         <div key={key} className="space-y-2">
                           <label className="text-gray-300 text-sm capitalize font-semibold">
@@ -2000,7 +2070,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                                 value as Record<
                                   string,
                                   string | number | boolean
-                                >
+                                >,
                               ).map(([subKey, subValue]) => (
                                 <div
                                   key={subKey}
@@ -2023,7 +2093,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                                         updateMissionSetting(
                                           "output_settings",
                                           key,
-                                          updatedObj
+                                          updatedObj,
                                         );
                                       }}
                                       disabled={!isEditingSettings}
@@ -2051,7 +2121,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                                         updateMissionSetting(
                                           "output_settings",
                                           key,
-                                          updatedObj
+                                          updatedObj,
                                         );
                                       }}
                                       disabled={!isEditingSettings}
@@ -2072,7 +2142,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                                 updateMissionSetting(
                                   "output_settings",
                                   key,
-                                  e.target.value === "true"
+                                  e.target.value === "true",
                                 )
                               }
                               disabled={!isEditingSettings}
@@ -2093,7 +2163,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                                 updateMissionSetting(
                                   "output_settings",
                                   key,
-                                  e.target.value
+                                  e.target.value,
                                 )
                               }
                               disabled={!isEditingSettings}
@@ -2128,7 +2198,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                                   updateMissionSetting(
                                     "defaults",
                                     key,
-                                    e.target.value === "true"
+                                    e.target.value === "true",
                                   )
                                 }
                                 disabled={!isEditingSettings}
@@ -2149,7 +2219,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                                   updateMissionSetting(
                                     "defaults",
                                     key,
-                                    parseFloat(e.target.value)
+                                    parseFloat(e.target.value),
                                   )
                                 }
                                 disabled={!isEditingSettings}
@@ -2168,7 +2238,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                                   updateMissionSetting(
                                     "defaults",
                                     key,
-                                    e.target.value
+                                    e.target.value,
                                   )
                                 }
                                 disabled={!isEditingSettings}
@@ -2180,7 +2250,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                               />
                             )}
                           </div>
-                        )
+                        ),
                       )}
                     </div>
                   </div>
@@ -2267,7 +2337,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                                       incidence_angle: {
                                         ...editingSarModeData.incidence_angle,
                                         recommended_min: parseFloat(
-                                          e.target.value
+                                          e.target.value,
                                         ),
                                       },
                                     })
@@ -2291,7 +2361,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                                       incidence_angle: {
                                         ...editingSarModeData.incidence_angle,
                                         recommended_max: parseFloat(
-                                          e.target.value
+                                          e.target.value,
                                         ),
                                       },
                                     })
@@ -2315,7 +2385,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                                       incidence_angle: {
                                         ...editingSarModeData.incidence_angle,
                                         absolute_min: parseFloat(
-                                          e.target.value
+                                          e.target.value,
                                         ),
                                       },
                                     })
@@ -2339,7 +2409,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                                       incidence_angle: {
                                         ...editingSarModeData.incidence_angle,
                                         absolute_max: parseFloat(
-                                          e.target.value
+                                          e.target.value,
                                         ),
                                       },
                                     })
@@ -2552,6 +2622,210 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                   )}
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* Validation Tab Content (PR-VALIDATION-01) */}
+          {activeTab === "validation" && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-white flex items-center space-x-2">
+                  <FlaskConical className="w-5 h-5" />
+                  <span>Workflow Validation</span>
+                </h3>
+                <span className="text-xs text-gray-500">Debug/Admin Mode</span>
+              </div>
+
+              <p className="text-gray-400 text-sm">
+                Run deterministic validation scenarios to verify mission
+                analysis → planning → commit workflows.
+              </p>
+
+              {/* Scenario Selection */}
+              <div className="bg-gray-800 p-4 rounded-lg space-y-4">
+                <div>
+                  <label className="block text-sm text-gray-400 mb-2">
+                    Select Scenario
+                  </label>
+                  <select
+                    value={selectedScenarioId}
+                    onChange={(e) => setSelectedScenarioId(e.target.value)}
+                    className="w-full bg-gray-700 text-white rounded px-3 py-2 border border-gray-600 focus:border-blue-500 focus:outline-none"
+                  >
+                    {validationScenarios.length === 0 ? (
+                      <option value="">No scenarios available</option>
+                    ) : (
+                      validationScenarios.map((scenario) => (
+                        <option key={scenario.id} value={scenario.id}>
+                          {scenario.name} ({scenario.num_satellites} satellites,{" "}
+                          {scenario.num_targets} targets)
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
+
+                <button
+                  onClick={handleRunValidation}
+                  disabled={isRunningValidation || !selectedScenarioId}
+                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+                >
+                  {isRunningValidation ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Running...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-4 h-4" />
+                      <span>Run Validation</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Error Display */}
+              {validationError && (
+                <div className="bg-red-900/50 border border-red-600 rounded-lg p-4 flex items-start space-x-3">
+                  <XCircle className="w-5 h-5 text-red-400 mt-0.5" />
+                  <div>
+                    <h4 className="text-red-200 font-medium">
+                      Validation Failed
+                    </h4>
+                    <p className="text-red-300 text-sm mt-1">
+                      {validationError}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Report Display */}
+              {validationReport && (
+                <div
+                  className={`border rounded-lg p-4 ${
+                    validationReport.passed
+                      ? "bg-green-900/30 border-green-600"
+                      : "bg-red-900/30 border-red-600"
+                  }`}
+                >
+                  <div className="flex items-center space-x-3 mb-4">
+                    {validationReport.passed ? (
+                      <CheckCircle className="w-6 h-6 text-green-400" />
+                    ) : (
+                      <XCircle className="w-6 h-6 text-red-400" />
+                    )}
+                    <h4
+                      className={`text-lg font-medium ${
+                        validationReport.passed
+                          ? "text-green-200"
+                          : "text-red-200"
+                      }`}
+                    >
+                      {validationReport.passed
+                        ? "Validation Passed"
+                        : "Validation Failed"}
+                    </h4>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <span className="text-gray-400">Scenario:</span>
+                      <span className="text-white ml-2">
+                        {validationReport.scenario_name}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-gray-400">Runtime:</span>
+                      <span className="text-white ml-2">
+                        {validationReport.total_runtime_ms.toFixed(0)}ms
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-gray-400">Invariants:</span>
+                      <span className="text-white ml-2">
+                        {validationReport.passed_invariants}/
+                        {validationReport.total_invariants} passed
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-gray-400">Report Hash:</span>
+                      <span className="text-white ml-2 font-mono text-xs">
+                        {validationReport.report_hash}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Counts */}
+                  <div className="mt-4 pt-4 border-t border-gray-700">
+                    <h5 className="text-gray-300 text-sm font-medium mb-2">
+                      Counts
+                    </h5>
+                    <div className="grid grid-cols-4 gap-2 text-sm">
+                      <div className="bg-gray-800 rounded p-2 text-center">
+                        <div className="text-xl font-bold text-white">
+                          {validationReport.counts.opportunities}
+                        </div>
+                        <div className="text-gray-400 text-xs">
+                          Opportunities
+                        </div>
+                      </div>
+                      <div className="bg-gray-800 rounded p-2 text-center">
+                        <div className="text-xl font-bold text-white">
+                          {validationReport.counts.planned}
+                        </div>
+                        <div className="text-gray-400 text-xs">Planned</div>
+                      </div>
+                      <div className="bg-gray-800 rounded p-2 text-center">
+                        <div className="text-xl font-bold text-white">
+                          {validationReport.counts.committed}
+                        </div>
+                        <div className="text-gray-400 text-xs">Committed</div>
+                      </div>
+                      <div className="bg-gray-800 rounded p-2 text-center">
+                        <div className="text-xl font-bold text-white">
+                          {validationReport.counts.conflicts}
+                        </div>
+                        <div className="text-gray-400 text-xs">Conflicts</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Invariants */}
+                  {validationReport.invariants.length > 0 && (
+                    <div className="mt-4 pt-4 border-t border-gray-700">
+                      <h5 className="text-gray-300 text-sm font-medium mb-2">
+                        Invariant Checks
+                      </h5>
+                      <div className="space-y-2">
+                        {validationReport.invariants.map((inv, idx) => (
+                          <div
+                            key={idx}
+                            className={`flex items-center space-x-2 text-sm ${
+                              inv.passed ? "text-green-300" : "text-red-300"
+                            }`}
+                          >
+                            {inv.passed ? (
+                              <CheckCircle className="w-4 h-4" />
+                            ) : (
+                              <XCircle className="w-4 h-4" />
+                            )}
+                            <span className="font-mono text-xs">
+                              {inv.invariant}
+                            </span>
+                            <span className="text-gray-400">-</span>
+                            <span>{inv.message}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Report ID for reference */}
+                  <div className="mt-4 pt-4 border-t border-gray-700 text-xs text-gray-500">
+                    Report ID: {validationReport.report_id}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

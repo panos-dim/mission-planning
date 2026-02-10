@@ -603,22 +603,25 @@ class HardLockCommittedResponse(BaseModel):
 @router.patch("/acquisition/{acquisition_id}/lock", response_model=UpdateLockResponse)
 async def update_acquisition_lock(
     acquisition_id: str,
-    lock_level: str = Query(..., description="New lock level: none | soft | hard"),
+    lock_level: str = Query(..., description="New lock level: none | hard"),
 ) -> UpdateLockResponse:
     """
     Update the lock level of a single acquisition.
 
-    Lock levels:
-    - none: Fully flexible, can be modified/dropped by repair
-    - soft: Modifiable depending on repair policy (allow_shift, allow_replace)
+    Lock levels (PR-OPS-REPAIR-DEFAULT-01: simplified to hard/none only):
+    - none: Fully flexible, can be rearranged by repair
     - hard: Immutable, never touched by repair mode
 
     Note: Cannot unlock (set to none) acquisitions in 'executing' or 'locked' state.
     """
     db = get_schedule_db()
 
+    # PR-OPS-REPAIR-DEFAULT-01: Normalize soft → none
+    if lock_level == "soft":
+        lock_level = "none"
+
     # Validate lock level
-    valid_locks = ["none", "soft", "hard"]
+    valid_locks = ["none", "hard"]
     if lock_level not in valid_locks:
         raise HTTPException(
             status_code=400,
@@ -662,28 +665,35 @@ async def bulk_update_lock(request: BulkLockRequest) -> BulkLockResponse:
     """
     Update lock level for multiple acquisitions.
 
+    PR-OPS-REPAIR-DEFAULT-01: Only hard/none lock levels supported.
+
     Useful for:
-    - "Soft-lock selected" - Set selected acquisitions to soft lock
-    - "Unlock selected" - Set selected acquisitions to none (tentative only)
+    - "Hard-lock selected" - Protect acquisitions from repair
+    - "Unlock selected" - Make acquisitions flexible for repair
 
     Note: Acquisitions in 'executing' state cannot be unlocked.
     """
     db = get_schedule_db()
 
+    # PR-OPS-REPAIR-DEFAULT-01: Normalize soft → none
+    lock_level = request.lock_level
+    if lock_level == "soft":
+        lock_level = "none"
+
     # Validate lock level
-    valid_locks = ["none", "soft", "hard"]
-    if request.lock_level not in valid_locks:
+    valid_locks = ["none", "hard"]
+    if lock_level not in valid_locks:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid lock_level: {request.lock_level}. Must be one of {valid_locks}",
+            detail=f"Invalid lock_level: {lock_level}. Must be one of {valid_locks}",
         )
 
     if not request.acquisition_ids:
         raise HTTPException(status_code=400, detail="No acquisition IDs provided")
 
-    result = db.bulk_update_lock_levels(request.acquisition_ids, request.lock_level)
+    result = db.bulk_update_lock_levels(request.acquisition_ids, lock_level)
 
-    message = f"Updated {result['updated']} acquisitions to '{request.lock_level}'"
+    message = f"Updated {result['updated']} acquisitions to '{lock_level}'"
     if result["failed"]:
         message += f" ({len(result['failed'])} failed)"
 
@@ -878,6 +888,78 @@ async def commit_plan(request: CommitPlanRequest) -> CommitPlanResponse:
 # =============================================================================
 
 
+def _check_commit_conflicts(
+    db: "ScheduleDB",
+    items: List["DirectCommitItem"],
+    workspace_id: Optional[str],
+) -> List[str]:
+    """
+    Check if new items would conflict with existing committed acquisitions.
+
+    Returns a list of conflict descriptions (empty if no conflicts).
+    """
+    from datetime import datetime as dt
+
+    conflicts: List[str] = []
+
+    # Get time range for the new items
+    if not items:
+        return conflicts
+
+    start_times = [item.start_time for item in items]
+    end_times = [item.end_time for item in items]
+    min_time = min(start_times)
+    max_time = max(end_times)
+
+    # Get existing committed acquisitions in this time range
+    existing = db.get_acquisitions_in_horizon(
+        start_time=min_time,
+        end_time=max_time,
+        workspace_id=workspace_id,
+        include_tentative=False,  # Only check against committed acquisitions
+    )
+
+    # Filter to only committed state
+    existing = [a for a in existing if a.state == "committed"]
+
+    if not existing:
+        return conflicts
+
+    # Group existing by satellite
+    existing_by_sat: Dict[str, List] = {}
+    for acq in existing:
+        if acq.satellite_id not in existing_by_sat:
+            existing_by_sat[acq.satellite_id] = []
+        existing_by_sat[acq.satellite_id].append(acq)
+
+    # Check each new item for conflicts
+    for item in items:
+        sat_existing = existing_by_sat.get(item.satellite_id, [])
+
+        for existing_acq in sat_existing:
+            # Parse times
+            try:
+                new_start = dt.fromisoformat(item.start_time.replace("Z", "+00:00"))
+                new_end = dt.fromisoformat(item.end_time.replace("Z", "+00:00"))
+                exist_start = dt.fromisoformat(
+                    existing_acq.start_time.replace("Z", "+00:00")
+                )
+                exist_end = dt.fromisoformat(
+                    existing_acq.end_time.replace("Z", "+00:00")
+                )
+            except (ValueError, AttributeError):
+                continue
+
+            # Check for overlap: two intervals overlap if start1 < end2 AND start2 < end1
+            if new_start < exist_end and exist_start < new_end:
+                conflicts.append(
+                    f"{item.satellite_id}/{item.target_id} overlaps with "
+                    f"existing {existing_acq.target_id} at {item.start_time[:19]}"
+                )
+
+    return conflicts
+
+
 class DirectCommitItem(BaseModel):
     """Single item to commit directly (from frontend)."""
 
@@ -925,9 +1007,10 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
     Directly commit acquisitions without a pre-existing plan.
 
     This endpoint supports the frontend's "Promote to Orders" workflow by:
-    1. Creating a plan record for audit/traceability
-    2. Creating plan items from the provided schedule
-    3. Committing the plan to create acquisitions
+    1. Checking for conflicts with existing committed acquisitions
+    2. Creating a plan record for audit/traceability
+    3. Creating plan items from the provided schedule
+    4. Committing the plan to create acquisitions
 
     This is a convenience endpoint that wraps plan creation + commit in one call.
     """
@@ -938,6 +1021,16 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
 
     if not request.items:
         raise HTTPException(status_code=400, detail="No items to commit")
+
+    # Check for conflicts with existing committed acquisitions
+    conflicts = _check_commit_conflicts(db, request.items, request.workspace_id)
+    if conflicts:
+        conflict_details = "; ".join(conflicts[:3])  # Show first 3 conflicts
+        more = f" (+{len(conflicts) - 3} more)" if len(conflicts) > 3 else ""
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot commit: {len(conflicts)} conflict(s) detected. {conflict_details}{more}",
+        )
 
     try:
         # Generate run_id and input hash
@@ -1509,13 +1602,14 @@ class RepairPlanRequestModel(BaseModel):
     include_tentative: bool = Field(default=True, description="Include tentative acqs")
 
     # Repair-specific
+    # PR-OPS-REPAIR-DEFAULT-01: Full flexibility defaults
     repair_scope: str = Field(
         default="workspace_horizon",
         description="'workspace_horizon', 'satellite_subset', or 'target_subset'",
     )
     soft_lock_policy: str = Field(
         default="allow_replace",
-        description="'allow_shift', 'allow_replace', or 'freeze_soft'",
+        description="Deprecated: soft locks no longer exist. All unlocked items are fully flexible.",
     )
     max_changes: int = Field(default=100, ge=0, description="Max changes allowed")
     objective: str = Field(
@@ -1565,6 +1659,10 @@ class RepairDiffResponse(BaseModel):
     moved: List[MovedAcquisitionInfoResponse] = Field(default_factory=list)
     reason_summary: Dict[str, List[Dict[str, str]]] = Field(default_factory=dict)
     change_score: ChangeScoreResponse = Field(default_factory=ChangeScoreResponse)
+    hard_lock_warnings: List[str] = Field(
+        default_factory=list,
+        description="Warnings about hard-locked acquisitions that could not be resolved",
+    )
 
 
 class MetricsComparisonResponse(BaseModel):
@@ -1888,6 +1986,7 @@ async def create_repair_plan(
             num_changes=repair_diff.change_score.num_changes,
             percent_changed=repair_diff.change_score.percent_changed,
         ),
+        hard_lock_warnings=repair_diff.hard_lock_warnings,
     )
 
     # Build commit preview

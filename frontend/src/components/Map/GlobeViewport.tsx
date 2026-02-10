@@ -26,6 +26,9 @@ import { useTargetAddStore } from "../../store/targetAddStore";
 import { usePreviewTargetsStore } from "../../store/previewTargetsStore";
 import { useSwathStore } from "../../store/swathStore";
 import { useMapClickToCartographic } from "../../hooks/useMapClickToCartographic";
+import { useConflictMapHighlight } from "../../hooks/useConflictMapHighlight";
+import { useRepairMapHighlight } from "../../hooks/useRepairMapHighlight";
+import { useUnifiedMapHighlight } from "../../hooks/useUnifiedMapHighlight";
 import SlewVisualizationLayer from "./SlewVisualizationLayer";
 import { SlewCanvasOverlay } from "./SlewCanvasOverlay";
 import SwathDebugOverlay from "./SwathDebugOverlay";
@@ -115,6 +118,16 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
   // Swath store for SAR swath selection and debug
   const { selectSwath, setHoveredSwath, updateDebugInfo, debugEnabled } =
     useSwathStore();
+
+  // Conflict highlighting on map (PR-CONFLICT-UX-02)
+  useConflictMapHighlight(viewerRef);
+
+  // Repair diff highlighting on map (PR-REPAIR-UX-01)
+  useRepairMapHighlight(viewerRef);
+
+  // Unified map highlighting (PR-MAP-HIGHLIGHT-01)
+  // Provides consistent entity ID resolution, ghost clone fallback, and timeline focus reliability
+  useUnifiedMapHighlight(viewerRef);
 
   // Use shared CZML if provided, otherwise use state CZML
   const czmlData = sharedCzml || state.czmlData;
@@ -213,7 +226,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
         // Only switch to fallback if Ion has actual errors
         if (baseLayer && !baseLayer.ready && baseLayer.errorEvent) {
           console.warn(
-            `[${viewportId}] Cesium Ion failed, switching to OSM fallback`
+            `[${viewportId}] Cesium Ion failed, switching to OSM fallback`,
           );
           imageryReplacedRef.current = true;
           viewer.imageryLayers.removeAll();
@@ -279,7 +292,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
       } catch (error) {
         console.warn(
           `[${viewportId}] Error configuring camera controls:`,
-          error
+          error,
         );
       }
     }
@@ -299,7 +312,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
           setCesiumViewer(viewerRef.current);
           registered = true;
           console.log(
-            "[GlobeViewport] Registered primary viewer with MissionContext"
+            "[GlobeViewport] Registered primary viewer with MissionContext",
           );
         }
       }
@@ -370,7 +383,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
             setClockState(
               viewer.clock.currentTime,
               viewer.clock.shouldAnimate,
-              viewer.clock.multiplier
+              viewer.clock.multiplier,
             );
           }
         };
@@ -416,7 +429,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
       // Silently sync clock state
     } else {
       debug.warn(
-        `[${viewportId}] Cannot sync clock - viewer.clock not available`
+        `[${viewportId}] Cannot sync clock - viewer.clock not available`,
       );
     }
   }, [clockTime, clockShouldAnimate, clockMultiplier, viewportId, viewMode]);
@@ -521,7 +534,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
             `[${viewportId}] Error setting entity visibility for ${
               entity.name || entity.id
             }:`,
-            error
+            error,
           );
         }
       });
@@ -530,9 +543,40 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
     // Day/night lighting
     if (viewer.scene.globe) {
       viewer.scene.globe.enableLighting = activeLayers.dayNightLighting;
-      viewer.scene.globe.showGroundAtmosphere = activeLayers.dayNightLighting;
+      viewer.scene.globe.showGroundAtmosphere = activeLayers.atmosphere;
       if (viewer.scene.sun) {
         viewer.scene.sun.show = activeLayers.dayNightLighting;
+      }
+
+      // Atmosphere (sky dome)
+      if (viewer.scene.skyAtmosphere) {
+        viewer.scene.skyAtmosphere.show = activeLayers.atmosphere;
+      }
+
+      // Fog effect
+      viewer.scene.fog.enabled = activeLayers.fog;
+      viewer.scene.fog.density = 0.0002;
+
+      // Grid lines (graticule) - uses imagery layer
+      // Note: Grid lines would require a custom imagery provider
+    }
+
+    // Post-processing effects
+    if (viewer.scene.postProcessStages) {
+      // FXAA anti-aliasing
+      if (viewer.scene.postProcessStages.fxaa) {
+        viewer.scene.postProcessStages.fxaa.enabled = activeLayers.fxaa;
+      }
+
+      // Bloom effect
+      if (viewer.scene.postProcessStages.bloom) {
+        viewer.scene.postProcessStages.bloom.enabled = activeLayers.bloom;
+        viewer.scene.postProcessStages.bloom.glowOnly = false;
+        viewer.scene.postProcessStages.bloom.contrast = 128;
+        viewer.scene.postProcessStages.bloom.brightness = -0.3;
+        viewer.scene.postProcessStages.bloom.delta = 1.0;
+        viewer.scene.postProcessStages.bloom.sigma = 3.78;
+        viewer.scene.postProcessStages.bloom.stepSize = 5.0;
       }
     }
   }, [activeLayers, viewportId, mode]);
@@ -564,7 +608,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
             try {
               if (!viewer.clock) {
                 console.warn(
-                  `[${viewportId}] Clock not available for configuration`
+                  `[${viewportId}] Clock not available for configuration`,
                 );
                 return;
               }
@@ -587,7 +631,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
                       viewer.timeline.resize();
                     }
                   },
-                  { timeout: 100 }
+                  { timeout: 100 },
                 );
               }
 
@@ -599,7 +643,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
                       viewer.animation.resize();
                     }
                   },
-                  { timeout: 100 }
+                  { timeout: 100 },
                 );
               }
 
@@ -608,7 +652,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
               console.error(`[${viewportId}] Error configuring clock:`, error);
             }
           },
-          { timeout: 150 }
+          { timeout: 150 },
         );
       }
     } catch (error) {
@@ -634,7 +678,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
 
         // Create new handler
         eventHandlerRef.current = new ScreenSpaceEventHandler(
-          viewer.scene.canvas
+          viewer.scene.canvas,
         );
 
         eventHandlerRef.current.setInputAction((click: any) => {
@@ -642,7 +686,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
           if (isAddMode) {
             const windowPosition = new Cartesian2(
               click.position.x,
-              click.position.y
+              click.position.y,
             );
             const clickedLocation = pickCartographic(viewer, windowPosition);
 
@@ -685,7 +729,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
                 setSelectedOpportunity(swathProps.opportunityId);
 
                 debug.info(
-                  `[SwathPicking] Selected swath: ${swathProps.opportunityId} (target: ${swathProps.targetId})`
+                  `[SwathPicking] Selected swath: ${swathProps.opportunityId} (target: ${swathProps.targetId})`,
                 );
               }
               return; // Don't process as regular entity
@@ -738,7 +782,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
               // Extract position if available
               if (entity.position) {
                 const position = entity.position.getValue(
-                  viewer.clock.currentTime
+                  viewer.clock.currentTime,
                 );
                 if (position) {
                   const cartographic =
@@ -781,7 +825,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
             // Clear hover when not over a swath
             setHoveredSwath(null, null);
           },
-          ScreenSpaceEventType.MOUSE_MOVE
+          ScreenSpaceEventType.MOUSE_MOVE,
         );
       } catch (error) {
         console.error(`[${viewportId}] Error setting up click handler:`, error);
@@ -795,7 +839,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
           } catch (error) {
             console.error(
               `[${viewportId}] Error cleaning up event handler:`,
-              error
+              error,
             );
           }
         }
@@ -910,7 +954,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
                   viewer.scene.requestRender();
 
                   debug.verbose(
-                    `[${viewportId}] Day/night lighting initialized`
+                    `[${viewportId}] Day/night lighting initialized`,
                   );
                 }
               }
@@ -930,10 +974,10 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
                   () => {
                     if (viewer.clock && state.missionData) {
                       const start = JulianDate.fromIso8601(
-                        state.missionData.start_time.replace("+00:00", "Z")
+                        state.missionData.start_time.replace("+00:00", "Z"),
                       );
                       const stop = JulianDate.fromIso8601(
-                        state.missionData.end_time.replace("+00:00", "Z")
+                        state.missionData.end_time.replace("+00:00", "Z"),
                       );
 
                       viewer.clock.startTime = start;
@@ -949,7 +993,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
                       }
                     }
                   },
-                  { timeout: 150 }
+                  { timeout: 150 },
                 );
               }
             }}

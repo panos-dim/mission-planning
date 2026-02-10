@@ -46,7 +46,7 @@ export const PlanningResults: React.FC<PlanningResultsProps> = ({
             onClick={onAcceptPlan}
             disabled={!activeResult}
           >
-            Accept This Plan → Orders
+            Commit to Schedule
           </Button>
         </div>
       </div>
@@ -93,7 +93,7 @@ export const PlanningResults: React.FC<PlanningResultsProps> = ({
                   {availableAlgorithms.map((alg) => (
                     <td key={alg} className="text-right py-1 px-2">
                       {results[alg]?.metrics?.total_maneuver_time_s?.toFixed(
-                        1
+                        1,
                       ) ?? "N/A"}
                     </td>
                   ))}
@@ -170,7 +170,7 @@ export const PlanningResults: React.FC<PlanningResultsProps> = ({
                   <div className="text-blue-400">Coverage</div>
                   <div className="text-2xl font-bold text-blue-300">
                     {activeResult.target_statistics.coverage_percentage.toFixed(
-                      1
+                      1,
                     )}
                     %
                   </div>

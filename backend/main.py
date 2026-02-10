@@ -80,6 +80,7 @@ from backend.coordinate_parser import CoordinateParser, FileParser, TargetValida
 # Import CZML generator, coordinate parser, routers, and satellite manager
 from backend.czml_generator import CZMLGenerator, generate_mission_czml
 from backend.mission_settings_manager import MissionSettingsManager
+from backend.routers.batching import router as batching_router
 from backend.routers.config_admin import router as config_admin_router
 from backend.routers.orders import router as orders_router
 from backend.routers.schedule import router as schedule_router
@@ -136,6 +137,7 @@ app.include_router(validation_router)
 app.include_router(config_admin_router)
 app.include_router(schedule_router)
 app.include_router(orders_router)
+app.include_router(batching_router)
 
 # Serve static files (built React app)
 if os.path.exists("../frontend/dist"):

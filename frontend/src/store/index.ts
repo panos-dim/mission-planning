@@ -17,3 +17,18 @@ export {
 // Target management stores
 export { useTargetAddStore } from "./targetAddStore";
 export { usePreviewTargetsStore } from "./previewTargetsStore";
+
+// Selection store (unified selection state)
+export {
+  useSelectionStore,
+  useSelection,
+  useHighlightedIds,
+  useContextFilter,
+  useHasActiveContextFilter,
+  useInspectorState,
+  isItemSelected,
+  isItemHighlighted,
+  type SelectionType,
+  type ViewContext,
+  type ContextFilter,
+} from "./selectionStore";

@@ -19,8 +19,12 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { useConflictStore } from "../store/conflictStore";
+import { useSelectionStore } from "../store/selectionStore";
 import { useMission } from "../context/MissionContext";
 import { getConflicts, recomputeConflicts, Conflict } from "../api/scheduleApi";
+
+// Dev mode check
+const isDev = import.meta.env?.DEV ?? false;
 
 interface ConflictsPanelProps {
   className?: string;
@@ -30,15 +34,26 @@ const ConflictsPanel: React.FC<ConflictsPanelProps> = ({ className = "" }) => {
   const { state } = useMission();
   const {
     conflicts,
-    selectedConflictId,
+    selectedConflictId: localSelectedConflictId,
     isLoading,
     error,
     summary,
     setConflicts,
-    selectConflict,
+    selectConflict: localSelectConflict,
     setLoading,
     setError,
   } = useConflictStore();
+
+  // Unified selection store for cross-component sync
+  const {
+    selectConflict: unifiedSelectConflict,
+    selectedConflictId: unifiedSelectedConflictId,
+    clearSelection,
+  } = useSelectionStore();
+
+  // Use unified selection if available, fall back to local
+  const selectedConflictId =
+    unifiedSelectedConflictId ?? localSelectedConflictId;
 
   const workspaceId = state.activeWorkspace;
 
@@ -111,19 +126,51 @@ const ConflictsPanel: React.FC<ConflictsPanelProps> = ({ className = "" }) => {
   };
 
   const handleConflictClick = (conflict: Conflict) => {
-    if (selectedConflictId === conflict.id) {
-      selectConflict(null);
+    const isDeselect = selectedConflictId === conflict.id;
+
+    if (isDev) {
+      console.log(
+        `[ConflictsPanel] ${isDeselect ? "deselect" : "select"} conflict: ${conflict.id} (source: conflicts_panel)`,
+      );
+    }
+
+    if (isDeselect) {
+      // Clear both local and unified selection
+      localSelectConflict(null);
+      clearSelection();
     } else {
-      selectConflict(conflict.id);
+      // Select in both stores - unified store handles cross-component sync
+      localSelectConflict(conflict.id);
+      unifiedSelectConflict(conflict.id, conflict.acquisition_ids);
     }
   };
 
   return (
     <div className={`flex flex-col h-full ${className}`}>
-      {/* Header with summary badges */}
+      {/* Summary bar with badges and refresh */}
       <div className="p-3 border-b border-gray-700">
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-sm font-semibold text-white">Conflicts</h3>
+        <div className="flex items-center justify-between">
+          {/* Summary badges */}
+          <div className="flex items-center space-x-2">
+            {summary.errorCount > 0 && (
+              <div className="flex items-center space-x-1 px-2 py-1 bg-red-900/30 rounded text-xs text-red-400">
+                <AlertCircle className="w-3 h-3" />
+                <span>{summary.errorCount} errors</span>
+              </div>
+            )}
+            {summary.warningCount > 0 && (
+              <div className="flex items-center space-x-1 px-2 py-1 bg-yellow-900/30 rounded text-xs text-yellow-400">
+                <AlertTriangle className="w-3 h-3" />
+                <span>{summary.warningCount} warnings</span>
+              </div>
+            )}
+            {summary.total === 0 && !isLoading && (
+              <div className="flex items-center space-x-1 px-2 py-1 bg-green-900/30 rounded text-xs text-green-400">
+                <span>No conflicts</span>
+              </div>
+            )}
+          </div>
+          {/* Refresh button */}
           <button
             onClick={handleRecompute}
             disabled={isLoading || !workspaceId}
@@ -134,27 +181,6 @@ const ConflictsPanel: React.FC<ConflictsPanelProps> = ({ className = "" }) => {
               className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`}
             />
           </button>
-        </div>
-
-        {/* Summary badges */}
-        <div className="flex items-center space-x-2">
-          {summary.errorCount > 0 && (
-            <div className="flex items-center space-x-1 px-2 py-1 bg-red-900/30 rounded text-xs text-red-400">
-              <AlertCircle className="w-3 h-3" />
-              <span>{summary.errorCount} errors</span>
-            </div>
-          )}
-          {summary.warningCount > 0 && (
-            <div className="flex items-center space-x-1 px-2 py-1 bg-yellow-900/30 rounded text-xs text-yellow-400">
-              <AlertTriangle className="w-3 h-3" />
-              <span>{summary.warningCount} warnings</span>
-            </div>
-          )}
-          {summary.total === 0 && !isLoading && (
-            <div className="flex items-center space-x-1 px-2 py-1 bg-green-900/30 rounded text-xs text-green-400">
-              <span>No conflicts</span>
-            </div>
-          )}
         </div>
       </div>
 
@@ -172,15 +198,13 @@ const ConflictsPanel: React.FC<ConflictsPanelProps> = ({ className = "" }) => {
 
       {/* Conflicts list */}
       <div className="flex-1 overflow-y-auto">
-        {isLoading ? (
+        {!workspaceId ? null : isLoading ? (
           <div className="p-4 text-center text-gray-500 text-sm">
             Loading conflicts...
           </div>
         ) : conflicts.length === 0 ? (
           <div className="p-4 text-center text-gray-500 text-sm">
-            {workspaceId
-              ? "No conflicts detected in the current schedule."
-              : "Select a workspace to view conflicts."}
+            No conflicts detected in the current schedule.
           </div>
         ) : (
           <div className="divide-y divide-gray-800">

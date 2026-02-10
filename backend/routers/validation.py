@@ -6,6 +6,10 @@ Provides REST endpoints for SAR validation scenarios:
 - List available scenarios
 - Retrieve validation reports
 - Compare results across commits
+
+Workflow Validation (PR-VALIDATION-01):
+- POST /api/v1/validate/run - Run workflow validation
+- GET /api/v1/validate/report/:report_id - Get stored report
 """
 
 import logging
@@ -16,9 +20,14 @@ from pydantic import BaseModel, Field
 
 from backend.validation import (
     SARScenario,
+    SatelliteConfig,
     ScenarioRunner,
     ScenarioStorage,
+    TargetConfig,
     ValidationReport,
+    WorkflowScenario,
+    WorkflowScenarioConfig,
+    WorkflowValidationRunner,
 )
 from backend.validation.models import (
     ExpectedInvariants,
@@ -418,3 +427,311 @@ async def run_all_scenarios(
     except Exception as e:
         logger.error(f"Run all scenarios failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# Workflow Validation API (PR-VALIDATION-01)
+# =============================================================================
+
+# Initialize workflow runner
+_workflow_runner = WorkflowValidationRunner()
+
+
+class WorkflowSatelliteModel(BaseModel):
+    """Satellite configuration for workflow scenario."""
+
+    id: str
+    name: str
+    tle_line1: str
+    tle_line2: str
+
+
+class WorkflowTargetModel(BaseModel):
+    """Target configuration for workflow scenario."""
+
+    id: str
+    name: str
+    latitude: float
+    longitude: float
+    priority: int = 1
+    lock_level: str = "none"
+
+
+class WorkflowConfigModel(BaseModel):
+    """Configuration for workflow scenario."""
+
+    start_time: str
+    end_time: str
+    mission_mode: str = "SAR"
+    imaging_mode: str = "strip"
+    look_side: str = "ANY"
+    pass_direction: str = "ANY"
+    max_spacecraft_roll_deg: float = 45.0
+    max_roll_rate_dps: float = 1.0
+    max_pitch_rate_dps: float = 0.5
+    algorithm: str = "first_fit"
+    run_repair: bool = False
+    max_repair_changes: int = 10
+    repair_allow_shift: bool = True
+    repair_allow_replace: bool = True
+    dry_run: bool = True
+    use_temp_workspace: bool = True
+    seed: Optional[int] = None
+
+
+class WorkflowRunRequest(BaseModel):
+    """Request to run workflow validation."""
+
+    scenario_id: Optional[str] = Field(
+        default=None, description="Known scenario ID to run"
+    )
+    scenario: Optional[Dict[str, Any]] = Field(
+        default=None, description="Inline scenario configuration"
+    )
+    dry_run: bool = Field(default=True, description="Don't mutate database")
+    previous_hash: Optional[str] = Field(
+        default=None, description="Hash from previous run for determinism check"
+    )
+
+
+class WorkflowRunResponse(BaseModel):
+    """Response from workflow validation run."""
+
+    success: bool
+    report_id: str
+    passed: bool
+    invariants_passed: int
+    invariants_total: int
+    runtime_ms: float
+    report_hash: str
+    counts: Dict[str, int]
+    errors: List[str]
+
+
+@router.post("/run", response_model=Dict[str, Any])
+async def run_workflow_validation(request: WorkflowRunRequest) -> Dict[str, Any]:
+    """
+    Run a deterministic workflow validation scenario.
+
+    Executes the full workflow:
+    1. Mission analysis (SAR + optical)
+    2. Mission planning (configurable algorithm)
+    3. Optional repair mode (with max_changes constraint)
+    4. Commit preview (no DB mutation) or commit to temp workspace
+    5. Conflict recompute
+
+    Returns a validation report with:
+    - Runtime per stage (ms)
+    - Counts: opportunities, planned, committed, conflicts
+    - Invariants pass/fail with reasons
+    - Deterministic report hash
+    """
+    try:
+        scenario: Optional[WorkflowScenario] = None
+
+        # Load scenario by ID or from inline config
+        if request.scenario_id:
+            # Load from storage
+            scenario_data = _storage.get_scenario(request.scenario_id)
+            if scenario_data is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Scenario '{request.scenario_id}' not found",
+                )
+            # Convert SARScenario to WorkflowScenario
+            scenario = _convert_sar_to_workflow_scenario(scenario_data)
+
+        elif request.scenario:
+            # Parse inline scenario
+            scenario = WorkflowScenario.from_dict(request.scenario)
+
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Either scenario_id or scenario must be provided",
+            )
+
+        # Run the workflow
+        logger.info(f"Running workflow validation: {scenario.name}")
+        report = _workflow_runner.run_scenario(
+            scenario,
+            dry_run=request.dry_run,
+            previous_hash=request.previous_hash,
+        )
+
+        # Save report
+        _save_workflow_report(report)
+
+        logger.info(
+            f"Workflow validation complete: {'PASSED' if report.passed else 'FAILED'}"
+        )
+
+        return report.to_dict()
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Workflow validation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/report/{report_id}", response_model=Dict[str, Any])
+async def get_validation_report(report_id: str) -> Dict[str, Any]:
+    """
+    Retrieve a stored validation report by ID.
+
+    Works for both SAR validation reports and workflow validation reports.
+    """
+    try:
+        # Try SAR report first
+        report = _storage.get_report(report_id)
+        if report:
+            return report
+
+        # Try workflow report
+        workflow_report = _get_workflow_report(report_id)
+        if workflow_report:
+            return workflow_report
+
+        raise HTTPException(status_code=404, detail=f"Report '{report_id}' not found")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get report: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/workflow/scenarios", response_model=List[Dict[str, Any]])
+async def list_workflow_scenarios() -> List[Dict[str, Any]]:
+    """
+    List available workflow validation scenarios.
+
+    Returns built-in scenarios from scenarios/ directory that support
+    workflow validation (have required config fields).
+    """
+    try:
+        # Get SAR scenarios and convert
+        sar_scenarios = _storage.list_scenarios()
+
+        workflow_scenarios = []
+        for sar_summary in sar_scenarios:
+            workflow_scenarios.append(
+                {
+                    "id": sar_summary.get("id"),
+                    "name": sar_summary.get("name"),
+                    "description": sar_summary.get("description"),
+                    "tags": sar_summary.get("tags", []),
+                    "num_satellites": sar_summary.get("num_satellites", 0),
+                    "num_targets": sar_summary.get("num_targets", 0),
+                    "supports_workflow": True,
+                }
+            )
+
+        return workflow_scenarios
+
+    except Exception as e:
+        logger.error(f"Failed to list workflow scenarios: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+
+def _convert_sar_to_workflow_scenario(sar_scenario: SARScenario) -> WorkflowScenario:
+    """Convert a SARScenario to WorkflowScenario."""
+    satellites = [
+        SatelliteConfig(
+            id=f"sat_{s.name}",
+            name=s.name,
+            tle_line1=s.tle_line1,
+            tle_line2=s.tle_line2,
+        )
+        for s in sar_scenario.satellites
+    ]
+
+    targets = [
+        TargetConfig(
+            id=f"tgt_{t.name}",
+            name=t.name,
+            latitude=t.latitude,
+            longitude=t.longitude,
+            priority=t.priority,
+            lock_level="none",
+        )
+        for t in sar_scenario.targets
+    ]
+
+    config = WorkflowScenarioConfig(
+        start_time=sar_scenario.config.start_time,
+        end_time=sar_scenario.config.end_time,
+        mission_mode="SAR",
+        imaging_mode=sar_scenario.config.imaging_mode,
+        look_side=sar_scenario.config.look_side,
+        pass_direction=sar_scenario.config.pass_direction,
+        max_spacecraft_roll_deg=sar_scenario.config.max_spacecraft_roll_deg,
+        max_roll_rate_dps=sar_scenario.config.max_roll_rate_dps,
+        algorithm=(
+            sar_scenario.config.algorithms[0]
+            if sar_scenario.config.algorithms
+            else "first_fit"
+        ),
+        run_repair=False,
+        dry_run=True,
+    )
+
+    return WorkflowScenario(
+        id=sar_scenario.id,
+        name=sar_scenario.name,
+        description=sar_scenario.description,
+        satellites=satellites,
+        targets=targets,
+        config=config,
+        tags=sar_scenario.tags,
+    )
+
+
+def _save_workflow_report(report: Any) -> bool:
+    """Save workflow report to storage."""
+    import json
+    from datetime import datetime
+    from pathlib import Path
+
+    try:
+        reports_dir = Path(__file__).parent.parent.parent / "data" / "validation"
+        date_str = datetime.utcnow().strftime("%Y-%m-%d")
+        report_subdir = reports_dir / date_str
+        report_subdir.mkdir(parents=True, exist_ok=True)
+
+        file_path = report_subdir / f"{report.report_id}.json"
+        with open(file_path, "w") as f:
+            json.dump(report.to_dict(), f, indent=2)
+
+        logger.info(f"Saved workflow report: {report.report_id}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to save workflow report: {e}")
+        return False
+
+
+def _get_workflow_report(report_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve workflow report from storage."""
+    import json
+    from pathlib import Path
+
+    reports_dir = Path(__file__).parent.parent.parent / "data" / "validation"
+
+    for date_dir in reports_dir.iterdir():
+        if date_dir.is_dir():
+            report_file = date_dir / f"{report_id}.json"
+            if report_file.exists():
+                try:
+                    with open(report_file, "r") as f:
+                        return json.load(f)
+                except Exception as e:
+                    logger.error(f"Failed to load report {report_id}: {e}")
+
+    return None

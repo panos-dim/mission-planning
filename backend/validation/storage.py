@@ -196,7 +196,8 @@ class ScenarioStorage:
                 if report_file.exists():
                     try:
                         with open(report_file, "r") as f:
-                            return json.load(f)
+                            data: Dict[str, Any] = json.load(f)
+                            return data
                     except Exception as e:
                         logger.error(f"Failed to load report {report_id}: {e}")
 

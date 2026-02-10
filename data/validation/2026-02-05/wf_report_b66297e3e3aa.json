@@ -1,0 +1,108 @@
+{
+  "report_id": "wf_report_b66297e3e3aa",
+  "scenario_id": "sar_any_lookside_choice",
+  "scenario_name": "SAR ANY Look Side Selection Test",
+  "timestamp": "2026-02-05T12:48:17.878763Z",
+  "config_hash": "39ca1f3bc6671e38",
+  "passed": true,
+  "total_invariants": 3,
+  "passed_invariants": 3,
+  "failed_invariants": 0,
+  "stages": [
+    {
+      "stage": "analysis",
+      "runtime_ms": 135.43,
+      "success": true,
+      "error_message": null,
+      "input_count": 1,
+      "output_count": 5,
+      "details": {
+        "mode": "SAR"
+      }
+    },
+    {
+      "stage": "planning",
+      "runtime_ms": 0.11,
+      "success": true,
+      "error_message": null,
+      "input_count": 5,
+      "output_count": 1,
+      "details": {
+        "algorithm": "first_fit"
+      }
+    },
+    {
+      "stage": "commit_preview",
+      "runtime_ms": 0.0,
+      "success": true,
+      "error_message": null,
+      "input_count": 1,
+      "output_count": 0,
+      "details": {
+        "conflict_count": 0,
+        "by_type": {}
+      }
+    },
+    {
+      "stage": "conflict_recompute",
+      "runtime_ms": 0.0,
+      "success": true,
+      "error_message": null,
+      "input_count": 1,
+      "output_count": 0,
+      "details": {
+        "conflict_count": 0,
+        "by_type": {}
+      }
+    }
+  ],
+  "invariants": [
+    {
+      "invariant": "no_temporal_overlap",
+      "passed": true,
+      "message": "No temporal overlaps detected",
+      "details": {
+        "acquisitions_checked": 1
+      },
+      "violations": []
+    },
+    {
+      "invariant": "slew_feasibility",
+      "passed": true,
+      "message": "All slew maneuvers are feasible",
+      "details": {
+        "acquisitions_checked": 1
+      },
+      "violations": []
+    },
+    {
+      "invariant": "conflict_preview_match",
+      "passed": true,
+      "message": "Conflict preview matches detection (0 conflicts)",
+      "details": {
+        "preview_count": 0,
+        "detected_count": 0
+      },
+      "violations": []
+    }
+  ],
+  "counts": {
+    "opportunities": 5,
+    "planned": 1,
+    "committed": 1,
+    "conflicts": 0
+  },
+  "metrics": {
+    "total_value": 0.0,
+    "total_score": 0.0,
+    "mean_incidence_deg": 33.96,
+    "left_swath_count": 4,
+    "right_swath_count": 1,
+    "ascending_count": 1,
+    "descending_count": 4
+  },
+  "repair_diff": null,
+  "total_runtime_ms": 135.61,
+  "report_hash": "5cadeab3f8746a00",
+  "errors": []
+}
