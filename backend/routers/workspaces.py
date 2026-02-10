@@ -119,7 +119,7 @@ def _migrate_orders_state_to_v2(
                 pitch_angle_deg=0.0,
                 mode="OPTICAL",  # Default, can't determine from legacy data
                 state="committed",
-                lock_level="soft",
+                lock_level="none",
                 source="auto",
                 plan_id=plan.id,
                 opportunity_id=item.get("opportunity_id", ""),

@@ -10,6 +10,7 @@
 
 import { useEffect, useRef, useCallback } from "react";
 import { Entity, Color, ConstantProperty } from "cesium";
+import { useShallow } from "zustand/react/shallow";
 import { useSwathStore, SwathVisibilityMode } from "../../../store/swathStore";
 import { usePlanningStore } from "../../../store/planningStore";
 
@@ -108,7 +109,7 @@ function isSarSwath(entity: Entity): boolean {
 function applySwathStyle(
   entity: Entity,
   style: "default" | "selected" | "hovered" | "dimmed",
-  lookSide: "LEFT" | "RIGHT" | null
+  lookSide: "LEFT" | "RIGHT" | null,
 ) {
   if (!entity.polygon) return;
 
@@ -151,10 +152,26 @@ export function useSwathVisibility({
     lodConfig,
     setRenderedSwaths,
     updateDebugInfo,
-  } = useSwathStore();
+  } = useSwathStore(
+    useShallow((s) => ({
+      visibilityMode: s.visibilityMode,
+      selectedOpportunityId: s.selectedOpportunityId,
+      hoveredOpportunityId: s.hoveredOpportunityId,
+      filteredTargetId: s.filteredTargetId,
+      activeRunId: s.activeRunId,
+      lodConfig: s.lodConfig,
+      setRenderedSwaths: s.setRenderedSwaths,
+      updateDebugInfo: s.updateDebugInfo,
+    })),
+  );
 
   // Planning store for selected plan's opportunities
-  const { activeAlgorithm, results } = usePlanningStore();
+  const { activeAlgorithm, results } = usePlanningStore(
+    useShallow((s) => ({
+      activeAlgorithm: s.activeAlgorithm,
+      results: s.results,
+    })),
+  );
 
   /**
    * Get all swath entities from viewer
@@ -200,7 +217,7 @@ export function useSwathVisibility({
       targetId: string | null,
       runId: string | null,
       mode: SwathVisibilityMode,
-      planOpportunities: Set<string>
+      planOpportunities: Set<string>,
     ): boolean => {
       if (mode === "off") return false;
 
@@ -218,7 +235,7 @@ export function useSwathVisibility({
       // mode === "all"
       return true;
     },
-    [filteredTargetId, activeRunId]
+    [filteredTargetId, activeRunId],
   );
 
   /**
@@ -246,7 +263,7 @@ export function useSwathVisibility({
         targetId,
         runId,
         visibilityMode,
-        planOpportunities
+        planOpportunities,
       );
 
       // Apply LOD cap
@@ -329,7 +346,7 @@ export function useSwathVisibility({
     } else {
       updateTimeoutRef.current = setTimeout(
         updateSwathVisibility,
-        lodConfig.filterDebounceMs
+        lodConfig.filterDebounceMs,
       );
     }
   }, [

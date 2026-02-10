@@ -17,19 +17,13 @@ Produces a single JSON report with:
 
 import logging
 import os
-import sys
 import tempfile
 import time
 import uuid
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-# Add project paths
-project_root = os.path.dirname(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-)
-sys.path.insert(0, project_root)
-sys.path.insert(0, os.path.join(project_root, "src"))
+import backend._paths  # noqa: F401, E402  — centralised path setup
 
 from .workflow_assertions import WorkflowInvariantChecker
 from .workflow_models import (
@@ -598,7 +592,7 @@ class WorkflowValidationRunner:
                     pitch_angle_deg=item.get("pitch_angle_deg", 0.0),
                     mode=scenario.config.mission_mode,
                     state="committed",
-                    lock_level="soft",
+                    lock_level="none",
                     source="validation",
                     workspace_id=workspace_id,
                     opportunity_id=item.get("opportunity_id"),

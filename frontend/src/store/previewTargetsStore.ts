@@ -4,31 +4,37 @@
  * on the map as they add them to the UI.
  */
 
-import { create } from 'zustand'
-import { TargetData } from '../types'
+import { create } from "zustand";
+import { devtools } from "zustand/middleware";
+import { TargetData } from "../types";
 
 interface PreviewTargetsState {
   // Targets to display on map before mission analysis
-  targets: TargetData[]
-  
+  targets: TargetData[];
+
   // Set all preview targets
-  setTargets: (targets: TargetData[]) => void
-  
+  setTargets: (targets: TargetData[]) => void;
+
   // Clear all preview targets (called when mission analysis runs)
-  clearTargets: () => void
-  
+  clearTargets: () => void;
+
   // Flag to indicate if preview targets should be hidden (after CZML loads)
-  hidePreview: boolean
-  setHidePreview: (hide: boolean) => void
+  hidePreview: boolean;
+  setHidePreview: (hide: boolean) => void;
 }
 
-export const usePreviewTargetsStore = create<PreviewTargetsState>((set) => ({
-  targets: [],
-  hidePreview: false,
-  
-  setTargets: (targets) => set({ targets }),
-  
-  clearTargets: () => set({ targets: [] }),
-  
-  setHidePreview: (hide) => set({ hidePreview: hide }),
-}))
+export const usePreviewTargetsStore = create<PreviewTargetsState>()(
+  devtools(
+    (set) => ({
+      targets: [],
+      hidePreview: false,
+
+      setTargets: (targets) => set({ targets }),
+
+      clearTargets: () => set({ targets: [] }),
+
+      setHidePreview: (hide) => set({ hidePreview: hide }),
+    }),
+    { name: "PreviewTargetsStore", enabled: import.meta.env?.DEV ?? false },
+  ),
+);

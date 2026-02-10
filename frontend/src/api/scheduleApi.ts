@@ -7,7 +7,20 @@
  * - Get schedule state
  */
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+import { apiClient } from "./client";
+import { API_ENDPOINTS } from "./config";
+
+/** Build query string from optional params, skipping undefined values. */
+function buildQuery(
+  params: Record<string, string | number | boolean | undefined>,
+): string {
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null) sp.set(k, String(v));
+  }
+  const qs = sp.toString();
+  return qs ? `?${qs}` : "";
+}
 
 // =============================================================================
 // Types
@@ -32,7 +45,7 @@ export interface DirectCommitRequest {
   items: DirectCommitItem[];
   algorithm: string;
   mode?: string; // OPTICAL | SAR
-  lock_level?: string; // soft | hard
+  lock_level?: string; // none | hard
   workspace_id?: string;
   notes?: string;
 }
@@ -104,25 +117,10 @@ export interface ScheduleStateResponse {
 export async function commitScheduleDirect(
   request: DirectCommitRequest,
 ): Promise<DirectCommitResponse> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/v1/schedule/commit/direct`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(request),
-    },
+  return apiClient.post<DirectCommitResponse>(
+    API_ENDPOINTS.SCHEDULE_COMMIT_DIRECT,
+    request,
   );
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
 }
 
 /**
@@ -135,29 +133,15 @@ export async function getScheduleHorizon(params?: {
   workspace_id?: string;
   include_tentative?: boolean;
 }): Promise<ScheduleHorizonResponse> {
-  const searchParams = new URLSearchParams();
-
-  if (params?.from) searchParams.set("from", params.from);
-  if (params?.to) searchParams.set("to", params.to);
-  if (params?.workspace_id)
-    searchParams.set("workspace_id", params.workspace_id);
-  if (params?.include_tentative !== undefined) {
-    searchParams.set("include_tentative", String(params.include_tentative));
-  }
-
-  const queryString = searchParams.toString();
-  const url = `${API_BASE_URL}/api/v1/schedule/horizon${queryString ? `?${queryString}` : ""}`;
-
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
+  const qs = buildQuery({
+    from: params?.from,
+    to: params?.to,
+    workspace_id: params?.workspace_id,
+    include_tentative: params?.include_tentative,
+  });
+  return apiClient.get<ScheduleHorizonResponse>(
+    `${API_ENDPOINTS.SCHEDULE_HORIZON}${qs}`,
+  );
 }
 
 /**
@@ -166,22 +150,10 @@ export async function getScheduleHorizon(params?: {
 export async function getScheduleState(
   workspace_id?: string,
 ): Promise<ScheduleStateResponse> {
-  const searchParams = new URLSearchParams();
-  if (workspace_id) searchParams.set("workspace_id", workspace_id);
-
-  const queryString = searchParams.toString();
-  const url = `${API_BASE_URL}/api/v1/schedule/state${queryString ? `?${queryString}` : ""}`;
-
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
+  const qs = buildQuery({ workspace_id });
+  return apiClient.get<ScheduleStateResponse>(
+    `${API_ENDPOINTS.SCHEDULE_STATE}${qs}`,
+  );
 }
 
 // =============================================================================
@@ -231,27 +203,13 @@ export async function listOrders(params?: {
   limit?: number;
   offset?: number;
 }): Promise<OrderListResponse> {
-  const searchParams = new URLSearchParams();
-
-  if (params?.status) searchParams.set("status", params.status);
-  if (params?.workspace_id)
-    searchParams.set("workspace_id", params.workspace_id);
-  if (params?.limit) searchParams.set("limit", String(params.limit));
-  if (params?.offset) searchParams.set("offset", String(params.offset));
-
-  const queryString = searchParams.toString();
-  const url = `${API_BASE_URL}/api/v1/orders${queryString ? `?${queryString}` : ""}`;
-
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
+  const qs = buildQuery({
+    status: params?.status,
+    workspace_id: params?.workspace_id,
+    limit: params?.limit,
+    offset: params?.offset,
+  });
+  return apiClient.get<OrderListResponse>(`${API_ENDPOINTS.ORDERS}${qs}`);
 }
 
 /**
@@ -267,22 +225,10 @@ export async function createOrder(params: {
   external_ref?: string;
   workspace_id?: string;
 }): Promise<{ success: boolean; order: Order }> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/orders`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(params),
-  });
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
+  return apiClient.post<{ success: boolean; order: Order }>(
+    API_ENDPOINTS.ORDERS,
+    params,
+  );
 }
 
 /**
@@ -292,22 +238,10 @@ export async function updateOrderStatus(
   orderId: string,
   status: string,
 ): Promise<{ success: boolean; message: string; order?: Order }> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/orders/${orderId}`, {
-    method: "PATCH",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ status }),
-  });
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
+  return apiClient.put<{ success: boolean; message: string; order?: Order }>(
+    API_ENDPOINTS.ORDER_BY_ID(orderId),
+    { status },
+  );
 }
 
 // =============================================================================
@@ -376,34 +310,18 @@ export async function getConflicts(params?: {
   severity?: string;
   include_resolved?: boolean;
 }): Promise<ConflictListResponse> {
-  const searchParams = new URLSearchParams();
-
-  if (params?.workspace_id)
-    searchParams.set("workspace_id", params.workspace_id);
-  if (params?.from) searchParams.set("from", params.from);
-  if (params?.to) searchParams.set("to", params.to);
-  if (params?.satellite_id)
-    searchParams.set("satellite_id", params.satellite_id);
-  if (params?.conflict_type)
-    searchParams.set("conflict_type", params.conflict_type);
-  if (params?.severity) searchParams.set("severity", params.severity);
-  if (params?.include_resolved !== undefined) {
-    searchParams.set("include_resolved", String(params.include_resolved));
-  }
-
-  const queryString = searchParams.toString();
-  const url = `${API_BASE_URL}/api/v1/schedule/conflicts${queryString ? `?${queryString}` : ""}`;
-
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
+  const qs = buildQuery({
+    workspace_id: params?.workspace_id,
+    from: params?.from,
+    to: params?.to,
+    satellite_id: params?.satellite_id,
+    conflict_type: params?.conflict_type,
+    severity: params?.severity,
+    include_resolved: params?.include_resolved,
+  });
+  return apiClient.get<ConflictListResponse>(
+    `${API_ENDPOINTS.SCHEDULE_CONFLICTS}${qs}`,
+  );
 }
 
 /**
@@ -412,25 +330,10 @@ export async function getConflicts(params?: {
 export async function recomputeConflicts(
   request: RecomputeConflictsRequest,
 ): Promise<RecomputeConflictsResponse> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/v1/schedule/conflicts/recompute`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(request),
-    },
+  return apiClient.post<RecomputeConflictsResponse>(
+    API_ENDPOINTS.SCHEDULE_CONFLICTS_RECOMPUTE,
+    request,
   );
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
 }
 
 // =============================================================================
@@ -438,14 +341,13 @@ export async function recomputeConflicts(
 // =============================================================================
 
 export type PlanningMode = "from_scratch" | "incremental" | "repair";
-export type LockPolicy = "respect_hard_only" | "respect_hard_and_soft";
+export type LockPolicy = "respect_hard_only";
 
 // Repair mode specific types
 export type RepairScope =
   | "workspace_horizon"
   | "satellite_subset"
   | "target_subset";
-export type SoftLockPolicy = "allow_shift" | "allow_replace" | "freeze_soft";
 export type RepairObjective =
   | "maximize_score"
   | "maximize_priority"
@@ -527,22 +429,10 @@ export interface IncrementalPlanResponse {
 export async function createIncrementalPlan(
   request: IncrementalPlanRequest,
 ): Promise<IncrementalPlanResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/schedule/plan`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(request),
-  });
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
+  return apiClient.post<IncrementalPlanResponse>(
+    API_ENDPOINTS.SCHEDULE_PLAN,
+    request,
+  );
 }
 
 /**
@@ -592,7 +482,6 @@ export interface RepairPlanRequest {
   include_tentative?: boolean;
   // Repair-specific
   repair_scope?: RepairScope;
-  soft_lock_policy?: SoftLockPolicy;
   max_changes?: number;
   objective?: RepairObjective;
   // Scope filters
@@ -623,6 +512,49 @@ export interface ChangeScore {
   percent_changed: number;
 }
 
+// PR-OPS-REPAIR-REPORT-01: Structured change log entry types
+export interface DroppedEntry {
+  acquisition_id: string;
+  satellite_id: string;
+  target_id: string;
+  start: string;
+  end: string;
+  reason_code: string;
+  reason_text: string;
+  replaced_by: string[];
+}
+
+export interface AddedEntry {
+  acquisition_id: string;
+  satellite_id: string;
+  target_id: string;
+  start: string;
+  end: string;
+  reason_code: string;
+  reason_text: string;
+  replaces: string[];
+  value?: number;
+}
+
+export interface MovedEntry {
+  acquisition_id: string;
+  satellite_id: string;
+  target_id: string;
+  from_start: string;
+  from_end: string;
+  to_start: string;
+  to_end: string;
+  reason_code: string;
+  reason_text: string;
+}
+
+export interface ChangeLog {
+  dropped: DroppedEntry[];
+  added: AddedEntry[];
+  moved: MovedEntry[];
+  kept_count: number;
+}
+
 export interface RepairDiff {
   kept: string[];
   dropped: string[];
@@ -634,6 +566,7 @@ export interface RepairDiff {
   };
   change_score: ChangeScore;
   hard_lock_warnings?: string[];
+  change_log?: ChangeLog;
 }
 
 export interface MetricsComparison {
@@ -682,34 +615,22 @@ export interface RepairPlanResponse {
 
 /**
  * Create a repair plan.
- * Repair mode modifies existing schedule: keeps hard locks, optionally moves/replaces soft items.
+ * Repair mode modifies existing schedule: keeps hard locks, replaces unlocked items with better opportunities.
  */
 export async function createRepairPlan(
   request: RepairPlanRequest,
 ): Promise<RepairPlanResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/schedule/repair`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(request),
-  });
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
+  return apiClient.post<RepairPlanResponse>(
+    API_ENDPOINTS.SCHEDULE_REPAIR,
+    request,
+  );
 }
 
 // =============================================================================
 // Lock Management API
 // =============================================================================
 
-export type LockLevel = "none" | "soft" | "hard";
+export type LockLevel = "none" | "hard";
 
 export interface UpdateLockResponse {
   success: boolean;
@@ -745,24 +666,10 @@ export async function updateAcquisitionLock(
   acquisitionId: string,
   lockLevel: LockLevel,
 ): Promise<UpdateLockResponse> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/v1/schedule/acquisition/${acquisitionId}/lock?lock_level=${lockLevel}`,
-    {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-      },
-    },
+  return apiClient.put<UpdateLockResponse>(
+    `${API_ENDPOINTS.SCHEDULE_ACQUISITION_LOCK(acquisitionId)}?lock_level=${lockLevel}`,
+    {},
   );
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
 }
 
 /**
@@ -771,25 +678,10 @@ export async function updateAcquisitionLock(
 export async function bulkUpdateLocks(
   request: BulkLockRequest,
 ): Promise<BulkLockResponse> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/v1/schedule/acquisitions/bulk-lock`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(request),
-    },
+  return apiClient.post<BulkLockResponse>(
+    API_ENDPOINTS.SCHEDULE_BULK_LOCK,
+    request,
   );
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
 }
 
 /**
@@ -798,25 +690,10 @@ export async function bulkUpdateLocks(
 export async function hardLockAllCommitted(
   workspaceId: string,
 ): Promise<HardLockCommittedResponse> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/v1/schedule/acquisitions/hard-lock-committed`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ workspace_id: workspaceId }),
-    },
+  return apiClient.post<HardLockCommittedResponse>(
+    API_ENDPOINTS.SCHEDULE_HARD_LOCK_COMMITTED,
+    { workspace_id: workspaceId },
   );
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
 }
 
 // =============================================================================
@@ -853,29 +730,10 @@ export interface RepairCommitResponse {
 export async function commitRepairPlan(
   request: RepairCommitRequest,
 ): Promise<RepairCommitResponse> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/v1/schedule/repair/commit`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(request),
-    },
+  return apiClient.post<RepairCommitResponse>(
+    API_ENDPOINTS.SCHEDULE_REPAIR_COMMIT,
+    request,
   );
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(
-      typeof error.detail === "string"
-        ? error.detail
-        : error.detail?.message || `HTTP ${response.status}`,
-    );
-  }
-
-  return response.json();
 }
 
 // =============================================================================
@@ -918,27 +776,15 @@ export async function getCommitHistory(params?: {
   limit?: number;
   offset?: number;
 }): Promise<AuditLogListResponse> {
-  const searchParams = new URLSearchParams();
-
-  if (params?.workspace_id)
-    searchParams.set("workspace_id", params.workspace_id);
-  if (params?.plan_id) searchParams.set("plan_id", params.plan_id);
-  if (params?.limit) searchParams.set("limit", String(params.limit));
-  if (params?.offset) searchParams.set("offset", String(params.offset));
-
-  const queryString = searchParams.toString();
-  const url = `${API_BASE_URL}/api/v1/schedule/commit-history${queryString ? `?${queryString}` : ""}`;
-
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
+  const qs = buildQuery({
+    workspace_id: params?.workspace_id,
+    plan_id: params?.plan_id,
+    limit: params?.limit,
+    offset: params?.offset,
+  });
+  return apiClient.get<AuditLogListResponse>(
+    `${API_ENDPOINTS.SCHEDULE_COMMIT_HISTORY}${qs}`,
+  );
 }
 
 // =============================================================================
@@ -971,7 +817,6 @@ export interface BatchPolicy {
   selection_rules: {
     max_orders_per_batch: number;
     horizon_hours: number;
-    include_soft_lock_replace: boolean;
     min_priority: number;
   };
   repair_preset: string;
@@ -1069,30 +914,17 @@ export async function getOrdersInbox(params: {
   limit?: number;
   offset?: number;
 }): Promise<InboxListResponse> {
-  const searchParams = new URLSearchParams();
-  searchParams.set("workspace_id", params.workspace_id);
-
-  if (params.priority_min)
-    searchParams.set("priority_min", String(params.priority_min));
-  if (params.due_within_hours)
-    searchParams.set("due_within_hours", String(params.due_within_hours));
-  if (params.order_type) searchParams.set("order_type", params.order_type);
-  if (params.tags) searchParams.set("tags", params.tags);
-  if (params.policy_id) searchParams.set("policy_id", params.policy_id);
-  if (params.limit) searchParams.set("limit", String(params.limit));
-  if (params.offset) searchParams.set("offset", String(params.offset));
-
-  const url = `${API_BASE_URL}/api/v1/orders/inbox?${searchParams.toString()}`;
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
+  const qs = buildQuery({
+    workspace_id: params.workspace_id,
+    priority_min: params.priority_min,
+    due_within_hours: params.due_within_hours,
+    order_type: params.order_type,
+    tags: params.tags,
+    policy_id: params.policy_id,
+    limit: params.limit,
+    offset: params.offset,
+  });
+  return apiClient.get<InboxListResponse>(`${API_ENDPOINTS.ORDERS_INBOX}${qs}`);
 }
 
 /**
@@ -1109,20 +941,11 @@ export async function importOrders(params: {
     order_type?: string;
   }>;
 }): Promise<{ success: boolean; imported_count: number; orders: Order[] }> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/orders/import`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params),
-  });
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
+  return apiClient.post<{
+    success: boolean;
+    imported_count: number;
+    orders: Order[];
+  }>(API_ENDPOINTS.ORDERS_IMPORT, params);
 }
 
 /**
@@ -1132,23 +955,10 @@ export async function rejectOrder(
   orderId: string,
   reason: string,
 ): Promise<{ success: boolean; message: string; order?: Order }> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/v1/orders/${orderId}/reject`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reason }),
-    },
+  return apiClient.post<{ success: boolean; message: string; order?: Order }>(
+    API_ENDPOINTS.ORDER_REJECT(orderId),
+    { reason },
   );
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
 }
 
 /**
@@ -1158,39 +968,17 @@ export async function deferOrder(
   orderId: string,
   params: { new_due_time?: string; defer_hours?: number; notes?: string },
 ): Promise<{ success: boolean; message: string; order?: Order }> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/v1/orders/${orderId}/defer`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(params),
-    },
+  return apiClient.post<{ success: boolean; message: string; order?: Order }>(
+    API_ENDPOINTS.ORDER_DEFER(orderId),
+    params,
   );
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
 }
 
 /**
  * List available batch policies.
  */
 export async function listPolicies(): Promise<PolicyListResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/batches/policies`);
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
+  return apiClient.get<PolicyListResponse>(API_ENDPOINTS.BATCHES_POLICIES);
 }
 
 /**
@@ -1206,20 +994,10 @@ export async function createBatch(params: {
   max_orders?: number;
   notes?: string;
 }): Promise<CreateBatchResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/batches/create`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params),
-  });
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
+  return apiClient.post<CreateBatchResponse>(
+    API_ENDPOINTS.BATCHES_CREATE,
+    params,
+  );
 }
 
 /**
@@ -1231,43 +1009,20 @@ export async function listBatches(params?: {
   limit?: number;
   offset?: number;
 }): Promise<BatchListResponse> {
-  const searchParams = new URLSearchParams();
-
-  if (params?.workspace_id)
-    searchParams.set("workspace_id", params.workspace_id);
-  if (params?.status) searchParams.set("status", params.status);
-  if (params?.limit) searchParams.set("limit", String(params.limit));
-  if (params?.offset) searchParams.set("offset", String(params.offset));
-
-  const queryString = searchParams.toString();
-  const url = `${API_BASE_URL}/api/v1/batches${queryString ? `?${queryString}` : ""}`;
-
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
+  const qs = buildQuery({
+    workspace_id: params?.workspace_id,
+    status: params?.status,
+    limit: params?.limit,
+    offset: params?.offset,
+  });
+  return apiClient.get<BatchListResponse>(`${API_ENDPOINTS.BATCHES}${qs}`);
 }
 
 /**
  * Get batch details.
  */
 export async function getBatch(batchId: string): Promise<CreateBatchResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/batches/${batchId}`);
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
+  return apiClient.get<CreateBatchResponse>(API_ENDPOINTS.BATCH_BY_ID(batchId));
 }
 
 /**
@@ -1275,25 +1030,12 @@ export async function getBatch(batchId: string): Promise<CreateBatchResponse> {
  */
 export async function planBatch(
   batchId: string,
-  params?: { use_repair_mode?: boolean; include_soft_lock_replace?: boolean },
+  params?: { use_repair_mode?: boolean },
 ): Promise<PlanBatchResponse> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/v1/batches/${batchId}/plan`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(params || {}),
-    },
+  return apiClient.post<PlanBatchResponse>(
+    API_ENDPOINTS.BATCH_PLAN(batchId),
+    params || {},
   );
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
 }
 
 /**
@@ -1303,23 +1045,10 @@ export async function commitBatch(
   batchId: string,
   params?: { lock_level?: string; notes?: string },
 ): Promise<CommitBatchResponse> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/v1/batches/${batchId}/commit`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(params || {}),
-    },
+  return apiClient.post<CommitBatchResponse>(
+    API_ENDPOINTS.BATCH_COMMIT(batchId),
+    params || {},
   );
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
 }
 
 /**
@@ -1328,16 +1057,9 @@ export async function commitBatch(
 export async function cancelBatch(
   batchId: string,
 ): Promise<{ success: boolean; batch_id: string; orders_returned: number }> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/batches/${batchId}`, {
-    method: "DELETE",
-  });
-
-  if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ detail: "Unknown error" }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
+  return apiClient.delete<{
+    success: boolean;
+    batch_id: string;
+    orders_returned: number;
+  }>(API_ENDPOINTS.BATCH_BY_ID(batchId));
 }

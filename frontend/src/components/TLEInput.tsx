@@ -1,144 +1,147 @@
-import React, { useState, useEffect } from 'react'
-import { Upload, Check, X, AlertCircle, Search, Satellite } from 'lucide-react'
-import { useMission } from '../context/MissionContext'
-import { TLEData } from '../types'
+import React, { useState, useEffect } from "react";
+import { Upload, Check, X, AlertCircle, Search, Satellite } from "lucide-react";
+import { useMission } from "../context/MissionContext";
+import { TLEData } from "../types";
 
 interface TLEInputProps {
-  tle: TLEData
-  onChange: (tle: TLEData) => void
+  tle: TLEData;
+  onChange: (tle: TLEData) => void;
 }
 
 interface TLESource {
-  id: string
-  name: string
-  url: string
-  description: string
+  id: string;
+  name: string;
+  url: string;
+  description: string;
 }
 
 interface SatelliteData {
-  name: string
-  line1: string
-  line2: string
+  name: string;
+  line1: string;
+  line2: string;
 }
 
 const TLEInput: React.FC<TLEInputProps> = ({ tle, onChange }) => {
-  const { state, validateTLE } = useMission()
-  const [isValidating, setIsValidating] = useState(false)
-  const [showCelestrak, setShowCelestrak] = useState(false)
-  const [tleSources, setTleSources] = useState<TLESource[]>([])
-  const [selectedSource, setSelectedSource] = useState<string>('celestrak_active')
-  const [searchQuery, setSearchQuery] = useState('')
-  const [searchResults, setSearchResults] = useState<SatelliteData[]>([])
-  const [isLoadingSources, setIsLoadingSources] = useState(false)
-  const [isSearching, setIsSearching] = useState(false)
+  const { state, validateTLE } = useMission();
+  const [isValidating, setIsValidating] = useState(false);
+  const [showCelestrak, setShowCelestrak] = useState(false);
+  const [tleSources, setTleSources] = useState<TLESource[]>([]);
+  const [selectedSource, setSelectedSource] =
+    useState<string>("celestrak_active");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SatelliteData[]>([]);
+  const [isLoadingSources, setIsLoadingSources] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
 
   // Load TLE sources on component mount
   useEffect(() => {
-    loadTLESources()
-  }, [])
+    loadTLESources();
+  }, []);
 
   // Safety check for props - moved after hooks to comply with React rules
   if (!tle || !onChange) {
-    return <div className="text-red-400">Error: Invalid TLE input props</div>
+    return <div className="text-red-400">Error: Invalid TLE input props</div>;
   }
 
   const loadTLESources = async () => {
-    setIsLoadingSources(true)
+    setIsLoadingSources(true);
     try {
-      const response = await fetch('/api/tle/sources')
-      const data = await response.json()
-      setTleSources(data.sources)
+      const response = await fetch("/api/v1/tle/sources");
+      const data = await response.json();
+      setTleSources(data.sources);
     } catch (error) {
-      console.error('Failed to load TLE sources:', error)
+      console.error("Failed to load TLE sources:", error);
     } finally {
-      setIsLoadingSources(false)
+      setIsLoadingSources(false);
     }
-  }
+  };
 
   const searchSatellites = async () => {
-    if (!searchQuery.trim()) return
+    if (!searchQuery.trim()) return;
 
-    setIsSearching(true)
+    setIsSearching(true);
     try {
-      const response = await fetch('/api/tle/search', {
-        method: 'POST',
+      const response = await fetch("/api/v1/tle/search", {
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           query: searchQuery,
-          source: selectedSource
-        })
-      })
-      const data = await response.json()
-      setSearchResults(data.satellites || [])
+          source: selectedSource,
+        }),
+      });
+      const data = await response.json();
+      setSearchResults(data.satellites || []);
     } catch (error) {
-      console.error('Failed to search satellites:', error)
-      setSearchResults([])
+      console.error("Failed to search satellites:", error);
+      setSearchResults([]);
     } finally {
-      setIsSearching(false)
+      setIsSearching(false);
     }
-  }
+  };
 
   const selectSatellite = (satellite: SatelliteData) => {
     onChange({
       name: satellite.name,
       line1: satellite.line1,
-      line2: satellite.line2
-    })
-    setShowCelestrak(false)
-    setSearchResults([])
-    setSearchQuery('')
-  }
+      line2: satellite.line2,
+    });
+    setShowCelestrak(false);
+    setSearchResults([]);
+    setSearchQuery("");
+  };
 
   const handleTLEChange = (field: keyof TLEData, value: string) => {
-    const newTLE = { ...tle, [field]: value }
-    onChange(newTLE)
-  }
+    const newTLE = { ...tle, [field]: value };
+    onChange(newTLE);
+  };
 
   const handleValidate = async () => {
     if (!tle.name || !tle.line1 || !tle.line2) {
-      return
+      return;
     }
-    
-    setIsValidating(true)
+
+    setIsValidating(true);
     try {
-      await validateTLE(tle)
+      await validateTLE(tle);
     } catch (error) {
-      console.error('Validation error:', error)
+      console.error("Validation error:", error);
     } finally {
-      setIsValidating(false)
+      setIsValidating(false);
     }
-  }
+  };
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
+    const file = event.target.files?.[0];
+    if (!file) return;
 
-    const reader = new FileReader()
+    const reader = new FileReader();
     reader.onload = (e) => {
-      const content = e.target?.result as string
-      const lines = content.trim().split('\n')
-      
+      const content = e.target?.result as string;
+      const lines = content.trim().split("\n");
+
       if (lines.length >= 3) {
         onChange({
           name: lines[0].trim(),
           line1: lines[1].trim(),
-          line2: lines[2].trim()
-        })
+          line2: lines[2].trim(),
+        });
       }
-    }
-    reader.readAsText(file)
-  }
+    };
+    reader.readAsText(file);
+  };
 
   const loadSampleTLE = () => {
     // ICEYE-X44 TLE (sample)
     onChange({
-      name: 'ICEYE-X44',
-      line1: '1 99999U 24001A   25225.50000000  .00000000  00000-0  00000-0 0  9990',
-      line2: '2 99999  97.4000 180.0000 0001000  90.0000 270.0000 15.20000000000000'
-    })
-  }
+      name: "ICEYE-X44",
+      line1:
+        "1 99999U 24001A   25225.50000000  .00000000  00000-0  00000-0 0  9990",
+      line2:
+        "2 99999  97.4000 180.0000 0001000  90.0000 270.0000 15.20000000000000",
+    });
+  };
 
   return (
     <div className="space-y-4">
@@ -227,7 +230,7 @@ const TLEInput: React.FC<TLEInputProps> = ({ tle, onChange }) => {
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="e.g., ICEYE, NOAA, ISS..."
                 className="input-field flex-1 text-sm"
-                onKeyPress={(e) => e.key === 'Enter' && searchSatellites()}
+                onKeyPress={(e) => e.key === "Enter" && searchSatellites()}
               />
               <button
                 onClick={searchSatellites}
@@ -286,7 +289,7 @@ const TLEInput: React.FC<TLEInputProps> = ({ tle, onChange }) => {
           <input
             type="text"
             value={tle.name}
-            onChange={(e) => handleTLEChange('name', e.target.value)}
+            onChange={(e) => handleTLEChange("name", e.target.value)}
             placeholder="e.g., ICEYE-X44"
             className="input-field w-full text-sm"
           />
@@ -299,7 +302,7 @@ const TLEInput: React.FC<TLEInputProps> = ({ tle, onChange }) => {
           <input
             type="text"
             value={tle.line1}
-            onChange={(e) => handleTLEChange('line1', e.target.value)}
+            onChange={(e) => handleTLEChange("line1", e.target.value)}
             placeholder="1 NNNNNC NNNNNAAA NNNNN.NNNNNNNN..."
             className="input-field w-full text-sm font-mono"
             maxLength={69}
@@ -313,7 +316,7 @@ const TLEInput: React.FC<TLEInputProps> = ({ tle, onChange }) => {
           <input
             type="text"
             value={tle.line2}
-            onChange={(e) => handleTLEChange('line2', e.target.value)}
+            onChange={(e) => handleTLEChange("line2", e.target.value)}
             placeholder="2 NNNNN NNN.NNNN NNNNNNNN..."
             className="input-field w-full text-sm font-mono"
             maxLength={69}
@@ -344,52 +347,73 @@ const TLEInput: React.FC<TLEInputProps> = ({ tle, onChange }) => {
 
       {/* Validation Result */}
       {state.validationResult && (
-        <div className={`p-3 rounded-lg border ${
-          state.validationResult.valid
-            ? 'bg-green-900/30 border-green-700 text-green-200'
-            : 'bg-red-900/30 border-red-700 text-red-200'
-        }`}>
+        <div
+          className={`p-3 rounded-lg border ${
+            state.validationResult.valid
+              ? "bg-green-900/30 border-green-700 text-green-200"
+              : "bg-red-900/30 border-red-700 text-red-200"
+          }`}
+        >
           <div className="flex items-center space-x-2">
-          {state.validationResult?.valid ? (
-            <Check className="w-4 h-4 text-green-400" />
-          ) : (
-            <X className="w-4 h-4 text-red-400" />
-          )}
-          <span className={`text-sm ${
-            state.validationResult?.valid ? 'text-green-400' : 'text-red-400'
-          }`}>
-            {state.validationResult?.valid ? 'TLE Valid' : 'TLE Invalid'}
-          </span>
-        </div>
-          
-          {state.validationResult?.valid && state.validationResult?.current_position && (
-            <div className="text-xs space-y-1">
-              <div>
-                <span className="text-gray-400">Current Position:</span>
-                <br />
-                <span>
-                  {state.validationResult.current_position.latitude?.toFixed(2)}°, {' '}
-                  {state.validationResult.current_position.longitude?.toFixed(2)}°, {' '}
-                  {state.validationResult.current_position.altitude_km?.toFixed(1)}km
-                </span>
+            {state.validationResult?.valid ? (
+              <Check className="w-4 h-4 text-green-400" />
+            ) : (
+              <X className="w-4 h-4 text-red-400" />
+            )}
+            <span
+              className={`text-sm ${
+                state.validationResult?.valid
+                  ? "text-green-400"
+                  : "text-red-400"
+              }`}
+            >
+              {state.validationResult?.valid ? "TLE Valid" : "TLE Invalid"}
+            </span>
+          </div>
+
+          {state.validationResult?.valid &&
+            state.validationResult?.current_position && (
+              <div className="text-xs space-y-1">
+                <div>
+                  <span className="text-gray-400">Current Position:</span>
+                  <br />
+                  <span>
+                    {state.validationResult.current_position.latitude?.toFixed(
+                      2,
+                    )}
+                    °,{" "}
+                    {state.validationResult.current_position.longitude?.toFixed(
+                      2,
+                    )}
+                    °,{" "}
+                    {state.validationResult.current_position.altitude_km?.toFixed(
+                      1,
+                    )}
+                    km
+                  </span>
+                </div>
+                <div>
+                  <span className="text-gray-400">Orbital Period:</span>{" "}
+                  <span>
+                    {state.validationResult.orbital_period_minutes?.toFixed(1)}
+                    min
+                  </span>
+                </div>
               </div>
-              <div>
-                <span className="text-gray-400">Orbital Period:</span> {' '}
-                <span>{state.validationResult.orbital_period_minutes?.toFixed(1)}min</span>
+            )}
+
+          {state.validationResult &&
+            !state.validationResult.valid &&
+            state.validationResult.error && (
+              <div className="text-xs">
+                <AlertCircle className="w-3 h-3 inline mr-1" />
+                {state.validationResult.error}
               </div>
-            </div>
-          )}
-          
-          {state.validationResult && !state.validationResult.valid && state.validationResult.error && (
-            <div className="text-xs">
-              <AlertCircle className="w-3 h-3 inline mr-1" />
-              {state.validationResult.error}
-            </div>
-          )}
+            )}
         </div>
       )}
     </div>
-  )
-}
+  );
+};
 
-export default TLEInput
+export default TLEInput;

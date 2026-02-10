@@ -6,7 +6,7 @@ This document describes the implementation of PR-PS2.4 — Interactive Locks + W
 
 The Repair Mode enhancement provides mission planners with fine-grained control over schedule modifications through:
 
-1. **Lock Controls** - Three-level locking system (none/soft/hard) for acquisitions
+1. **Lock Controls** - Two-level locking system (none/hard) for acquisitions
 2. **What-If Mode** - Side-by-side comparison of baseline vs. proposed schedules
 3. **Safe Commit Workflow** - Atomic commits with validation and audit trail
 
@@ -16,17 +16,10 @@ The Repair Mode enhancement provides mission planners with fine-grained control 
 
 | Level | Icon | Behavior |
 |-------|------|----------|
-| `none` | 🔓 | Fully flexible - can be modified or dropped by repair |
-| `soft` | 🔒 | Modifiable based on repair policy (shift/replace) |
+| `none` | 🔓 | Fully flexible - can be modified, replaced, or dropped by repair |
 | `hard` | 🛡️ | Immutable - never touched by repair mode |
 
-### Lock Policies (Soft Lock Behavior)
-
-When running repair mode, the `soft_lock_policy` parameter controls how soft-locked acquisitions are treated:
-
-- **`freeze_soft`** - Treat soft locks as hard (no changes allowed)
-- **`allow_shift`** - Allow time adjustments only (same target, different window)
-- **`allow_replace`** - Full flexibility (can be replaced with better opportunities)
+> **Note:** Soft locks (`soft`) were removed from the codebase. All existing `soft` locks are automatically migrated to `none`. The backend still accepts `soft` for backward compatibility but normalizes it to `none`.
 
 ---
 
@@ -41,15 +34,15 @@ PATCH /api/v1/schedule/acquisition/{acquisition_id}/lock?lock_level={level}
 
 **Parameters:**
 - `acquisition_id` (path) - Acquisition ID to update
-- `lock_level` (query) - New lock level: `none`, `soft`, or `hard`
+- `lock_level` (query) - New lock level: `none` or `hard`
 
 **Response:**
 ```json
 {
   "success": true,
-  "message": "Lock level updated to 'soft'",
+  "message": "Lock level updated to 'hard'",
   "acquisition_id": "acq_abc123",
-  "lock_level": "soft"
+  "lock_level": "hard"
 }
 ```
 
@@ -111,7 +104,7 @@ POST /api/v1/schedule/repair/commit
   "plan_id": "plan_abc123",
   "workspace_id": "ws_abc123",
   "drop_acquisition_ids": ["acq_1", "acq_2"],
-  "lock_level": "soft",
+  "lock_level": "none",
   "mode": "OPTICAL",
   "force": false,
   "notes": "Repair to resolve conflict with priority target",
@@ -230,11 +223,11 @@ import RepairSettingsPresets from './components/RepairSettingsPresets';
 ```
 
 **Presets:**
-| Preset | Policy | Max Changes | Objective |
-|--------|--------|-------------|-----------|
-| Conservative | `freeze_soft` | 5 | `minimize_changes` |
-| Balanced | `allow_shift` | 20 | `maximize_score` |
-| Aggressive | `allow_replace` | 50 | `maximize_score` |
+| Preset | Max Changes | Objective |
+|--------|-------------|-----------|
+| Conservative | 10 | `minimize_changes` |
+| Balanced | 20 | `maximize_score` |
+| Aggressive | 50 | `maximize_score` |
 
 ### RepairCommitModal
 
@@ -295,7 +288,7 @@ await updateAcquisitionLock('acq_123', 'hard');
 // Bulk lock update
 await bulkUpdateLocks({
   acquisition_ids: ['acq_1', 'acq_2'],
-  lock_level: 'soft'
+  lock_level: 'hard'
 });
 
 // Hard lock all committed
@@ -306,7 +299,7 @@ const result = await commitRepairPlan({
   plan_id: 'plan_123',
   workspace_id: 'workspace_123',
   drop_acquisition_ids: ['acq_1'],
-  lock_level: 'soft',
+  lock_level: 'none',
   notes: 'Repair commit'
 });
 
@@ -371,7 +364,6 @@ await bulkUpdateLocks({
 ### 3. Configure Repair Settings
 ```typescript
 const repairSettings = {
-  soft_lock_policy: 'allow_shift',
   max_changes: 20,
   objective: 'maximize_score'
 };
@@ -384,7 +376,6 @@ const repairResult = await createRepairPlan({
   satellites: selectedSatellites,
   targets: targetList,
   // ... other params
-  soft_lock_policy: repairSettings.soft_lock_policy,
   max_changes: repairSettings.max_changes,
   objective: repairSettings.objective
 });
@@ -400,7 +391,7 @@ if (userConfirmed) {
     plan_id: repairResult.plan_id,
     workspace_id: workspaceId,
     drop_acquisition_ids: repairResult.repair_diff.dropped,
-    lock_level: 'soft',
+    lock_level: 'none',
     score_before: repairResult.metrics_before.score,
     score_after: repairResult.metrics_after.score,
     conflicts_before: currentConflictCount,

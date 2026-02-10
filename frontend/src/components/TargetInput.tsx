@@ -88,7 +88,7 @@ const TargetInput: React.FC<TargetInputProps> = ({
     if (!coordinateInput) return;
 
     try {
-      const response = await fetch("/api/targets/parse", {
+      const response = await fetch("/api/v1/targets/parse", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ coordinate_string: coordinateInput }),
@@ -104,7 +104,7 @@ const TargetInput: React.FC<TargetInputProps> = ({
         setUploadStatus({
           type: "success",
           message: `Parsed: ${data.latitude.toFixed(
-            4
+            4,
           )}°, ${data.longitude.toFixed(4)}°`,
         });
       } else {
@@ -119,7 +119,7 @@ const TargetInput: React.FC<TargetInputProps> = ({
   };
 
   const handleFileUpload = async (
-    event: React.ChangeEvent<HTMLInputElement>
+    event: React.ChangeEvent<HTMLInputElement>,
   ) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -131,7 +131,7 @@ const TargetInput: React.FC<TargetInputProps> = ({
     formData.append("file", file);
 
     try {
-      const response = await fetch("/api/targets/upload", {
+      const response = await fetch("/api/v1/targets/upload", {
         method: "POST",
         body: formData,
       });
@@ -257,7 +257,7 @@ const TargetInput: React.FC<TargetInputProps> = ({
       message: `Added target "${
         target.name
       }" from map (${target.latitude.toFixed(4)}°, ${target.longitude.toFixed(
-        4
+        4,
       )}°)`,
     });
   };

@@ -656,6 +656,118 @@ async def get_governance_rules() -> Dict[str, Any]:
     }
 
 
+@router.get("/satellite-config-summary")
+async def get_satellite_config_summary(
+    satellite_ids: str = Query(
+        "", description="Comma-separated satellite IDs (or empty for all active)"
+    ),
+) -> Dict[str, Any]:
+    """
+    Get a read-only config summary for the selected satellites.
+
+    Returns bus limits, sensor specs, and SAR defaults so the frontend
+    can display them in a Config Summary block without allowing edits.
+    This is the planner-facing view of platform truth.
+    """
+    try:
+        resolver = get_config_resolver()
+        resolver.load_configs()
+
+        config = load_yaml_config("satellites.yaml")
+        satellites_list = config.get("satellites", [])
+        satellite_settings = config.get("satellite_settings", {})
+
+        # If no IDs given, use all active
+        if satellite_ids.strip():
+            requested_ids = [s.strip() for s in satellite_ids.split(",") if s.strip()]
+        else:
+            requested_ids = [
+                sat.get("id", "") for sat in satellites_list if sat.get("active", True)
+            ]
+
+        summaries = []
+        for sat in satellites_list:
+            sid = sat.get("id", "")
+            if sid not in requested_ids:
+                continue
+
+            imaging_type = sat.get("imaging_type", "optical")
+            type_settings = satellite_settings.get(imaging_type, {})
+            spacecraft_defaults = type_settings.get("spacecraft", {})
+            sensor_defaults = type_settings.get("sensor", {})
+
+            summaries.append(
+                {
+                    "id": sid,
+                    "name": sat.get("name", sid),
+                    "imaging_type": imaging_type,
+                    "bus": {
+                        "max_roll_deg": sat.get(
+                            "max_spacecraft_roll_deg",
+                            spacecraft_defaults.get("max_spacecraft_roll_deg", 45.0),
+                        ),
+                        "max_roll_rate_dps": sat.get(
+                            "max_roll_rate_dps",
+                            spacecraft_defaults.get("max_roll_rate_dps", 1.0),
+                        ),
+                        "max_pitch_deg": sat.get(
+                            "max_spacecraft_pitch_deg",
+                            spacecraft_defaults.get("max_spacecraft_pitch_deg", 0.0),
+                        ),
+                        "max_pitch_rate_dps": sat.get(
+                            "max_pitch_rate_dps",
+                            spacecraft_defaults.get("max_pitch_rate_dps", 0.0),
+                        ),
+                        "settling_time_s": sat.get(
+                            "settling_time_s",
+                            spacecraft_defaults.get("settling_time_s", 5.0),
+                        ),
+                        "agility_dps": sat.get(
+                            "satellite_agility",
+                            type_settings.get("default_agility_deg_per_sec", 1.0),
+                        ),
+                    },
+                    "sensor": {
+                        "fov_half_angle_deg": sat.get(
+                            "sensor_fov_half_angle_deg",
+                            sensor_defaults.get("sensor_fov_half_angle_deg", 1.0),
+                        ),
+                        "swath_width_km": sat.get("imaging_parameters", {}).get(
+                            "swath_width_km", None
+                        ),
+                        "resolution_m": sat.get("imaging_parameters", {}).get(
+                            "resolution_m", None
+                        ),
+                    },
+                    "sar_capable": "sar" in sat.get("capabilities", [])
+                    or imaging_type == "sar",
+                }
+            )
+
+        # Also include SAR mode defaults if any satellite is SAR-capable
+        sar_defaults = None
+        if any(s["sar_capable"] for s in summaries):
+            sar_config = load_yaml_config("sar_modes.yaml")
+            look_side = sar_config.get("look_side", {})
+            sar_defaults = {
+                "look_side_default": look_side.get("default", "ANY"),
+                "look_side_options": look_side.get("options", ["LEFT", "RIGHT", "ANY"]),
+                "pass_direction_default": sar_config.get("pass_direction", {}).get(
+                    "default", "ANY"
+                ),
+            }
+
+        return {
+            "success": True,
+            "satellites": summaries,
+            "sar_defaults": sar_defaults,
+            "config_hash": resolver.get_config_hash(),
+        }
+    except Exception as e:
+        logger.error(f"Error getting satellite config summary: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/reload")
 async def reload_configs() -> Dict[str, Any]:
     """Reload all configuration files from disk."""

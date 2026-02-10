@@ -109,7 +109,7 @@ const MissionControls: React.FC = () => {
           debug.info(
             `Using constellation: ${satellites
               .map((s: TLEData) => s.name)
-              .join(", ")}`
+              .join(", ")}`,
           );
           return;
         }
@@ -149,7 +149,7 @@ const MissionControls: React.FC = () => {
         debug.info(
           `Constellation updated: ${satellites
             .map((s: TLEData) => s.name)
-            .join(", ")}`
+            .join(", ")}`,
         );
       } else {
         // Clear selection when all satellites are deselected
@@ -178,11 +178,11 @@ const MissionControls: React.FC = () => {
     // Listen for events
     window.addEventListener(
       "constellationSelectionChanged",
-      handleConstellationChange as EventListener
+      handleConstellationChange as EventListener,
     );
     window.addEventListener(
       "satelliteSelectionChanged",
-      handleSatelliteChange as EventListener
+      handleSatelliteChange as EventListener,
     );
     window.addEventListener("storage", (e: StorageEvent) => {
       if (e.key === "selectedSatellites" && e.newValue) {
@@ -193,18 +193,18 @@ const MissionControls: React.FC = () => {
     return () => {
       window.removeEventListener(
         "constellationSelectionChanged",
-        handleConstellationChange as EventListener
+        handleConstellationChange as EventListener,
       );
       window.removeEventListener(
         "satelliteSelectionChanged",
-        handleSatelliteChange as EventListener
+        handleSatelliteChange as EventListener,
       );
     };
   }, []);
 
   const fetchSatellites = async () => {
     try {
-      const response = await fetch("/api/satellites");
+      const response = await fetch("/api/v1/satellites");
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -237,7 +237,7 @@ const MissionControls: React.FC = () => {
                 debug.info(
                   `Using constellation: ${constellation
                     .map((s: TLEData) => s.name)
-                    .join(", ")}`
+                    .join(", ")}`,
                 );
                 return; // Don't continue to legacy single satellite logic
               }
@@ -261,13 +261,13 @@ const MissionControls: React.FC = () => {
           if (!selectedTle && tleData.length > 0) {
             selectedTle = tleData[0];
             const firstSat = data.satellites.find(
-              (s: { active: boolean }) => s.active
+              (s: { active: boolean }) => s.active,
             );
             if (firstSat) {
               localStorage.setItem("selectedSatelliteId", firstSat.id);
               localStorage.setItem(
                 "selectedSatellite",
-                JSON.stringify(selectedTle)
+                JSON.stringify(selectedTle),
               );
               debug.info(`Auto-selected first satellite: ${selectedTle.name}`);
             }
@@ -279,7 +279,7 @@ const MissionControls: React.FC = () => {
             tle: selectedTle || tleData[0],
           }));
           debug.info(
-            `Loaded satellites, using: ${selectedTle?.name || tleData[0].name}`
+            `Loaded satellites, using: ${selectedTle?.name || tleData[0].name}`,
           );
         }
       } else {

@@ -15,7 +15,6 @@ policies:
     selection_rules:
       max_orders_per_batch: 50          # Maximum orders in a single batch
       horizon_hours: 24                  # Default planning horizon in hours
-      include_soft_lock_replace: true   # Allow replacing soft-locked items
       min_priority: 1                    # Minimum order priority to include
     repair_preset: "Balanced"           # Conservative | Balanced | Aggressive
     planning_mode: "incremental"        # incremental | repair
@@ -32,7 +31,6 @@ policies:
     selection_rules:
       max_orders_per_batch: 30
       horizon_hours: 12
-      include_soft_lock_replace: true
       min_priority: 3
     repair_preset: "Aggressive"
     planning_mode: "repair"
@@ -49,7 +47,6 @@ policies:
     selection_rules:
       max_orders_per_batch: 25
       horizon_hours: 48
-      include_soft_lock_replace: false
       min_priority: 1
     repair_preset: "Conservative"
     planning_mode: "incremental"
@@ -66,7 +63,6 @@ policies:
     selection_rules:
       max_orders_per_batch: 20
       horizon_hours: 24
-      include_soft_lock_replace: false
       min_priority: 2
     repair_preset: "Conservative"
     planning_mode: "incremental"
@@ -83,7 +79,6 @@ policies:
     selection_rules:
       max_orders_per_batch: 100
       horizon_hours: 72
-      include_soft_lock_replace: true
       min_priority: 1
     repair_preset: "Balanced"
     planning_mode: "repair"

@@ -12,7 +12,7 @@
  */
 
 import { create } from "zustand";
-import { subscribeWithSelector } from "zustand/middleware";
+import { devtools, subscribeWithSelector } from "zustand/middleware";
 
 // Dev mode check compatible with Vite
 const isDev = import.meta.env?.DEV ?? false;
@@ -52,7 +52,13 @@ export interface SelectionState {
 
   // UI state
   inspectorOpen: boolean;
-  lastSelectionSource: "map" | "table" | "timeline" | "inspector" | null;
+  lastSelectionSource:
+    | "map"
+    | "table"
+    | "timeline"
+    | "inspector"
+    | "repair"
+    | null;
 }
 
 export interface ContextFilter {
@@ -139,183 +145,186 @@ const initialState: SelectionState = {
 // =============================================================================
 
 export const useSelectionStore = create<SelectionState & SelectionActions>()(
-  subscribeWithSelector((set, get) => ({
-    ...initialState,
+  devtools(
+    subscribeWithSelector((set, get) => ({
+      ...initialState,
 
-    selectTarget: (targetId, source = null) => {
-      const prevState = get();
-      const isDeselect =
-        targetId === null || targetId === prevState.selectedTargetId;
+      selectTarget: (targetId, source = null) => {
+        const prevState = get();
+        const isDeselect =
+          targetId === null || targetId === prevState.selectedTargetId;
 
-      if (isDev) {
-        console.log(
-          `[SelectionStore] selectTarget: ${isDeselect ? "deselect" : targetId} (source: ${source})`,
-        );
-      }
+        if (isDev) {
+          console.log(
+            `[SelectionStore] selectTarget: ${isDeselect ? "deselect" : targetId} (source: ${source})`,
+          );
+        }
 
-      set({
-        selectedType: isDeselect ? null : "target",
-        selectedTargetId: isDeselect ? null : targetId,
-        selectedOpportunityId: null,
-        selectedAcquisitionId: null,
-        selectedConflictId: null,
-        highlightedTargetIds: isDeselect ? [] : [targetId!],
-        highlightedOpportunityIds: [],
-        highlightedAcquisitionIds: [],
-        inspectorOpen: !isDeselect,
-        lastSelectionSource: source,
-      });
-    },
+        set({
+          selectedType: isDeselect ? null : "target",
+          selectedTargetId: isDeselect ? null : targetId,
+          selectedOpportunityId: null,
+          selectedAcquisitionId: null,
+          selectedConflictId: null,
+          highlightedTargetIds: isDeselect ? [] : [targetId!],
+          highlightedOpportunityIds: [],
+          highlightedAcquisitionIds: [],
+          inspectorOpen: !isDeselect,
+          lastSelectionSource: source,
+        });
+      },
 
-    selectOpportunity: (opportunityId, source = null) => {
-      const prevState = get();
-      const isDeselect =
-        opportunityId === null ||
-        opportunityId === prevState.selectedOpportunityId;
+      selectOpportunity: (opportunityId, source = null) => {
+        const prevState = get();
+        const isDeselect =
+          opportunityId === null ||
+          opportunityId === prevState.selectedOpportunityId;
 
-      if (isDev) {
-        console.log(
-          `[SelectionStore] selectOpportunity: ${isDeselect ? "deselect" : opportunityId} (source: ${source})`,
-        );
-      }
+        if (isDev) {
+          console.log(
+            `[SelectionStore] selectOpportunity: ${isDeselect ? "deselect" : opportunityId} (source: ${source})`,
+          );
+        }
 
-      set({
-        selectedType: isDeselect ? null : "opportunity",
-        selectedTargetId: null,
-        selectedOpportunityId: isDeselect ? null : opportunityId,
-        selectedAcquisitionId: null,
-        selectedConflictId: null,
-        highlightedTargetIds: [],
-        highlightedOpportunityIds: isDeselect ? [] : [opportunityId!],
-        highlightedAcquisitionIds: [],
-        inspectorOpen: !isDeselect,
-        lastSelectionSource: source,
-      });
-    },
+        set({
+          selectedType: isDeselect ? null : "opportunity",
+          selectedTargetId: null,
+          selectedOpportunityId: isDeselect ? null : opportunityId,
+          selectedAcquisitionId: null,
+          selectedConflictId: null,
+          highlightedTargetIds: [],
+          highlightedOpportunityIds: isDeselect ? [] : [opportunityId!],
+          highlightedAcquisitionIds: [],
+          inspectorOpen: !isDeselect,
+          lastSelectionSource: source,
+        });
+      },
 
-    selectAcquisition: (acquisitionId, source = null) => {
-      const prevState = get();
-      const isDeselect =
-        acquisitionId === null ||
-        acquisitionId === prevState.selectedAcquisitionId;
+      selectAcquisition: (acquisitionId, source = null) => {
+        const prevState = get();
+        const isDeselect =
+          acquisitionId === null ||
+          acquisitionId === prevState.selectedAcquisitionId;
 
-      if (isDev) {
-        console.log(
-          `[SelectionStore] selectAcquisition: ${isDeselect ? "deselect" : acquisitionId} (source: ${source})`,
-        );
-      }
+        if (isDev) {
+          console.log(
+            `[SelectionStore] selectAcquisition: ${isDeselect ? "deselect" : acquisitionId} (source: ${source})`,
+          );
+        }
 
-      set({
-        selectedType: isDeselect ? null : "acquisition",
-        selectedTargetId: null,
-        selectedOpportunityId: null,
-        selectedAcquisitionId: isDeselect ? null : acquisitionId,
-        selectedConflictId: null,
-        highlightedTargetIds: [],
-        highlightedOpportunityIds: [],
-        highlightedAcquisitionIds: isDeselect ? [] : [acquisitionId!],
-        inspectorOpen: !isDeselect,
-        lastSelectionSource: source,
-      });
-    },
+        set({
+          selectedType: isDeselect ? null : "acquisition",
+          selectedTargetId: null,
+          selectedOpportunityId: null,
+          selectedAcquisitionId: isDeselect ? null : acquisitionId,
+          selectedConflictId: null,
+          highlightedTargetIds: [],
+          highlightedOpportunityIds: [],
+          highlightedAcquisitionIds: isDeselect ? [] : [acquisitionId!],
+          inspectorOpen: !isDeselect,
+          lastSelectionSource: source,
+        });
+      },
 
-    selectConflict: (conflictId, relatedAcquisitionIds = []) => {
-      const prevState = get();
-      const isDeselect =
-        conflictId === null || conflictId === prevState.selectedConflictId;
+      selectConflict: (conflictId, relatedAcquisitionIds = []) => {
+        const prevState = get();
+        const isDeselect =
+          conflictId === null || conflictId === prevState.selectedConflictId;
 
-      if (isDev) {
-        console.log(
-          `[SelectionStore] selectConflict: ${isDeselect ? "deselect" : conflictId} (related: ${relatedAcquisitionIds.length})`,
-        );
-      }
+        if (isDev) {
+          console.log(
+            `[SelectionStore] selectConflict: ${isDeselect ? "deselect" : conflictId} (related: ${relatedAcquisitionIds.length})`,
+          );
+        }
 
-      set({
-        selectedType: isDeselect ? null : "conflict",
-        selectedTargetId: null,
-        selectedOpportunityId: null,
-        selectedAcquisitionId: null,
-        selectedConflictId: isDeselect ? null : conflictId,
-        highlightedTargetIds: [],
-        highlightedOpportunityIds: [],
-        highlightedAcquisitionIds: isDeselect ? [] : relatedAcquisitionIds,
-        inspectorOpen: !isDeselect,
-        lastSelectionSource: "table",
-      });
-    },
+        set({
+          selectedType: isDeselect ? null : "conflict",
+          selectedTargetId: null,
+          selectedOpportunityId: null,
+          selectedAcquisitionId: null,
+          selectedConflictId: isDeselect ? null : conflictId,
+          highlightedTargetIds: [],
+          highlightedOpportunityIds: [],
+          highlightedAcquisitionIds: isDeselect ? [] : relatedAcquisitionIds,
+          inspectorOpen: !isDeselect,
+          lastSelectionSource: "table",
+        });
+      },
 
-    clearSelection: () => {
-      if (isDev) {
-        console.log("[SelectionStore] clearSelection");
-      }
+      clearSelection: () => {
+        if (isDev) {
+          console.log("[SelectionStore] clearSelection");
+        }
 
-      set({
-        selectedType: null,
-        selectedTargetId: null,
-        selectedOpportunityId: null,
-        selectedAcquisitionId: null,
-        selectedConflictId: null,
-        highlightedTargetIds: [],
-        highlightedOpportunityIds: [],
-        highlightedAcquisitionIds: [],
-        inspectorOpen: false,
-        lastSelectionSource: null,
-      });
-    },
+        set({
+          selectedType: null,
+          selectedTargetId: null,
+          selectedOpportunityId: null,
+          selectedAcquisitionId: null,
+          selectedConflictId: null,
+          highlightedTargetIds: [],
+          highlightedOpportunityIds: [],
+          highlightedAcquisitionIds: [],
+          inspectorOpen: false,
+          lastSelectionSource: null,
+        });
+      },
 
-    setHighlightedTargets: (ids) => set({ highlightedTargetIds: ids }),
-    setHighlightedOpportunities: (ids) =>
-      set({ highlightedOpportunityIds: ids }),
-    setHighlightedAcquisitions: (ids) =>
-      set({ highlightedAcquisitionIds: ids }),
+      setHighlightedTargets: (ids) => set({ highlightedTargetIds: ids }),
+      setHighlightedOpportunities: (ids) =>
+        set({ highlightedOpportunityIds: ids }),
+      setHighlightedAcquisitions: (ids) =>
+        set({ highlightedAcquisitionIds: ids }),
 
-    setContextFilter: (view, filter) => {
-      if (isDev) {
-        console.log(`[SelectionStore] setContextFilter (${view}):`, filter);
-      }
+      setContextFilter: (view, filter) => {
+        if (isDev) {
+          console.log(`[SelectionStore] setContextFilter (${view}):`, filter);
+        }
 
-      set((state) => ({
-        contextFilters: {
-          ...state.contextFilters,
-          [view]: {
-            ...state.contextFilters[view],
-            ...filter,
+        set((state) => ({
+          contextFilters: {
+            ...state.contextFilters,
+            [view]: {
+              ...state.contextFilters[view],
+              ...filter,
+            },
           },
-        },
-      }));
-    },
+        }));
+      },
 
-    clearContextFilter: (view) => {
-      if (isDev) {
-        console.log(`[SelectionStore] clearContextFilter (${view})`);
-      }
+      clearContextFilter: (view) => {
+        if (isDev) {
+          console.log(`[SelectionStore] clearContextFilter (${view})`);
+        }
 
-      set((state) => ({
-        contextFilters: {
-          ...state.contextFilters,
-          [view]: { ...emptyContextFilter },
-        },
-      }));
-    },
+        set((state) => ({
+          contextFilters: {
+            ...state.contextFilters,
+            [view]: { ...emptyContextFilter },
+          },
+        }));
+      },
 
-    clearAllContextFilters: () => {
-      if (isDev) {
-        console.log("[SelectionStore] clearAllContextFilters");
-      }
+      clearAllContextFilters: () => {
+        if (isDev) {
+          console.log("[SelectionStore] clearAllContextFilters");
+        }
 
-      set({
-        contextFilters: {
-          analysis: { ...emptyContextFilter },
-          planning: { ...emptyContextFilter },
-          schedule: { ...emptyContextFilter },
-        },
-      });
-    },
+        set({
+          contextFilters: {
+            analysis: { ...emptyContextFilter },
+            planning: { ...emptyContextFilter },
+            schedule: { ...emptyContextFilter },
+          },
+        });
+      },
 
-    setInspectorOpen: (open) => set({ inspectorOpen: open }),
-    toggleInspector: () =>
-      set((state) => ({ inspectorOpen: !state.inspectorOpen })),
-  })),
+      setInspectorOpen: (open) => set({ inspectorOpen: open }),
+      toggleInspector: () =>
+        set((state) => ({ inspectorOpen: !state.inspectorOpen })),
+    })),
+    { name: "SelectionStore", enabled: import.meta.env?.DEV ?? false },
+  ),
 );
 
 // =============================================================================

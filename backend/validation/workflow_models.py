@@ -180,8 +180,6 @@ class WorkflowScenarioConfig:
     # Repair mode options
     run_repair: bool = False
     max_repair_changes: int = 10
-    repair_allow_shift: bool = True
-    repair_allow_replace: bool = True
 
     # Commit options
     dry_run: bool = True  # Default to no DB mutation
@@ -204,8 +202,6 @@ class WorkflowScenarioConfig:
             "algorithm": self.algorithm,
             "run_repair": self.run_repair,
             "max_repair_changes": self.max_repair_changes,
-            "repair_allow_shift": self.repair_allow_shift,
-            "repair_allow_replace": self.repair_allow_replace,
             "dry_run": self.dry_run,
             "use_temp_workspace": self.use_temp_workspace,
             "seed": self.seed,

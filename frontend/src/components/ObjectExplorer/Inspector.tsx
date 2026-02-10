@@ -37,6 +37,9 @@ import {
   ArrowLeft,
   ArrowRight,
   ChevronRight,
+  Lock,
+  Unlock,
+  Shield,
 } from "lucide-react";
 import { useExplorerStore } from "../../store/explorerStore";
 import { usePlanningStore } from "../../store/planningStore";
@@ -44,10 +47,17 @@ import { useOrdersStore } from "../../store/ordersStore";
 import { useSelectionStore } from "../../store/selectionStore";
 import { useConflictStore } from "../../store/conflictStore";
 import { useConflictHighlightStore } from "../../store/conflictHighlightStore";
+import { useLockStore } from "../../store/lockStore";
 import {
   useRepairHighlightStore,
   getRepairDiffBadgeInfo,
 } from "../../store/repairHighlightStore";
+import {
+  buildItemReason,
+  REASON_CODE_LABELS,
+  REASON_CODE_COLORS,
+  type RepairItemReason,
+} from "../../adapters/repairReasons";
 import { useMission } from "../../context/MissionContext";
 import { useGroundStations } from "../../hooks/queries";
 import type { TreeNodeType } from "../../types/explorer";
@@ -1170,7 +1180,7 @@ const OrderInspector: React.FC<{
 };
 
 // =============================================================================
-// Repair Change Badge Component (PR-REPAIR-UX-01)
+// Repair Change Badge Component (PR-REPAIR-UX-01 + PR-OPS-REPAIR-EXPLAIN-01)
 // =============================================================================
 
 interface RepairChangeBadgeProps {
@@ -1181,25 +1191,45 @@ interface RepairChangeBadgeProps {
     from_roll_deg?: number;
     to_roll_deg?: number;
   };
+  /** PR-OPS-REPAIR-EXPLAIN-01: structured reason for this item */
+  itemReason?: RepairItemReason;
 }
 
 const RepairChangeBadge: React.FC<RepairChangeBadgeProps> = ({
   type,
   movedInfo,
+  itemReason,
 }) => {
+  const [showDetail, setShowDetail] = React.useState(false);
   const badgeInfo = getRepairDiffBadgeInfo(type);
+
+  // Derive reason if not provided
+  const reason = itemReason ?? buildItemReason(type);
+  const reasonLabel = REASON_CODE_LABELS[reason.reason_code];
+  const reasonColor = REASON_CODE_COLORS[reason.reason_code];
 
   return (
     <div
       className={`px-3 py-2 rounded-lg border ${badgeInfo.bgColor} border-opacity-50`}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         <span
           className={`text-xs font-medium uppercase px-2 py-0.5 rounded ${badgeInfo.bgColor} ${badgeInfo.color}`}
         >
           Repair: {badgeInfo.label}
         </span>
+        {/* PR-OPS-REPAIR-EXPLAIN-01: Reason code chip */}
+        <span
+          className={`text-[10px] px-1.5 py-0.5 rounded ${reasonColor.bg} ${reasonColor.text}`}
+        >
+          {reasonLabel}
+        </span>
       </div>
+
+      {/* PR-OPS-REPAIR-EXPLAIN-01: Short reason line */}
+      <div className="mt-1.5 text-xs text-gray-300">{reason.short_reason}</div>
+
+      {/* Moved item: from→to time */}
       {type === "moved" && movedInfo && (
         <div className="mt-2 text-xs text-gray-400">
           <div className="flex items-center gap-2">
@@ -1223,6 +1253,37 @@ const RepairChangeBadge: React.FC<RepairChangeBadgeProps> = ({
             )}
         </div>
       )}
+
+      {/* Dropped item: show reason */}
+      {type === "dropped" && (
+        <div className="mt-1 text-xs text-red-400/80">
+          Dropped due to: {reason.short_reason}
+        </div>
+      )}
+
+      {/* PR-OPS-REPAIR-EXPLAIN-01: Expandable detail reason */}
+      {reason.detail_reason && reason.detail_reason !== reason.short_reason && (
+        <button
+          onClick={() => setShowDetail(!showDetail)}
+          className="mt-1 text-[10px] text-blue-400 hover:text-blue-300 flex items-center gap-0.5"
+        >
+          {showDetail ? (
+            <>
+              <ChevronRight className="w-3 h-3 rotate-90" /> Hide details
+            </>
+          ) : (
+            <>
+              <ChevronRight className="w-3 h-3" /> Show details
+            </>
+          )}
+        </button>
+      )}
+      {showDetail && reason.detail_reason && (
+        <div className="mt-1 text-[10px] text-gray-400 bg-gray-800/50 rounded p-1.5">
+          {reason.detail_reason}
+        </div>
+      )}
+
       <div className="mt-1 text-[10px] text-gray-500 italic">
         Preview only — not committed
       </div>
@@ -1441,6 +1502,12 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
     selectAcquisition,
   } = useSelectionStore();
 
+  // PR-LOCK-OPS-01: Lock store for acquisition lock control
+  const lockLevels = useLockStore((s) => s.levels);
+  const toggleLock = useLockStore((s) => s.toggleLock);
+  const lockPending = useLockStore((s) => s.pending);
+  const lastSelectionSource = useSelectionStore((s) => s.lastSelectionSource);
+
   // Conflict store for conflict details
   const conflicts = useConflictStore((s) => s.conflicts);
 
@@ -1469,10 +1536,28 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
 
   // Repair highlight store for repair diff item display (PR-REPAIR-UX-01)
   const selectedRepairItem = useRepairHighlightStore((s) => s.selectedDiffItem);
+  const repairDiff = useRepairHighlightStore((s) => s.repairDiff);
   const clearRepairSelection = useRepairHighlightStore((s) => s.clearSelection);
   const focusTimelineOnRepairItem = useRepairHighlightStore(
     (s) => s.focusTimelineOnRepairItem,
   );
+
+  // PR-OPS-REPAIR-EXPLAIN-01: Derive per-item reason for inspector badge
+  const selectedRepairItemReason = useMemo(() => {
+    if (!selectedRepairItem || !repairDiff) return undefined;
+    const { id, type } = selectedRepairItem;
+    let backendReason: string | undefined;
+    if (type === "dropped") {
+      backendReason = repairDiff.reason_summary.dropped?.find(
+        (r) => r.id === id,
+      )?.reason;
+    } else if (type === "moved") {
+      backendReason = repairDiff.reason_summary.moved?.find(
+        (r) => r.id === id,
+      )?.reason;
+    }
+    return buildItemReason(type, backendReason);
+  }, [selectedRepairItem, repairDiff]);
 
   // Handle focus on map for conflict (PR-CONFLICT-UX-02)
   const handleConflictFocusMap = () => {
@@ -1777,12 +1862,13 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
           )}
           {unifiedSelectedType === "opportunity" && (
             <>
-              {/* Repair Change Badge (PR-REPAIR-UX-01) */}
+              {/* Repair Change Badge (PR-REPAIR-UX-01 + PR-OPS-REPAIR-EXPLAIN-01) */}
               {selectedRepairItem && (
                 <div className="px-4 py-2">
                   <RepairChangeBadge
                     type={selectedRepairItem.type}
                     movedInfo={selectedRepairItem.movedInfo}
+                    itemReason={selectedRepairItemReason}
                   />
                 </div>
               )}
@@ -1817,6 +1903,138 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
                   />
                 </InspectorSection>
               )}
+              {/* Quick Actions for repair items */}
+              {selectedRepairItem && (
+                <div className="px-4 py-3 border-t border-gray-700">
+                  <div className="text-xs text-gray-500 mb-2">
+                    Quick Actions
+                  </div>
+                  <div className="flex gap-2">
+                    <ActionButton
+                      label="Focus Timeline"
+                      icon="Clock"
+                      onClick={focusTimelineOnRepairItem}
+                      variant="secondary"
+                    />
+                    <ActionButton
+                      label="Clear"
+                      icon="X"
+                      onClick={clearRepairSelection}
+                      variant="secondary"
+                    />
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+          {/* PR-LOCK-OPS-01: Acquisition section with lock control */}
+          {unifiedSelectedType === "acquisition" && selectedAcquisitionId && (
+            <>
+              {/* Repair Change Badge (when selected from repair report) */}
+              {selectedRepairItem && (
+                <div className="px-4 py-2">
+                  <RepairChangeBadge
+                    type={selectedRepairItem.type}
+                    movedInfo={selectedRepairItem.movedInfo}
+                    itemReason={selectedRepairItemReason}
+                  />
+                </div>
+              )}
+              <InspectorSection title="Overview" icon="Target">
+                <Field label="Target" value={metadata.target_id as string} />
+                <Field
+                  label="Satellite"
+                  value={metadata.satellite_id as string}
+                />
+                {typeof metadata.order_id === "string" && (
+                  <Field label="Order" value={metadata.order_id} />
+                )}
+              </InspectorSection>
+              <InspectorSection title="Timing" icon="Clock">
+                <Field
+                  label="Start"
+                  value={formatDateTime(metadata.start_time as string)}
+                />
+                <Field
+                  label="End"
+                  value={formatDateTime(metadata.end_time as string)}
+                />
+              </InspectorSection>
+
+              {/* PR-LOCK-OPS-01: Lock Control Section */}
+              <div className="px-4 py-3 border-t border-gray-700">
+                <div className="text-xs text-gray-500 mb-2 flex items-center gap-1">
+                  <Shield size={12} />
+                  Lock Control
+                </div>
+                {(() => {
+                  const isRepairPreview = lastSelectionSource === "repair";
+                  const acqLockLevel =
+                    lockLevels.get(selectedAcquisitionId) ?? "none";
+                  const isLocked = acqLockLevel === "hard";
+                  const isPending = lockPending.has(selectedAcquisitionId);
+
+                  if (isRepairPreview) {
+                    return (
+                      <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-800/50 border border-gray-700/50">
+                        <Lock size={14} className="text-gray-500" />
+                        <div>
+                          <div className="text-xs text-gray-400">
+                            Locking available after commit
+                          </div>
+                          <div className="text-[10px] text-gray-500">
+                            Commit the repair plan first, then lock items
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <button
+                      onClick={() => toggleLock(selectedAcquisitionId)}
+                      disabled={isPending}
+                      className={`
+                        w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-all
+                        ${isPending ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}
+                        ${
+                          isLocked
+                            ? "bg-red-950/30 border-red-800/40 hover:bg-red-950/50"
+                            : "bg-gray-800/50 border-gray-700/50 hover:bg-gray-800 hover:border-gray-600"
+                        }
+                      `}
+                    >
+                      {isLocked ? (
+                        <Shield size={16} className="text-red-400" />
+                      ) : (
+                        <Unlock size={16} className="text-gray-400" />
+                      )}
+                      <div className="flex-1 text-left">
+                        <div
+                          className={`text-xs font-medium ${isLocked ? "text-red-300" : "text-gray-300"}`}
+                        >
+                          {isLocked ? "Hard Locked" : "Unlocked"}
+                        </div>
+                        <div className="text-[10px] text-gray-500">
+                          {isLocked
+                            ? "Protected from repair — click to unlock"
+                            : "Flexible — click to lock (protect from repair)"}
+                        </div>
+                      </div>
+                      <span
+                        className={`text-[10px] px-2 py-0.5 rounded font-medium ${
+                          isLocked
+                            ? "bg-red-900/40 text-red-300"
+                            : "bg-gray-700 text-gray-400"
+                        }`}
+                      >
+                        {isLocked ? "Unlock" : "Lock"}
+                      </span>
+                    </button>
+                  );
+                })()}
+              </div>
+
               {/* Quick Actions for repair items */}
               {selectedRepairItem && (
                 <div className="px-4 py-3 border-t border-gray-700">

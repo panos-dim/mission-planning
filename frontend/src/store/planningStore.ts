@@ -5,6 +5,7 @@
  */
 
 import { create } from "zustand";
+import { devtools } from "zustand/middleware";
 import { AlgorithmResult } from "../types";
 
 interface PlanningResultsState {
@@ -24,26 +25,31 @@ interface PlanningResultsState {
   getActiveResult: () => AlgorithmResult | null;
 }
 
-export const usePlanningStore = create<PlanningResultsState>((set, get) => ({
-  results: null,
-  activeAlgorithm: null,
+export const usePlanningStore = create<PlanningResultsState>()(
+  devtools(
+    (set, get) => ({
+      results: null,
+      activeAlgorithm: null,
 
-  setResults: (results) => set({ results }),
+      setResults: (results) => set({ results }),
 
-  setActiveAlgorithm: (algorithm) => set({ activeAlgorithm: algorithm }),
+      setActiveAlgorithm: (algorithm) => set({ activeAlgorithm: algorithm }),
 
-  clearResults: () => set({ results: null, activeAlgorithm: null }),
+      clearResults: () => set({ results: null, activeAlgorithm: null }),
 
-  getScheduledCount: () => {
-    const { results, activeAlgorithm } = get();
-    if (!results || !activeAlgorithm) return 0;
-    const activeResult = results[activeAlgorithm];
-    return activeResult?.schedule?.length || 0;
-  },
+      getScheduledCount: () => {
+        const { results, activeAlgorithm } = get();
+        if (!results || !activeAlgorithm) return 0;
+        const activeResult = results[activeAlgorithm];
+        return activeResult?.schedule?.length || 0;
+      },
 
-  getActiveResult: () => {
-    const { results, activeAlgorithm } = get();
-    if (!results || !activeAlgorithm) return null;
-    return results[activeAlgorithm] || null;
-  },
-}));
+      getActiveResult: () => {
+        const { results, activeAlgorithm } = get();
+        if (!results || !activeAlgorithm) return null;
+        return results[activeAlgorithm] || null;
+      },
+    }),
+    { name: "PlanningStore", enabled: import.meta.env?.DEV ?? false },
+  ),
+);

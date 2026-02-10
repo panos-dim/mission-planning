@@ -32,7 +32,7 @@ This PR implements team feedback to make mission planning "ops-grade and simple"
 | Before | After |
 |--------|-------|
 | Three lock levels: `none`, `soft`, `hard` | Two lock levels: `none`, `hard` |
-| Soft lock = yellow, modifiable by policy | Soft locks deprecated, treated as `none` |
+| Soft lock = yellow, modifiable by policy | Soft locks fully removed from codebase |
 | Lock toggle cycles through 3 states | Lock toggle toggles between 2 states |
 
 **Migration:**
@@ -101,18 +101,42 @@ New Timeline tab in Schedule panel:
   - Added `TIMELINE` to `SCHEDULE_TABS`
   - Added to `SIMPLE_MODE_SCHEDULE_TABS`
 
-### E) Repair Full Flexibility
+### E) Repair Full Flexibility — Soft Lock Removal
 
-Updated repair engine defaults:
-- All unlocked items are fully flexible (can be rearranged, replaced, or dropped)
-- Only hard-locked items are immutable
-- `soft_lock_policy` parameter deprecated (always uses `allow_replace` behavior)
+Complete removal of `SoftLockPolicy` enum and all soft lock logic:
+- `SoftLockPolicy` enum removed from `incremental_planning.py`
+- `soft_lock_policy` parameter removed from repair request model and all API endpoints
+- All unlocked items (`lock_level: "none"`) are fully flexible (can be rearranged, replaced, or dropped)
+- Only hard-locked items (`lock_level: "hard"`) are immutable
+- Repair presets simplified to `max_changes` + `objective` only
 
-**Files Changed:**
-- `backend/incremental_planning.py`
-  - Updated `SoftLockPolicy` docstring
-- `backend/routers/schedule.py`
-  - Updated `RepairPlanRequestModel` documentation
+**Backend Files Changed:**
+- `backend/incremental_planning.py` — Removed `SoftLockPolicy` enum, `soft_lock_policy` from `RepairPlanningContext` and `load_repair_context`
+- `backend/routers/schedule.py` — Removed `soft_lock_policy` from `RepairPlanRequestModel`, updated all lock_level comments/defaults/validation to `none | hard`
+- `backend/schedule_persistence.py` — Changed default lock_level to `"none"`, migration normalizes `soft` → `none`
+- `backend/policy_engine.py` — Removed `include_soft_lock_replace` from `SelectionRules`
+- `backend/routers/batching.py` — Removed `include_soft_lock_replace`, default lock_level to `"none"`
+- `backend/routers/workspaces.py` — Default lock_level to `"none"`
+- `backend/validation/workflow_models.py` — Removed `repair_allow_shift`/`repair_allow_replace`
+- `backend/validation/workflow_runner.py` — Default lock_level to `"none"`
+
+**Frontend Files Changed:**
+- `frontend/src/api/generated/api-types.ts` — Removed `soft_lock_policy`, `include_soft_lock_replace`
+- `frontend/src/api/scheduleApi.ts` — Removed `SoftLockPolicy` type, `LockLevel = "none" | "hard"`
+- `frontend/src/components/RepairSettingsPresets.tsx` — Removed `soft_lock_policy` from settings/presets
+- `frontend/src/components/MissionPlanning.tsx` — Removed `softLockPolicy` state and dropdown
+- `frontend/src/components/LockToggle.tsx` — Removed `soft` config entry
+- `frontend/src/components/LeftSidebar.tsx` — Default `lock_level: "none"`
+- `frontend/src/components/OrdersArea.tsx` — Default `lock_level: "none"`
+
+**Config:**
+- `config/batch_policies.yaml` — Removed `include_soft_lock_replace` from all policies
+
+**Tests:**
+- `tests/unit/test_incremental_planning.py` — Removed soft lock tests, updated defaults
+- `tests/unit/test_lock_management.py` — Updated fixture and tests for none/hard only
+- `scripts/test_repair_e2e_v2.py` — Removed soft_lock_policy params, removed freeze_soft test
+- `scripts/test_api_sweep.py` — Removed soft_lock_policy from repair call
 
 ---
 
@@ -215,23 +239,45 @@ WHERE lock_level = 'soft'
 ## Files Modified
 
 ### Frontend
-- `src/components/MissionPlanning.tsx` - Repair-first defaults, button label
-- `src/components/LockToggle.tsx` - Simplified lock toggle
+- `src/api/generated/api-types.ts` - Removed soft_lock_policy, include_soft_lock_replace types
+- `src/api/scheduleApi.ts` - Removed SoftLockPolicy type, LockLevel = none|hard
+- `src/components/MissionPlanning.tsx` - Repair-first defaults, removed softLockPolicy state/UI
+- `src/components/RepairSettingsPresets.tsx` - Removed soft_lock_policy from presets/form
+- `src/components/LockToggle.tsx` - Simplified to none/hard only
 - `src/components/RepairDiffPanel.tsx` - Narrative summary
 - `src/components/SchedulePanel.tsx` - Timeline tab integration
 - `src/components/ScheduleTimeline.tsx` - New timeline component
+- `src/components/LeftSidebar.tsx` - Default lock_level: none
+- `src/components/OrdersArea.tsx` - Default lock_level: none
 - `src/constants/simpleMode.ts` - TIMELINE tab constant
 
 ### Backend
-- `backend/schedule_persistence.py` - v2.2 migration, lock normalization
-- `backend/routers/schedule.py` - Lock endpoint updates, repair defaults
-- `backend/incremental_planning.py` - Documentation updates
+- `backend/incremental_planning.py` - Removed SoftLockPolicy enum, simplified partitioning
+- `backend/routers/schedule.py` - Lock endpoints, repair request model, defaults updated
+- `backend/schedule_persistence.py` - v2.2 migration, lock normalization, default none
+- `backend/policy_engine.py` - Removed include_soft_lock_replace
+- `backend/routers/batching.py` - Removed soft lock fields, default lock_level none
+- `backend/routers/workspaces.py` - Default lock_level none
+- `backend/validation/workflow_models.py` - Removed repair_allow_shift/replace
+- `backend/validation/workflow_runner.py` - Default lock_level none
+
+### Config
+- `config/batch_policies.yaml` - Removed include_soft_lock_replace from all policies
+
+### Tests
+- `tests/unit/test_incremental_planning.py` - Removed soft lock tests
+- `tests/unit/test_lock_management.py` - Updated for none/hard only
+- `scripts/test_repair_e2e_v2.py` - Removed soft_lock_policy, freeze_soft step
+- `scripts/test_api_sweep.py` - Removed soft_lock_policy from repair call
 
 ---
 
 ## Acceptance Criteria
 
 ✅ Mission planner cannot accidentally run non-repair planning in Simple Mode
-✅ Only two lock states exist end-to-end (hard/none)
+✅ Only two lock states exist end-to-end (hard/none) — soft locks fully removed
 ✅ Repair can fully rearrange unlocked schedule with clear narrative
 ✅ Schedule Timeline tab is usable and "mission planner grade"
+✅ 120 unit tests pass (incremental planning + lock management + conflict + workspace)
+✅ TypeScript typecheck clean (0 errors)
+✅ E2E repair test: 35/35 passed with live API

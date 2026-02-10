@@ -21,6 +21,7 @@ import {
 } from "cesium";
 import { useMission } from "../../context/MissionContext";
 import { SceneObject } from "../../types";
+import { useShallow } from "zustand/react/shallow";
 import { SceneMode, useVisStore } from "../../store/visStore";
 import { useTargetAddStore } from "../../store/targetAddStore";
 import { usePreviewTargetsStore } from "../../store/previewTargetsStore";
@@ -91,7 +92,13 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
   });
 
   // Target add mode state
-  const { isAddMode, setPendingTarget, openDetailsSheet } = useTargetAddStore();
+  const { isAddMode, setPendingTarget, openDetailsSheet } = useTargetAddStore(
+    useShallow((s) => ({
+      isAddMode: s.isAddMode,
+      setPendingTarget: s.setPendingTarget,
+      openDetailsSheet: s.openDetailsSheet,
+    })),
+  );
   const { pickCartographic } = useMapClickToCartographic();
 
   // Preview targets store for showing targets before mission analysis
@@ -99,7 +106,13 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
     targets: previewTargets,
     hidePreview,
     setHidePreview,
-  } = usePreviewTargetsStore();
+  } = usePreviewTargetsStore(
+    useShallow((s) => ({
+      targets: s.targets,
+      hidePreview: s.hidePreview,
+      setHidePreview: s.setHidePreview,
+    })),
+  );
   const previewEntitiesRef = useRef<string[]>([]);
 
   // Store hooks
@@ -113,11 +126,30 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({
     clockMultiplier,
     setClockState,
     setSelectedOpportunity,
-  } = useVisStore();
+  } = useVisStore(
+    useShallow((s) => ({
+      selectedOpportunityId: s.selectedOpportunityId,
+      activeLayers: s.activeLayers,
+      setTimeWindow: s.setTimeWindow,
+      viewMode: s.viewMode,
+      clockTime: s.clockTime,
+      clockShouldAnimate: s.clockShouldAnimate,
+      clockMultiplier: s.clockMultiplier,
+      setClockState: s.setClockState,
+      setSelectedOpportunity: s.setSelectedOpportunity,
+    })),
+  );
 
   // Swath store for SAR swath selection and debug
   const { selectSwath, setHoveredSwath, updateDebugInfo, debugEnabled } =
-    useSwathStore();
+    useSwathStore(
+      useShallow((s) => ({
+        selectSwath: s.selectSwath,
+        setHoveredSwath: s.setHoveredSwath,
+        updateDebugInfo: s.updateDebugInfo,
+        debugEnabled: s.debugEnabled,
+      })),
+    );
 
   // Conflict highlighting on map (PR-CONFLICT-UX-02)
   useConflictMapHighlight(viewerRef);

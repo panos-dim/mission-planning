@@ -25,13 +25,10 @@ import yaml  # type: ignore[import-untyped]
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel  # Only used for inline models if any remain
 
-# Import existing mission planner modules
-# Add the project root and src directories to Python path
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, project_root)
-sys.path.insert(0, os.path.join(project_root, "src"))
+# Ensure mission_planner is importable (centralised path setup)
+import backend._paths  # noqa: F401, E402
 
 try:
     from mission_planner.audit import (
@@ -98,19 +95,52 @@ config_manager = ConfigManager()
 satellite_manager = SatelliteManager()
 mission_settings_manager = MissionSettingsManager()
 
-# Cache for opportunities (used by incremental/repair planning endpoints)
-_opportunities_cache: List[Dict[str, Any]] = []
+# Setup logging early
+setup_logging()
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# App State — replaces module-level mutable globals (thread-safe access)
+# =============================================================================
 
 
 def get_cached_opportunities() -> List[Dict[str, Any]]:
     """Get cached opportunities from the last mission analysis."""
-    return _opportunities_cache
+    return getattr(app.state, "opportunities_cache", [])
 
 
 def set_cached_opportunities(opportunities: List[Dict[str, Any]]) -> None:
     """Set cached opportunities from mission analysis."""
-    global _opportunities_cache
-    _opportunities_cache = opportunities
+    app.state.opportunities_cache = opportunities
+
+
+# =============================================================================
+# Lifespan — replaces deprecated @app.on_event (FastAPI 0.109+)
+# =============================================================================
+from contextlib import asynccontextmanager  # noqa: E402
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
+    """Manage startup/shutdown lifecycle."""
+    # --- Startup ---
+    config_manager.load_config()
+    logger.info(
+        f"Loaded {len(config_manager.ground_stations)} ground stations from configuration"
+    )
+    logger.info(
+        f"Loaded {len(satellite_manager.get_satellites())} satellites from configuration"
+    )
+    app.state.opportunities_cache = []
+    app.state.current_mission_data = {}
+
+    yield
+
+    # --- Shutdown ---
+    logger.info("Application shutting down, cleaning up process pool...")
+    cleanup_process_pool()
+    logger.info("Process pool cleanup complete")
 
 
 # Initialize FastAPI app
@@ -118,15 +148,20 @@ app = FastAPI(
     title="Satellite Mission Planning API",
     description="REST API for satellite mission planning and visualization",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
-# Enable CORS for frontend (allow all origins in development)
+# CORS — use CORS_ORIGINS env var in production, default to * for development
+_cors_origins_env = os.environ.get("CORS_ORIGINS", "*")
+_cors_origins = (
+    [o.strip() for o in _cors_origins_env.split(",")]
+    if _cors_origins_env != "*"
+    else ["*"]
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "*"
-    ],  # Allow all origins for development (browser preview proxy, etc.)
-    allow_credentials=False,  # Must be False when using allow_origins=["*"]
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_origins != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -143,446 +178,39 @@ app.include_router(batching_router)
 if os.path.exists("../frontend/dist"):
     app.mount("/static", StaticFiles(directory="../frontend/dist"), name="static")
 
-# Setup logging
-setup_logging()
-logger = logging.getLogger(__name__)
 
-# Load configuration on startup
-config_manager.load_config()
-
-
-@app.on_event("shutdown")
-async def shutdown_event() -> None:
-    """Clean up resources on application shutdown."""
-    logger.info("Application shutting down, cleaning up process pool...")
-    cleanup_process_pool()
-    logger.info("Process pool cleanup complete")
-
-
-logger.info(
-    f"Loaded {len(config_manager.ground_stations)} ground stations from configuration"
+# Pydantic models — imported from backend.schemas (extracted for maintainability)
+from backend.schemas import (  # noqa: E402
+    BatchPassEnrichmentRequest,
+    BenchmarkRequest,
+    CoordinateInput,
+    DebugSatellite,
+    DebugTarget,
+    EnrichedPassResponse,
+    GeometryAnalysisRequest,
+    LightingAnalysisRequest,
+    MissionRequest,
+    MissionResponse,
+    ParsedTarget,
+    PassEnrichmentRequest,
+    PassGeometryResponse,
+    PassLightingResponse,
+    PassManeuverResponse,
+    PassQualityResponse,
+    PlanningAuditMetadata,
+    PlanningParams,
+    PlanningRequest,
+    PlanningResponse,
+    RunScenarioRequest,
+    SARInputParams,
+    SatelliteCreateRequest,
+    SatelliteUpdateRequest,
+    TargetData,
+    TimeWindow,
+    TLEData,
 )
 
-# Note: satellite_manager already initialized above
-logger.info(
-    f"Loaded {len(satellite_manager.get_satellites())} satellites from configuration"
-)
-
-
-# Pydantic models for API requests/responses
-class TLEData(BaseModel):
-    name: str
-    line1: str
-    line2: str
-
-    @field_validator("line1")
-    @classmethod
-    def validate_line1(cls, v: str) -> str:
-        if not v.strip().startswith("1 "):
-            raise ValueError('TLE line1 must start with "1 "')
-        if len(v.strip()) < 69:
-            raise ValueError("TLE line1 must be at least 69 characters")
-        return v.strip()
-
-    @field_validator("line2")
-    @classmethod
-    def validate_line2(cls, v: str) -> str:
-        if not v.strip().startswith("2 "):
-            raise ValueError('TLE line2 must start with "2 "')
-        if len(v.strip()) < 69:
-            raise ValueError("TLE line2 must be at least 69 characters")
-        return v.strip()
-
-
-class TargetData(BaseModel):
-    name: str
-    latitude: float
-    longitude: float
-    description: Optional[str] = ""
-    priority: Optional[int] = 1  # Target priority (1-5)
-    color: Optional[str] = "#EF4444"  # Marker color (hex format)
-
-    @field_validator("latitude")
-    @classmethod
-    def validate_latitude(cls, v: float) -> float:
-        if not -90 <= v <= 90:
-            raise ValueError("Latitude must be between -90 and 90 degrees")
-        return v
-
-    @field_validator("longitude")
-    @classmethod
-    def validate_longitude(cls, v: float) -> float:
-        if not -180 <= v <= 180:
-            raise ValueError("Longitude must be between -180 and 180 degrees")
-        return v
-
-    @field_validator("priority")
-    @classmethod
-    def validate_priority(cls, v: Optional[int]) -> Optional[int]:
-        if v is not None and not 1 <= v <= 5:
-            raise ValueError("Priority must be between 1 and 5")
-        return v
-
-
-class CoordinateInput(BaseModel):
-    """Input model for coordinate parsing."""
-
-    coordinate_string: str
-
-
-class ParsedTarget(BaseModel):
-    """Parsed target response."""
-
-    name: str
-    latitude: float
-    longitude: float
-    description: str = ""
-    source: str = "manual"  # manual, file, parsed
-
-
-# =============================================================================
-# SAR-Specific API Models (ICEYE-parity)
-# =============================================================================
-
-
-class SARInputParams(BaseModel):
-    """SAR mission parameters aligned with ICEYE tasking concepts."""
-
-    imaging_mode: str = Field(
-        default="strip",
-        description="SAR imaging mode: spot, strip, scan, or dwell",
-    )
-    incidence_min_deg: Optional[float] = Field(
-        default=None,
-        description="Minimum incidence angle in degrees (uses mode default if not specified)",
-    )
-    incidence_max_deg: Optional[float] = Field(
-        default=None,
-        description="Maximum incidence angle in degrees (uses mode default if not specified)",
-    )
-    look_side: str = Field(
-        default="ANY",
-        description="SAR look side: LEFT, RIGHT, or ANY",
-    )
-    pass_direction: str = Field(
-        default="ANY",
-        description="Pass direction filter: ASCENDING, DESCENDING, or ANY",
-    )
-
-    @field_validator("imaging_mode")
-    @classmethod
-    def validate_imaging_mode(cls, v: str) -> str:
-        valid_modes = ["spot", "strip", "scan", "dwell"]
-        if v.lower() not in valid_modes:
-            raise ValueError(f"Invalid SAR mode: {v}. Must be one of {valid_modes}")
-        return v.lower()
-
-    @field_validator("look_side")
-    @classmethod
-    def validate_look_side(cls, v: str) -> str:
-        valid_sides = ["LEFT", "RIGHT", "ANY"]
-        if v.upper() not in valid_sides:
-            raise ValueError(f"Invalid look side: {v}. Must be one of {valid_sides}")
-        return v.upper()
-
-    @field_validator("pass_direction")
-    @classmethod
-    def validate_pass_direction(cls, v: str) -> str:
-        valid_dirs = ["ASCENDING", "DESCENDING", "ANY"]
-        if v.upper() not in valid_dirs:
-            raise ValueError(
-                f"Invalid pass direction: {v}. Must be one of {valid_dirs}"
-            )
-        return v.upper()
-
-
-class MissionRequest(BaseModel):
-    # Legacy single satellite (optional for backward compatibility)
-    tle: Optional[TLEData] = Field(
-        default=None,
-        description="Single satellite TLE (deprecated - use 'satellites' for constellation)",
-    )
-
-    # NEW: Constellation support - multiple satellites
-    satellites: Optional[List[TLEData]] = Field(
-        default=None, description="List of satellite TLEs for constellation mission"
-    )
-
-    targets: List[TargetData]
-    start_time: str  # ISO format
-    end_time: Optional[str] = Field(
-        default=None,
-        description="Mission end time (ISO format) - takes precedence over duration_hours",
-    )
-    duration_hours: Optional[float] = Field(
-        default=None, description="Deprecated - for backward compatibility only"
-    )
-    mission_type: str = Field(
-        default="imaging", description="Mission type: imaging or communication"
-    )
-    imaging_type: Optional[str] = Field(
-        default="optical",
-        description="Imaging sensor type: optical or sar (for imaging missions)",
-    )
-    sar_mode: Optional[str] = Field(
-        default=None,
-        description="SAR imaging mode: spotlight, stripmap, or scan (used when imaging_type='sar')",
-    )
-    elevation_mask: Optional[float] = Field(
-        default=None,
-        description="Minimum elevation angle in degrees (optional, will use config defaults)",
-    )
-    max_spacecraft_roll_deg: Optional[float] = Field(
-        default=None,
-        description="Maximum spacecraft roll angle limit in degrees (satellite agility)",
-    )
-    max_spacecraft_pitch_deg: Optional[float] = Field(
-        default=None,
-        description="Maximum spacecraft pitch angle limit in degrees (2D slew capability)",
-    )
-    sensor_fov_half_angle_deg: Optional[float] = Field(
-        default=None,
-        description="Sensor FOV half-angle in degrees (camera field of view)",
-    )
-    ground_station_name: Optional[str] = Field(
-        default=None, description="Use specific ground station configuration"
-    )
-    use_parallel: Optional[bool] = Field(
-        default=None,
-        description="Enable HPC mode with parallel processing (auto-detect if None)",
-    )
-    max_workers: Optional[int] = Field(
-        default=None, description="Maximum parallel workers (None = auto-detect)"
-    )
-    use_adaptive: Optional[bool] = Field(
-        default=True,
-        description="Use adaptive time-stepping algorithm (recommended for performance)",
-    )
-    # SAR-specific parameters (ICEYE-parity)
-    sar: Optional[SARInputParams] = Field(
-        default=None,
-        description="SAR-specific parameters (only used when imaging_type='sar')",
-    )
-
-    @model_validator(mode="after")
-    def validate_satellite_input(self) -> "MissionRequest":
-        """Ensure either tle or satellites is provided."""
-        has_tle = self.tle is not None
-        has_satellites = self.satellites is not None and len(self.satellites) > 0
-
-        if not has_tle and not has_satellites:
-            raise ValueError("Either 'tle' or 'satellites' must be provided")
-        return self
-
-    def get_satellite_list(self) -> List[TLEData]:
-        """Get normalized list of satellites (handles both legacy and new format)."""
-        if self.satellites and len(self.satellites) > 0:
-            return self.satellites
-        elif self.tle:
-            return [self.tle]
-        return []
-
-    def is_constellation(self) -> bool:
-        """Check if this is a multi-satellite constellation mission."""
-        return len(self.get_satellite_list()) > 1
-
-
-class MissionResponse(BaseModel):
-    success: bool
-    message: str
-    data: Optional[Dict[str, Any]] = None
-
-
-# Debug API Models
-class TimeWindow(BaseModel):
-    """Time window for scenario."""
-
-    start: str
-    end: str
-
-
-class PlanningParams(BaseModel):
-    """Planning parameters for debug scenarios."""
-
-    imaging_time_s: float = 1.0
-    max_roll_rate_dps: float = 3.0
-    max_roll_accel_dps2: float = 1.0
-    max_spacecraft_roll_deg: float = 45.0
-    max_pitch_rate_dps: float = 0.5
-    max_pitch_accel_dps2: float = 0.25
-    max_spacecraft_pitch_deg: float = 10.0
-    quality_weight: float = 0.6
-    quality_model: str = "off"
-
-
-class DebugSatellite(BaseModel):
-    """Satellite configuration for debug scenario."""
-
-    id: str
-    name: str
-    tle_line1: str
-    tle_line2: str
-
-
-class DebugTarget(BaseModel):
-    """Target configuration for debug scenario."""
-
-    name: str
-    latitude: float
-    longitude: float
-    priority: int = 1
-    id: Optional[str] = None  # Optional for backwards compatibility
-
-
-class RunScenarioRequest(BaseModel):
-    """Request to run a single debug scenario."""
-
-    scenario_id: Optional[str] = None
-    satellites: List[DebugSatellite]
-    targets: List[DebugTarget]
-    time_window: TimeWindow
-    mission_mode: str = "OPTICAL"
-    algorithms: List[str] = [
-        "first_fit",
-        "best_fit",
-        "roll_pitch_first_fit",
-    ]  # "optimal" disabled
-    planning_params: PlanningParams = Field(default_factory=PlanningParams)
-
-
-class BenchmarkRequest(BaseModel):
-    """Request to run benchmark across multiple scenarios."""
-
-    presets: List[str] = Field(default_factory=list)
-    num_random_scenarios: int = 0
-    mission_mode: str = "OPTICAL"
-    algorithms: List[str] = ["first_fit", "roll_pitch_first_fit"]  # "optimal" disabled
-    vary_params: Optional[Dict[str, List[float]]] = None
-
-
-# =============================================================================
-# STK-like Analysis API Models
-# =============================================================================
-
-
-class PassGeometryResponse(BaseModel):
-    """Geometry data at a specific point in a pass."""
-
-    elevation_deg: float = Field(description="Elevation angle from target to satellite")
-    azimuth_deg: float = Field(description="Azimuth angle from target to satellite")
-    range_km: float = Field(description="Slant range from target to satellite")
-    incidence_angle_deg: float = Field(description="Off-nadir/look angle")
-    ground_sample_distance_m: Optional[float] = Field(
-        default=None, description="Ground sample distance (if sensor GSD provided)"
-    )
-
-
-class PassLightingResponse(BaseModel):
-    """Lighting conditions during a pass."""
-
-    target_sunlit: bool = Field(description="Whether target is illuminated by sun")
-    satellite_sunlit: bool = Field(description="Whether satellite is in sunlight")
-    sun_elevation_deg: float = Field(description="Sun elevation at target location")
-    local_solar_time: Optional[str] = Field(
-        default=None, description="Local solar time at target (HH:MM)"
-    )
-
-
-class PassQualityResponse(BaseModel):
-    """Quality metrics for a pass."""
-
-    quality_score: float = Field(description="Overall quality score (0-100)")
-    imaging_feasible: bool = Field(description="Whether imaging is feasible")
-    feasibility_reason: Optional[str] = Field(
-        default=None, description="Reason if imaging is not feasible"
-    )
-
-
-class PassManeuverResponse(BaseModel):
-    """Maneuver requirements for a pass."""
-
-    roll_angle_deg: float = Field(description="Required roll angle (signed)")
-    pitch_angle_deg: float = Field(description="Required pitch angle")
-    slew_angle_deg: float = Field(description="Total slew from nadir")
-    slew_time_s: Optional[float] = Field(
-        default=None, description="Estimated slew time in seconds"
-    )
-
-
-class EnrichedPassResponse(BaseModel):
-    """Complete STK-like pass data."""
-
-    # Core identification
-    target: str
-    satellite_name: str
-    satellite_id: str
-    pass_index: int
-
-    # Timing
-    start_time: str
-    end_time: str
-    max_elevation_time: str
-    duration_s: float
-
-    # Basic geometry
-    max_elevation: float
-    start_azimuth: float
-    end_azimuth: float
-    pass_type: str
-
-    # STK-like enhanced data
-    geometry_aos: Optional[PassGeometryResponse] = None
-    geometry_tca: Optional[PassGeometryResponse] = None
-    geometry_los: Optional[PassGeometryResponse] = None
-    lighting: Optional[PassLightingResponse] = None
-    quality: Optional[PassQualityResponse] = None
-    maneuver: Optional[PassManeuverResponse] = None
-
-
-class GeometryAnalysisRequest(BaseModel):
-    """Request for point-in-time geometry analysis."""
-
-    satellite_tle: TLEData
-    target: TargetData
-    timestamp: str = Field(description="ISO format timestamp for analysis")
-    sensor_gsd_base_m: Optional[float] = Field(
-        default=None, description="Base GSD at nadir for GSD calculation"
-    )
-
-
-class LightingAnalysisRequest(BaseModel):
-    """Request for lighting analysis at a location."""
-
-    latitude: float
-    longitude: float
-    timestamp: str = Field(description="ISO format timestamp")
-
-
-class PassEnrichmentRequest(BaseModel):
-    """Request to enrich pass data with STK-like metrics."""
-
-    satellite_tle: TLEData
-    target: TargetData
-    start_time: str
-    end_time: str
-    max_elevation_time: str
-    max_elevation: float
-    max_roll_rate_dps: float = Field(
-        default=1.0, description="Max roll rate for slew calc"
-    )
-
-
-class BatchPassEnrichmentRequest(BaseModel):
-    """Request to enrich multiple passes."""
-
-    satellite_tle: TLEData
-    targets: List[TargetData]
-    passes: List[Dict[str, Any]] = Field(description="List of pass data to enrich")
-    max_roll_rate_dps: float = Field(default=1.0)
-
-
-# Global state (in production, use proper state management)
-current_mission_data: Dict[str, Any] = {}
+# Global state moved to app.state via lifespan (see above)
 
 
 # =============================================================================
@@ -730,7 +358,7 @@ async def root() -> Dict[str, str]:
     return {"message": "Satellite Mission Planning API is running"}
 
 
-@app.post("/api/tle/validate")
+@app.post("/api/v1/tle/validate")
 async def validate_tle(tle_data: TLEData) -> Dict[str, Any]:
     """Validate TLE data and return satellite information"""
     try:
@@ -769,7 +397,7 @@ async def validate_tle(tle_data: TLEData) -> Dict[str, Any]:
         return {"valid": False, "error": str(e)}
 
 
-@app.post("/api/mission/analyze")
+@app.post("/api/v1/mission/analyze")
 async def analyze_mission(request: MissionRequest) -> MissionResponse:
     """Analyze mission and return visibility windows, CZML data, and schedules"""
     try:
@@ -1317,9 +945,8 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
             else:
                 logger.debug(f"  📦 {packet_id}")
 
-        # Store in global state (for development - use proper storage in production)
-        global current_mission_data
-        current_mission_data = {
+        # Store in app state (for development - use proper storage in production)
+        app.state.current_mission_data = {
             "mission_data": mission_data,
             "czml_data": czml_data,
             "satellite": satellite,
@@ -1359,25 +986,25 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
         )
 
 
-@app.get("/api/mission/czml")
+@app.get("/api/v1/mission/czml")
 async def get_mission_czml() -> List[Dict[str, Any]]:
     """Get CZML data for current mission"""
-    global current_mission_data
-    if not current_mission_data:
+    _cmd = getattr(app.state, "current_mission_data", {})
+    if not _cmd:
         raise HTTPException(status_code=404, detail="No mission data available")
 
-    czml_result: List[Dict[str, Any]] = current_mission_data.get("czml_data", [])
+    czml_result: List[Dict[str, Any]] = _cmd.get("czml_data", [])
     return czml_result
 
 
-@app.get("/api/mission/schedule")
+@app.get("/api/v1/mission/schedule")
 async def get_mission_schedule() -> Dict[str, Any]:
     """Get mission schedule data"""
-    global current_mission_data
-    if not current_mission_data:
+    _cmd = getattr(app.state, "current_mission_data", {})
+    if not _cmd:
         raise HTTPException(status_code=404, detail="No mission data available")
 
-    result: Dict[str, Any] = current_mission_data.get("mission_data", {})
+    result: Dict[str, Any] = _cmd.get("mission_data", {})
     return result
 
 
@@ -1386,7 +1013,7 @@ async def get_mission_schedule() -> Dict[str, Any]:
 # =============================================================================
 
 
-@app.post("/api/analysis/geometry", tags=["Analysis"])
+@app.post("/api/v1/analysis/geometry", tags=["Analysis"])
 async def analyze_geometry(request: GeometryAnalysisRequest) -> PassGeometryResponse:
     """
     Analyze satellite-target geometry at a specific timestamp.
@@ -1435,7 +1062,7 @@ async def analyze_geometry(request: GeometryAnalysisRequest) -> PassGeometryResp
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/analysis/lighting", tags=["Analysis"])
+@app.post("/api/v1/analysis/lighting", tags=["Analysis"])
 async def analyze_lighting(request: LightingAnalysisRequest) -> PassLightingResponse:
     """
     Analyze lighting conditions at a location and time.
@@ -1481,7 +1108,7 @@ async def analyze_lighting(request: LightingAnalysisRequest) -> PassLightingResp
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/analysis/pass/enrich", tags=["Analysis"])
+@app.post("/api/v1/analysis/pass/enrich", tags=["Analysis"])
 async def enrich_pass(request: PassEnrichmentRequest) -> EnrichedPassResponse:
     """
     Enrich a single pass with comprehensive STK-like metrics.
@@ -1595,7 +1222,7 @@ async def enrich_pass(request: PassEnrichmentRequest) -> EnrichedPassResponse:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/analysis/passes/batch", tags=["Analysis"])
+@app.post("/api/v1/analysis/passes/batch", tags=["Analysis"])
 async def enrich_passes_batch(
     request: BatchPassEnrichmentRequest,
 ) -> List[Dict[str, Any]]:
@@ -1689,7 +1316,7 @@ async def enrich_passes_batch(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/analysis/quality/factors", tags=["Analysis"])
+@app.get("/api/v1/analysis/quality/factors", tags=["Analysis"])
 async def get_quality_factors() -> Dict[str, Any]:
     """
     Get documentation on quality scoring factors.
@@ -1738,7 +1365,7 @@ async def get_quality_factors() -> Dict[str, Any]:
     }
 
 
-@app.get("/api/tle/sources")
+@app.get("/api/v1/tle/sources")
 async def get_tle_sources() -> Dict[str, List[Dict[str, str]]]:
     """Get available TLE data sources from Celestrak"""
     sources = get_common_tle_sources()
@@ -1760,7 +1387,7 @@ async def get_tle_sources() -> Dict[str, List[Dict[str, str]]]:
     return {"sources": formatted_sources}
 
 
-@app.get("/api/tle/catalog/{source_id}")
+@app.get("/api/v1/tle/catalog/{source_id}")
 async def get_satellite_catalog(source_id: str) -> Dict[str, Any]:
     """Get satellite catalog from specified Celestrak source"""
     sources = get_common_tle_sources()
@@ -1804,7 +1431,7 @@ async def get_satellite_catalog(source_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Error parsing TLE data: {str(e)}")
 
 
-@app.post("/api/tle/search")
+@app.post("/api/v1/tle/search")
 async def search_satellites(request: Dict[str, Any]) -> Dict[str, Any]:
     """Search for satellites by name across Celestrak sources"""
     search_term = request.get("query", "").lower()
@@ -1836,7 +1463,7 @@ async def search_satellites(request: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 
-@app.post("/api/targets/parse")
+@app.post("/api/v1/targets/parse")
 async def parse_coordinate(request: CoordinateInput) -> Dict[str, Any]:
     """Parse coordinate string in various formats."""
     try:
@@ -1865,7 +1492,7 @@ async def parse_coordinate(request: CoordinateInput) -> Dict[str, Any]:
         }
 
 
-@app.post("/api/targets/upload")
+@app.post("/api/v1/targets/upload")
 async def upload_targets_file(file: UploadFile = File(...)) -> Dict[str, Any]:
     """Upload and parse a file containing targets."""
     try:
@@ -1930,7 +1557,7 @@ async def upload_targets_file(file: UploadFile = File(...)) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
 
 
-@app.post("/api/targets/validate")
+@app.post("/api/v1/targets/validate")
 async def validate_targets(targets: List[TargetData]) -> Dict[str, Any]:
     """Validate a list of targets and check for duplicates."""
     try:
@@ -1975,7 +1602,7 @@ async def validate_targets(targets: List[TargetData]) -> Dict[str, Any]:
 
 
 # Configuration Management Endpoints
-@app.get("/api/config/ground-stations")
+@app.get("/api/v1/config/ground-stations")
 async def get_ground_stations() -> Dict[str, Any]:
     """Get all configured ground stations"""
     try:
@@ -1986,7 +1613,7 @@ async def get_ground_stations() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/config/ground-stations")
+@app.post("/api/v1/config/ground-stations")
 async def add_ground_station(station: Dict[str, Any]) -> Dict[str, Any]:
     """Add a new ground station"""
     try:
@@ -2000,7 +1627,7 @@ async def add_ground_station(station: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.put("/api/config/ground-stations/{name}")
+@app.put("/api/v1/config/ground-stations/{name}")
 async def update_ground_station(name: str, station: Dict[str, Any]) -> Dict[str, Any]:
     """Update an existing ground station"""
     try:
@@ -2014,7 +1641,7 @@ async def update_ground_station(name: str, station: Dict[str, Any]) -> Dict[str,
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/config/ground-stations/{name}")
+@app.delete("/api/v1/config/ground-stations/{name}")
 async def delete_ground_station(name: str) -> Dict[str, Any]:
     """Delete a ground station"""
     try:
@@ -2028,7 +1655,7 @@ async def delete_ground_station(name: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/config/full")
+@app.get("/api/v1/config/full")
 async def get_full_config() -> Dict[str, Any]:
     """Get the full configuration"""
     try:
@@ -2039,7 +1666,7 @@ async def get_full_config() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/config/reload")
+@app.post("/api/v1/config/reload")
 async def reload_configuration() -> Dict[str, Any]:
     """Reload configuration from file"""
     try:
@@ -2059,7 +1686,7 @@ async def reload_configuration() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/config/upload")
+@app.post("/api/v1/config/upload")
 async def upload_config(file: UploadFile = File(...)) -> Dict[str, Any]:
     """Upload a configuration file (YAML or JSON)"""
     try:
@@ -2105,7 +1732,7 @@ async def upload_config(file: UploadFile = File(...)) -> Dict[str, Any]:
 # === SATELLITE MANAGEMENT ENDPOINTS ===
 
 
-@app.get("/api/satellites")
+@app.get("/api/v1/satellites")
 async def get_satellites() -> Dict[str, Any]:
     """Get all managed satellites"""
     try:
@@ -2132,7 +1759,7 @@ async def get_satellites() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/satellites/{satellite_id}")
+@app.get("/api/v1/satellites/{satellite_id}")
 async def get_satellite(satellite_id: str) -> Dict[str, Any]:
     """Get specific satellite by ID"""
     try:
@@ -2148,19 +1775,7 @@ async def get_satellite(satellite_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-class SatelliteCreateRequest(BaseModel):
-    name: str
-    line1: str
-    line2: str
-    imaging_type: str = "optical"
-    sensor_fov_half_angle_deg: float = 1.0  # Default for optical
-    satellite_agility: float = 1.0
-    sar_mode: str = "stripmap"
-    description: str = ""
-    active: bool = True
-
-
-@app.post("/api/satellites")
+@app.post("/api/v1/satellites")
 async def create_satellite(request: SatelliteCreateRequest) -> Dict[str, Any]:
     """Add new satellite to managed list"""
     try:
@@ -2177,19 +1792,7 @@ async def create_satellite(request: SatelliteCreateRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-class SatelliteUpdateRequest(BaseModel):
-    name: Optional[str] = None
-    line1: Optional[str] = None
-    line2: Optional[str] = None
-    imaging_type: Optional[str] = None
-    sensor_fov_half_angle_deg: Optional[float] = None
-    satellite_agility: Optional[float] = None
-    sar_mode: Optional[str] = None
-    description: Optional[str] = None
-    active: Optional[bool] = None
-
-
-@app.put("/api/satellites/{satellite_id}")
+@app.put("/api/v1/satellites/{satellite_id}")
 async def update_satellite(
     satellite_id: str, request: SatelliteUpdateRequest
 ) -> Dict[str, Any]:
@@ -2217,7 +1820,7 @@ async def update_satellite(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/satellites/{satellite_id}")
+@app.delete("/api/v1/satellites/{satellite_id}")
 async def delete_satellite(satellite_id: str) -> Dict[str, Any]:
     """Remove satellite from managed list"""
     try:
@@ -2233,7 +1836,7 @@ async def delete_satellite(satellite_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/satellites/config/full")
+@app.get("/api/v1/satellites/config/full")
 async def get_satellite_config() -> Dict[str, Any]:
     """Get full satellite configuration including defaults and mission settings"""
     try:
@@ -2243,7 +1846,7 @@ async def get_satellite_config() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/satellites/config/reload")
+@app.post("/api/v1/satellites/config/reload")
 async def reload_satellite_config() -> Dict[str, Any]:
     """Reload satellite configuration from file"""
     try:
@@ -2264,7 +1867,7 @@ async def reload_satellite_config() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/satellites/{satellite_id}/refresh-tle")
+@app.post("/api/v1/satellites/{satellite_id}/refresh-tle")
 async def refresh_satellite_tle(
     satellite_id: str, source_url: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -2293,7 +1896,7 @@ async def refresh_satellite_tle(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/satellites/{satellite_id}/tle-age")
+@app.get("/api/v1/satellites/{satellite_id}/tle-age")
 async def get_satellite_tle_age(satellite_id: str) -> Dict[str, Any]:
     """Get the age of TLE data for a specific satellite"""
     try:
@@ -2322,7 +1925,7 @@ async def get_satellite_tle_age(satellite_id: str) -> Dict[str, Any]:
 # Mission Settings API Endpoints
 
 
-@app.get("/api/mission-settings")
+@app.get("/api/v1/mission-settings")
 async def get_mission_settings() -> Dict[str, Any]:
     """Get all mission settings"""
     try:
@@ -2332,7 +1935,7 @@ async def get_mission_settings() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.put("/api/mission-settings/{section}/{key}")
+@app.put("/api/v1/mission-settings/{section}/{key}")
 async def update_mission_setting(
     section: str, key: str, value: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -2359,7 +1962,7 @@ async def update_mission_setting(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/config/mission-settings")
+@app.post("/api/v1/config/mission-settings")
 async def save_mission_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
     """Save mission settings to file"""
     try:
@@ -2383,7 +1986,7 @@ async def save_mission_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/mission-settings/reload")
+@app.post("/api/v1/mission-settings/reload")
 async def reload_mission_settings() -> Dict[str, Any]:
     """Reload mission settings from file"""
     try:
@@ -2405,106 +2008,7 @@ async def reload_mission_settings() -> Dict[str, Any]:
 # === MISSION PLANNING ENDPOINTS (Algorithm Suite) ===
 
 
-class PlanningRequest(BaseModel):
-    """Request for mission planning/scheduling."""
-
-    # Planning mode (NEW for persistence)
-    mode: str = Field(
-        default="from_scratch",
-        description="Planning mode: from_scratch (ignore history) | incremental (respect committed)",
-    )
-    workspace_id: Optional[str] = Field(
-        default=None,
-        description="Workspace ID for incremental mode (loads committed acquisitions)",
-    )
-
-    # Agility parameters
-    imaging_time_s: float = Field(default=5.0, description="Time on target (tau)")
-    max_roll_rate_dps: float = Field(default=1.0, description="Max roll rate (deg/s)")
-    max_roll_accel_dps2: float = Field(
-        default=10000.0,
-        description="Max roll acceleration (deg/s²) - high value simulates instant acceleration",
-    )
-    # NOTE: max_pitch_deg removed - pitch limit comes from mission analysis (max_spacecraft_pitch_deg)
-    max_pitch_rate_dps: float = Field(default=1.0, description="Max pitch rate (deg/s)")
-    max_pitch_accel_dps2: float = Field(
-        default=10000.0, description="Max pitch acceleration (deg/s²)"
-    )
-
-    # Algorithm selection
-    algorithms: List[str] = Field(
-        default=["first_fit"],
-        description="Algorithms to run: first_fit, best_fit, roll_pitch_first_fit, roll_pitch_best_fit",
-    )
-
-    # Value source
-    value_source: str = Field(
-        default="uniform",
-        description="Value source: uniform | target_priority | custom",
-    )
-    custom_values: Optional[Dict[str, float]] = Field(
-        default=None, description="Custom opportunity_id -> value mapping"
-    )
-
-    # Algorithm parameters
-    look_window_s: float = Field(
-        default=600.0, description="Candidate window for Best-Fit/Value-Density"
-    )
-
-    # Quality model for geometry scoring
-    quality_model: str = Field(
-        default="monotonic", description="Quality model: off | monotonic | band"
-    )
-    ideal_incidence_deg: float = Field(
-        default=35.0, description="Ideal off-nadir angle for SAR Band model (degrees)"
-    )
-    band_width_deg: float = Field(
-        default=7.5, description="Band width for Band model (degrees)"
-    )
-
-    # Multi-criteria weights
-    weight_priority: float = Field(
-        default=40.0, ge=0.0, description="Weight for target priority"
-    )
-    weight_geometry: float = Field(
-        default=40.0, ge=0.0, description="Weight for imaging geometry quality"
-    )
-    weight_timing: float = Field(
-        default=20.0, ge=0.0, description="Weight for chronological preference"
-    )
-    weight_preset: Optional[str] = Field(
-        default=None,
-        description="Use preset: balanced | priority_first | quality_first | urgent | archival",
-    )
-
-
-class PlanningAuditMetadata(BaseModel):
-    """Audit metadata for planning responses (instrumentation for persistent scheduling)."""
-
-    plan_input_hash: str = Field(
-        description="SHA256 hash of planning inputs for reproducibility"
-    )
-    run_id: str = Field(description="Unique identifier for this planning run")
-    candidate_plan_id: str = Field(
-        description="In-memory plan ID (for future persistence)"
-    )
-    opportunities_considered: List[str] = Field(
-        description="List of opportunity IDs that were evaluated"
-    )
-
-
-class PlanningResponse(BaseModel):
-    """Response from mission planning."""
-
-    success: bool
-    message: str
-    results: Optional[Dict[str, Any]] = None
-    audit: Optional[PlanningAuditMetadata] = Field(
-        default=None, description="Audit metadata for debugging and future persistence"
-    )
-
-
-@app.get("/api/planning/weight-presets")
+@app.get("/api/v1/planning/weight-presets")
 async def get_weight_presets() -> Dict[str, Any]:
     """Get available weight presets for multi-criteria scoring."""
     presets = {}
@@ -2609,7 +2113,7 @@ def _compute_incidence_angle_at_time(
     return signed_angle
 
 
-@app.post("/api/planning/schedule")
+@app.post("/api/v1/planning/schedule")
 async def schedule_mission(request: PlanningRequest) -> PlanningResponse:
     """
     Run mission planning algorithms on opportunities from last mission analysis.
@@ -2618,19 +2122,19 @@ async def schedule_mission(request: PlanningRequest) -> PlanningResponse:
     for selected algorithms.
     """
     try:
-        global current_mission_data
+        _cmd = getattr(app.state, "current_mission_data", {})
 
-        if not current_mission_data or "passes" not in current_mission_data:
+        if not _cmd or "passes" not in _cmd:
             raise HTTPException(
                 status_code=400,
                 detail="No mission analysis available. Run mission analysis first.",
             )
 
-        passes = current_mission_data["passes"]
-        targets = current_mission_data["targets"]
-        mission_data = current_mission_data["mission_data"]
-        satellite = current_mission_data.get("satellite")  # Primary satellite (legacy)
-        satellites_dict = current_mission_data.get(
+        passes = _cmd["passes"]
+        targets = _cmd["targets"]
+        mission_data = _cmd["mission_data"]
+        satellite = _cmd.get("satellite")  # Primary satellite (legacy)
+        satellites_dict = _cmd.get(
             "satellites_dict", {}
         )  # All satellites for constellation
 
@@ -2961,6 +2465,38 @@ async def schedule_mission(request: PlanningRequest) -> PlanningResponse:
         logger.info(
             f"Planning with {len(opportunities)} opportunities from mission analysis"
         )
+
+        # Cache opportunities for /api/v1/schedule/plan and /repair endpoints
+        opp_dicts = []
+        for opp in opportunities:
+            opp_dict = {
+                "id": opp.id,
+                "opportunity_id": opp.id,
+                "satellite_id": opp.satellite_id,
+                "target_id": opp.target_id,
+                "start_time": (
+                    opp.start_time.isoformat()
+                    if hasattr(opp.start_time, "isoformat")
+                    else str(opp.start_time)
+                ),
+                "end_time": (
+                    opp.end_time.isoformat()
+                    if hasattr(opp.end_time, "isoformat")
+                    else str(opp.end_time)
+                ),
+                "roll_angle_deg": getattr(opp, "roll_angle_deg", 0.0),
+                "pitch_angle_deg": getattr(opp, "pitch_angle_deg", 0.0),
+                "value": getattr(opp, "value", 1.0),
+                "incidence_angle_deg": getattr(opp, "incidence_angle_deg", None),
+                "quality_score": getattr(opp, "quality_score", None),
+                "priority": getattr(opp, "priority", 1),
+            }
+            opp_dicts.append(opp_dict)
+        set_cached_opportunities(opp_dicts)
+        logger.info(
+            f"Cached {len(opp_dicts)} opportunities for /plan and /repair endpoints"
+        )
+
         logger.info(
             f"🎯 WEIGHTS: P={multi_weights.norm_priority*100:.0f}% G={multi_weights.norm_geometry*100:.0f}% T={multi_weights.norm_timing*100:.0f}% (preset={request.weight_preset})"
         )
@@ -3054,7 +2590,9 @@ async def schedule_mission(request: PlanningRequest) -> PlanningResponse:
         all_opportunities = opportunities.copy()
 
         # Get max spacecraft roll from mission analysis
-        max_spacecraft_roll = mission_data.get("max_spacecraft_roll_deg", 45.0)
+        max_spacecraft_roll = mission_data.get("max_spacecraft_roll_deg")
+        if max_spacecraft_roll is None:
+            max_spacecraft_roll = 45.0  # Default if not set
         logger.info(
             f"Using max_spacecraft_roll_deg={max_spacecraft_roll}° from mission analysis"
         )
@@ -3325,17 +2863,17 @@ async def schedule_mission(request: PlanningRequest) -> PlanningResponse:
         )
 
 
-@app.get("/api/planning/opportunities")
+@app.get("/api/v1/planning/opportunities")
 async def get_opportunities() -> Dict[str, Any]:
     """Get opportunities from last mission analysis."""
     try:
-        global current_mission_data
+        _cmd = getattr(app.state, "current_mission_data", {})
 
-        if not current_mission_data or "passes" not in current_mission_data:
+        if not _cmd or "passes" not in _cmd:
             raise HTTPException(status_code=404, detail="No mission analysis available")
 
-        passes = current_mission_data["passes"]
-        targets = current_mission_data["targets"]
+        passes = _cmd["passes"]
+        targets = _cmd["targets"]
 
         # Convert to opportunity format
         opportunities = []
@@ -3382,7 +2920,7 @@ async def get_opportunities() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/planning/config")
+@app.get("/api/v1/planning/config")
 async def get_planning_config() -> Dict[str, Any]:
     """Get planning configuration defaults."""
     try:
@@ -3406,7 +2944,7 @@ async def get_planning_config() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/planning/test-baseline")
+@app.post("/api/v1/planning/test-baseline")
 async def test_baseline_performance() -> Dict[str, Any]:
     """Test current best_fit performance in 1-day vs 1-week scenarios."""
     try:

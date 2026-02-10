@@ -16,6 +16,8 @@ import { ObjectExplorerTree } from "./ObjectExplorer";
 import ResizeHandle from "./ResizeHandle";
 import { useVisStore } from "../store/visStore";
 import { useMission } from "../context/MissionContext";
+import { useSceneObjectStore } from "../store/sceneObjectStore";
+import { useWorkspaceStore } from "../store/workspaceStore";
 import { usePreviewTargetsStore } from "../store/previewTargetsStore";
 import { useOrdersStore } from "../store/ordersStore";
 import { usePlanningStore } from "../store/planningStore";
@@ -131,11 +133,11 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
       );
     }
 
-    // Dispatch scene objects to populate Object Tree
-    dispatch({ type: "SET_SCENE_OBJECTS", payload: sceneObjects });
+    // Populate Object Tree via Zustand store
+    useSceneObjectStore.getState().setSceneObjects(sceneObjects);
 
-    // Set active workspace
-    dispatch({ type: "SET_ACTIVE_WORKSPACE", payload: workspaceData.id });
+    // Set active workspace via Zustand store
+    useWorkspaceStore.getState().setActiveWorkspace(workspaceData.id);
 
     // Restore full mission data if available (for Mission Results panel)
     const storedMissionData = workspaceData.analysis_state?.mission_data;
@@ -261,7 +263,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
         items: commitItems,
         algorithm,
         mode: result.schedule[0]?.sar_mode ? "SAR" : "OPTICAL",
-        lock_level: "soft",
+        lock_level: "none",
         workspace_id: state.activeWorkspace || undefined,
       });
 

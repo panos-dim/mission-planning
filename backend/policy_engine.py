@@ -49,14 +49,12 @@ class SelectionRules:
 
     max_orders_per_batch: int = 50
     horizon_hours: int = 24
-    include_soft_lock_replace: bool = True
     min_priority: int = 1
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "max_orders_per_batch": self.max_orders_per_batch,
             "horizon_hours": self.horizon_hours,
-            "include_soft_lock_replace": self.include_soft_lock_replace,
             "min_priority": self.min_priority,
         }
 
@@ -104,7 +102,6 @@ class SelectionRulesModel(BaseModel):
 
     max_orders_per_batch: int = Field(50, ge=1, le=500)
     horizon_hours: int = Field(24, ge=1, le=168)  # Max 1 week
-    include_soft_lock_replace: bool = True
     min_priority: int = Field(1, ge=1, le=5)
 
 
@@ -327,9 +324,6 @@ class PolicyManager:
                 selection_rules = SelectionRules(
                     max_orders_per_batch=selection_data.get("max_orders_per_batch", 50),
                     horizon_hours=selection_data.get("horizon_hours", 24),
-                    include_soft_lock_replace=selection_data.get(
-                        "include_soft_lock_replace", True
-                    ),
                     min_priority=selection_data.get("min_priority", 1),
                 )
 

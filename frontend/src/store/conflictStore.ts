@@ -8,6 +8,7 @@
  */
 
 import { create } from "zustand";
+import { devtools } from "zustand/middleware";
 import { Conflict } from "../api/scheduleApi";
 
 interface ConflictState {
@@ -32,63 +33,70 @@ interface ConflictActions {
   getConflictsForAcquisition: (acquisitionId: string) => Conflict[];
 }
 
-export const useConflictStore = create<ConflictState & ConflictActions>(
-  (set, get) => ({
-    conflicts: [],
-    selectedConflictId: null,
-    highlightedAcquisitionIds: [],
-    isLoading: false,
-    error: null,
-    summary: {
-      total: 0,
-      errorCount: 0,
-      warningCount: 0,
-    },
+export const useConflictStore = create<ConflictState & ConflictActions>()(
+  devtools(
+    (set, get) => ({
+      conflicts: [],
+      selectedConflictId: null,
+      highlightedAcquisitionIds: [],
+      isLoading: false,
+      error: null,
+      summary: {
+        total: 0,
+        errorCount: 0,
+        warningCount: 0,
+      },
 
-    setConflicts: (conflicts) => {
-      const errorCount = conflicts.filter((c) => c.severity === "error").length;
-      const warningCount = conflicts.filter(
-        (c) => c.severity === "warning",
-      ).length;
+      setConflicts: (conflicts) => {
+        const errorCount = conflicts.filter(
+          (c) => c.severity === "error",
+        ).length;
+        const warningCount = conflicts.filter(
+          (c) => c.severity === "warning",
+        ).length;
 
-      set({
-        conflicts,
-        summary: {
-          total: conflicts.length,
-          errorCount,
-          warningCount,
-        },
-        error: null,
-      });
-    },
+        set({
+          conflicts,
+          summary: {
+            total: conflicts.length,
+            errorCount,
+            warningCount,
+          },
+          error: null,
+        });
+      },
 
-    selectConflict: (conflictId) => {
-      const { conflicts } = get();
-      const conflict = conflicts.find((c) => c.id === conflictId);
-      const highlightedAcquisitionIds = conflict
-        ? conflict.acquisition_ids
-        : [];
+      selectConflict: (conflictId) => {
+        const { conflicts } = get();
+        const conflict = conflicts.find((c) => c.id === conflictId);
+        const highlightedAcquisitionIds = conflict
+          ? conflict.acquisition_ids
+          : [];
 
-      set({
-        selectedConflictId: conflictId,
-        highlightedAcquisitionIds,
-      });
-    },
+        set({
+          selectedConflictId: conflictId,
+          highlightedAcquisitionIds,
+        });
+      },
 
-    clearSelection: () => {
-      set({
-        selectedConflictId: null,
-        highlightedAcquisitionIds: [],
-      });
-    },
+      clearSelection: () => {
+        set({
+          selectedConflictId: null,
+          highlightedAcquisitionIds: [],
+        });
+      },
 
-    setLoading: (isLoading) => set({ isLoading }),
+      setLoading: (isLoading) => set({ isLoading }),
 
-    setError: (error) => set({ error, isLoading: false }),
+      setError: (error) => set({ error, isLoading: false }),
 
-    getConflictsForAcquisition: (acquisitionId) => {
-      const { conflicts } = get();
-      return conflicts.filter((c) => c.acquisition_ids.includes(acquisitionId));
-    },
-  }),
+      getConflictsForAcquisition: (acquisitionId) => {
+        const { conflicts } = get();
+        return conflicts.filter((c) =>
+          c.acquisition_ids.includes(acquisitionId),
+        );
+      },
+    }),
+    { name: "ConflictStore", enabled: import.meta.env?.DEV ?? false },
+  ),
 );

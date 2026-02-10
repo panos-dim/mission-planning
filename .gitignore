@@ -54,6 +54,7 @@ logs/
 coverage/
 .nyc_output/
 .pytest_cache/
+.mypy_cache/
 
 # Temporary files
 *.tmp
@@ -77,5 +78,3 @@ htmlcov/
 *_results.txt
 *_counts.txt
 
-# macOS
-.DS_Store

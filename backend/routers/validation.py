@@ -135,8 +135,8 @@ class ReportSummary(BaseModel):
     scenario_name: str
     timestamp: str
     passed: bool
-    assertions_passed: int
-    assertions_total: int
+    assertions_passed: Optional[int] = 0
+    assertions_total: Optional[int] = 0
 
 
 # =============================================================================
@@ -472,8 +472,6 @@ class WorkflowConfigModel(BaseModel):
     algorithm: str = "first_fit"
     run_repair: bool = False
     max_repair_changes: int = 10
-    repair_allow_shift: bool = True
-    repair_allow_replace: bool = True
     dry_run: bool = True
     use_temp_workspace: bool = True
     seed: Optional[int] = None

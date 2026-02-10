@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { devtools } from "zustand/middleware";
 import { JulianDate } from "cesium";
 
 export type SceneMode = "2D" | "3D";
@@ -83,105 +84,110 @@ interface VisStore {
   initializeLayers: (layers: Partial<LayerVisibility>) => void;
 }
 
-export const useVisStore = create<VisStore>((set) => ({
-  // Initial state - 2D by default
-  sceneModePrimary: "2D",
-  sceneModeSecondary: "3D",
-  viewMode: "single",
+export const useVisStore = create<VisStore>()(
+  devtools(
+    (set) => ({
+      // Initial state - 2D by default
+      sceneModePrimary: "2D",
+      sceneModeSecondary: "3D",
+      viewMode: "single",
 
-  // UI Mode - simple (mission planner) by default
-  uiMode: "simple",
+      // UI Mode - simple (mission planner) by default
+      uiMode: "simple",
 
-  // Sidebar state
-  leftSidebarOpen: true,
-  rightSidebarOpen: false,
-  leftSidebarWidth: 432,
-  rightSidebarWidth: 432,
+      // Sidebar state
+      leftSidebarOpen: true,
+      rightSidebarOpen: false,
+      leftSidebarWidth: 432,
+      rightSidebarWidth: 432,
 
-  clockTime: null,
-  clockShouldAnimate: false,
-  clockMultiplier: 1,
-  timeWindow: {
-    start: null,
-    stop: null,
-  },
-  selectedOpportunityId: null,
-  activeLayers: {
-    // Entity layers
-    orbitLine: true,
-    groundTrack: true,
-    targets: true,
-    footprints: true,
-    labels: true,
-    coverageAreas: false,
-    pointingCone: true,
-    dayNightLighting: true,
-    sarSwaths: true,
-    // Globe settings
-    terrain: false, // Off by default for performance
-    atmosphere: true,
-    gridLines: false,
-    fog: false,
-    // Post-processing
-    bloom: false,
-    fxaa: true, // Anti-aliasing on by default
-  },
-  cameraPosition: null,
+      clockTime: null,
+      clockShouldAnimate: false,
+      clockMultiplier: 1,
+      timeWindow: {
+        start: null,
+        stop: null,
+      },
+      selectedOpportunityId: null,
+      activeLayers: {
+        // Entity layers
+        orbitLine: true,
+        groundTrack: true,
+        targets: true,
+        footprints: true,
+        labels: true,
+        coverageAreas: false,
+        pointingCone: true,
+        dayNightLighting: true,
+        sarSwaths: true,
+        // Globe settings
+        terrain: false, // Off by default for performance
+        atmosphere: true,
+        gridLines: false,
+        fog: false,
+        // Post-processing
+        bloom: false,
+        fxaa: true, // Anti-aliasing on by default
+      },
+      cameraPosition: null,
 
-  // Actions
-  setLeftSidebarOpen: (open) => set({ leftSidebarOpen: open }),
-  setRightSidebarOpen: (open) => set({ rightSidebarOpen: open }),
-  setLeftSidebarWidth: (width) =>
-    set({ leftSidebarWidth: Math.min(Math.max(width, 432), 864) }),
-  setRightSidebarWidth: (width) =>
-    set({ rightSidebarWidth: Math.min(Math.max(width, 432), 864) }),
+      // Actions
+      setLeftSidebarOpen: (open) => set({ leftSidebarOpen: open }),
+      setRightSidebarOpen: (open) => set({ rightSidebarOpen: open }),
+      setLeftSidebarWidth: (width) =>
+        set({ leftSidebarWidth: Math.min(Math.max(width, 432), 864) }),
+      setRightSidebarWidth: (width) =>
+        set({ rightSidebarWidth: Math.min(Math.max(width, 432), 864) }),
 
-  setSceneModePrimary: (mode) => set({ sceneModePrimary: mode }),
+      setSceneModePrimary: (mode) => set({ sceneModePrimary: mode }),
 
-  setSceneModeSecondary: (mode) => set({ sceneModeSecondary: mode }),
+      setSceneModeSecondary: (mode) => set({ sceneModeSecondary: mode }),
 
-  setViewMode: (mode) => set({ viewMode: mode }),
-  setUIMode: (mode) => set({ uiMode: mode }),
-  toggleUIMode: () =>
-    set((state) => ({
-      uiMode: state.uiMode === "simple" ? "developer" : "simple",
-    })),
-  setClockTime: (time) => set({ clockTime: time }),
-  setClockState: (time, shouldAnimate, multiplier) =>
-    set({
-      clockTime: time,
-      clockShouldAnimate: shouldAnimate,
-      clockMultiplier: multiplier,
+      setViewMode: (mode) => set({ viewMode: mode }),
+      setUIMode: (mode) => set({ uiMode: mode }),
+      toggleUIMode: () =>
+        set((state) => ({
+          uiMode: state.uiMode === "simple" ? "developer" : "simple",
+        })),
+      setClockTime: (time) => set({ clockTime: time }),
+      setClockState: (time, shouldAnimate, multiplier) =>
+        set({
+          clockTime: time,
+          clockShouldAnimate: shouldAnimate,
+          clockMultiplier: multiplier,
+        }),
+      setTimeWindow: (start, stop) =>
+        set({
+          timeWindow: { start, stop },
+        }),
+      setSelectedOpportunity: (id) => set({ selectedOpportunityId: id }),
+
+      toggleLayer: (layer) =>
+        set((state) => ({
+          activeLayers: {
+            ...state.activeLayers,
+            [layer]: !state.activeLayers[layer],
+          },
+        })),
+
+      setLayerVisibility: (layer, visible) =>
+        set((state) => ({
+          activeLayers: {
+            ...state.activeLayers,
+            [layer]: visible,
+          },
+        })),
+
+      setCameraPosition: (position) => set({ cameraPosition: position }),
+
+      initializeLayers: (layers) =>
+        set((state) => ({
+          activeLayers: {
+            ...state.activeLayers,
+            ...layers,
+          },
+        })),
     }),
-  setTimeWindow: (start, stop) =>
-    set({
-      timeWindow: { start, stop },
-    }),
-  setSelectedOpportunity: (id) => set({ selectedOpportunityId: id }),
-
-  toggleLayer: (layer) =>
-    set((state) => ({
-      activeLayers: {
-        ...state.activeLayers,
-        [layer]: !state.activeLayers[layer],
-      },
-    })),
-
-  setLayerVisibility: (layer, visible) =>
-    set((state) => ({
-      activeLayers: {
-        ...state.activeLayers,
-        [layer]: visible,
-      },
-    })),
-
-  setCameraPosition: (position) => set({ cameraPosition: position }),
-
-  initializeLayers: (layers) =>
-    set((state) => ({
-      activeLayers: {
-        ...state.activeLayers,
-        ...layers,
-      },
-    })),
-}));
+    { name: "VisStore", enabled: import.meta.env?.DEV ?? false },
+  ),
+);

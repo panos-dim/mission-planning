@@ -24,30 +24,31 @@ import {
   ValidationResponse,
   FormData,
   SceneObject,
-  Workspace,
   CZMLPacket,
   TargetData,
 } from "../types";
 import { useVisStore } from "../store/visStore";
 import { useExplorerStore } from "../store/explorerStore";
+import { useSceneObjectStore } from "../store/sceneObjectStore";
+import { useWorkspaceStore } from "../store/workspaceStore";
 import debug from "../utils/debug";
 import { missionApi, tleApi, configApi, getErrorMessage } from "../api";
 import type { GroundStation } from "../api";
 
-// Initial state
+// Core mission state (scene objects & workspaces now in Zustand stores)
 const initialState: MissionState = {
   isLoading: false,
   missionData: null,
   czmlData: [],
   error: null,
   validationResult: null,
-  sceneObjects: [],
-  selectedObjectId: null,
-  workspaces: [],
-  activeWorkspace: null,
+  sceneObjects: [], // Kept for backward compat — populated from sceneObjectStore
+  selectedObjectId: null, // Kept for backward compat — populated from sceneObjectStore
+  workspaces: [], // Kept for backward compat — populated from workspaceStore
+  activeWorkspace: null, // Kept for backward compat — populated from workspaceStore
 };
 
-// Action types
+// Action types (scene object & workspace actions removed — now in Zustand stores)
 type MissionAction =
   | { type: "SET_LOADING"; payload: boolean }
   | {
@@ -56,24 +57,12 @@ type MissionAction =
     }
   | { type: "SET_ERROR"; payload: string | null }
   | { type: "SET_VALIDATION_RESULT"; payload: ValidationResponse | null }
-  | { type: "CLEAR_MISSION" }
-  | { type: "ADD_SCENE_OBJECT"; payload: SceneObject }
-  | {
-      type: "UPDATE_SCENE_OBJECT";
-      payload: { id: string; updates: Partial<SceneObject> };
-    }
-  | { type: "REMOVE_SCENE_OBJECT"; payload: string }
-  | { type: "SET_SELECTED_OBJECT"; payload: string | null }
-  | { type: "SET_SCENE_OBJECTS"; payload: SceneObject[] }
-  | { type: "SAVE_WORKSPACE"; payload: Workspace }
-  | { type: "LOAD_WORKSPACE"; payload: Workspace }
-  | { type: "DELETE_WORKSPACE"; payload: string }
-  | { type: "SET_ACTIVE_WORKSPACE"; payload: string | null };
+  | { type: "CLEAR_MISSION" };
 
-// Reducer
+// Reducer (scene object & workspace actions moved to Zustand stores)
 function missionReducer(
   state: MissionState,
-  action: MissionAction
+  action: MissionAction,
 ): MissionState {
   switch (action.type) {
     case "SET_LOADING":
@@ -91,70 +80,7 @@ function missionReducer(
     case "SET_VALIDATION_RESULT":
       return { ...state, validationResult: action.payload };
     case "CLEAR_MISSION":
-      return { ...initialState, workspaces: state.workspaces };
-    case "ADD_SCENE_OBJECT":
-      return {
-        ...state,
-        sceneObjects: [...state.sceneObjects, action.payload],
-      };
-    case "UPDATE_SCENE_OBJECT":
-      return {
-        ...state,
-        sceneObjects: state.sceneObjects.map((obj) =>
-          obj.id === action.payload.id
-            ? { ...obj, ...action.payload.updates }
-            : obj
-        ),
-      };
-    case "REMOVE_SCENE_OBJECT":
-      return {
-        ...state,
-        sceneObjects: state.sceneObjects.filter(
-          (obj) => obj.id !== action.payload
-        ),
-        selectedObjectId:
-          state.selectedObjectId === action.payload
-            ? null
-            : state.selectedObjectId,
-      };
-    case "SET_SELECTED_OBJECT":
-      return { ...state, selectedObjectId: action.payload };
-    case "SET_SCENE_OBJECTS":
-      return { ...state, sceneObjects: action.payload };
-    case "SAVE_WORKSPACE":
-      const existingIndex = state.workspaces.findIndex(
-        (w) => w.id === action.payload.id
-      );
-      const updatedWorkspaces =
-        existingIndex >= 0
-          ? state.workspaces.map((w) =>
-              w.id === action.payload.id ? action.payload : w
-            )
-          : [...state.workspaces, action.payload];
-      return {
-        ...state,
-        workspaces: updatedWorkspaces,
-        activeWorkspace: action.payload.id,
-      };
-    case "LOAD_WORKSPACE":
-      return {
-        ...state,
-        sceneObjects: action.payload.sceneObjects,
-        missionData: action.payload.missionData,
-        czmlData: action.payload.czmlData,
-        activeWorkspace: action.payload.id,
-      };
-    case "DELETE_WORKSPACE":
-      return {
-        ...state,
-        workspaces: state.workspaces.filter((w) => w.id !== action.payload),
-        activeWorkspace:
-          state.activeWorkspace === action.payload
-            ? null
-            : state.activeWorkspace,
-      };
-    case "SET_ACTIVE_WORKSPACE":
-      return { ...state, activeWorkspace: action.payload };
+      return { ...initialState };
     default:
       return state;
   }
@@ -199,9 +125,28 @@ interface MissionProviderProps {
 export function MissionProvider({
   children,
 }: MissionProviderProps): JSX.Element {
-  const [state, dispatch] = useReducer(missionReducer, initialState);
+  const [reducerState, dispatch] = useReducer(missionReducer, initialState);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [cesiumViewer, setCesiumViewer] = React.useState<any>(null);
   const { setClockTime } = useVisStore();
+
+  // Read from Zustand stores reactively for backward-compatible composed state
+  const sceneObjects = useSceneObjectStore((s) => s.sceneObjects);
+  const selectedObjectId = useSceneObjectStore((s) => s.selectedObjectId);
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const activeWorkspace = useWorkspaceStore((s) => s.activeWorkspace);
+
+  // Compose state: reducer (mission-only) + Zustand stores (scene objects, workspaces)
+  const state: MissionState = React.useMemo(
+    () => ({
+      ...reducerState,
+      sceneObjects,
+      selectedObjectId,
+      workspaces,
+      activeWorkspace,
+    }),
+    [reducerState, sceneObjects, selectedObjectId, workspaces, activeWorkspace],
+  );
 
   // AbortController refs for cancellable requests
   const analyzeAbortRef = useRef<AbortController | null>(null);
@@ -237,7 +182,7 @@ export function MissionProvider({
         dispatch({ type: "SET_LOADING", payload: false });
       }
     },
-    []
+    [],
   );
 
   const analyzeMission = useCallback(async (formData: FormData) => {
@@ -269,7 +214,7 @@ export function MissionProvider({
         console.warn("Invalid end time format, using 24 hours after start");
         const start = new Date(startTimeUTC);
         endTimeUTC = new Date(
-          start.getTime() + 24 * 60 * 60 * 1000
+          start.getTime() + 24 * 60 * 60 * 1000,
         ).toISOString();
       }
 
@@ -320,7 +265,7 @@ export function MissionProvider({
       if (result.success && result.data) {
         // Log response with summary
         const passes = result.data.mission_data?.passes || [];
-        debug.apiResponse("POST /api/mission/analyze", result.data, {
+        debug.apiResponse("POST /api/v1/mission/analyze", result.data, {
           summary: `✅ ${passes.length} opportunities found, ${
             result.data.czml_data?.length || 0
           } CZML packets`,
@@ -355,7 +300,7 @@ export function MissionProvider({
         // Extract satellite from CZML data and add to object tree
         if (result.data.czml_data) {
           const satellitePacket = result.data.czml_data.find(
-            (packet: CZMLPacket) => packet.id?.startsWith("sat_")
+            (packet: CZMLPacket) => packet.id?.startsWith("sat_"),
           );
           if (satellitePacket) {
             // Extract position data from CZML if available
@@ -406,9 +351,10 @@ export function MissionProvider({
           });
         });
 
-        // Add all objects to state
+        // Add all objects to Zustand scene object store
+        const soStore = useSceneObjectStore.getState();
         newObjects.forEach((obj) => {
-          dispatch({ type: "ADD_SCENE_OBJECT", payload: obj });
+          soStore.addSceneObject(obj);
         });
 
         // Load ground stations with visibility enabled
@@ -445,6 +391,7 @@ export function MissionProvider({
     analyzeAbortRef.current?.abort();
     validateAbortRef.current?.abort();
     dispatch({ type: "CLEAR_MISSION" });
+    useSceneObjectStore.getState().clearSceneObjects();
   }, []);
 
   const navigateToPassWindow = useCallback(
@@ -474,7 +421,7 @@ export function MissionProvider({
         console.error("Error in navigateToPassWindow:", error);
       }
     },
-    [state.missionData, setClockTime]
+    [state.missionData, setClockTime],
   );
 
   const navigateToImagingTime = useCallback(
@@ -508,61 +455,55 @@ export function MissionProvider({
         console.error("Error in navigateToImagingTime:", error);
       }
     },
-    [state.missionData, setClockTime]
+    [state.missionData, setClockTime],
   );
 
   const addSceneObject = useCallback((object: SceneObject) => {
-    dispatch({ type: "ADD_SCENE_OBJECT", payload: object });
+    useSceneObjectStore.getState().addSceneObject(object);
   }, []);
 
   const updateSceneObject = useCallback(
     (id: string, updates: Partial<SceneObject>) => {
-      dispatch({ type: "UPDATE_SCENE_OBJECT", payload: { id, updates } });
+      useSceneObjectStore.getState().updateSceneObject(id, updates);
     },
-    []
+    [],
   );
 
   const removeSceneObject = useCallback((id: string) => {
-    dispatch({ type: "REMOVE_SCENE_OBJECT", payload: id });
+    useSceneObjectStore.getState().removeSceneObject(id);
   }, []);
 
   const setSelectedObject = useCallback((id: string | null) => {
-    dispatch({ type: "SET_SELECTED_OBJECT", payload: id });
+    useSceneObjectStore.getState().setSelectedObject(id);
   }, []);
 
   const saveWorkspace = (name: string) => {
-    const workspace: Workspace = {
-      id: `workspace_${Date.now()}`,
-      name,
-      createdAt: new Date().toISOString(),
-      sceneObjects: state.sceneObjects,
-      missionData: state.missionData,
-      czmlData: state.czmlData,
-    };
-    dispatch({ type: "SAVE_WORKSPACE", payload: workspace });
-    // Save to localStorage
-    const workspaces = JSON.parse(
-      localStorage.getItem("mission_workspaces") || "[]"
-    );
-    workspaces.push(workspace);
-    localStorage.setItem("mission_workspaces", JSON.stringify(workspaces));
+    const sceneObjects = useSceneObjectStore.getState().sceneObjects;
+    useWorkspaceStore
+      .getState()
+      .createWorkspace(name, sceneObjects, state.missionData, state.czmlData);
   };
 
   const loadWorkspace = (id: string) => {
-    const workspace = state.workspaces.find((w) => w.id === id);
+    const workspace = useWorkspaceStore.getState().loadWorkspace(id);
     if (workspace) {
-      dispatch({ type: "LOAD_WORKSPACE", payload: workspace });
+      // Restore scene objects to Zustand store
+      useSceneObjectStore.getState().setSceneObjects(workspace.sceneObjects);
+      // Restore mission data to reducer
+      if (workspace.missionData) {
+        dispatch({
+          type: "SET_MISSION_DATA",
+          payload: {
+            missionData: workspace.missionData,
+            czmlData: workspace.czmlData,
+          },
+        });
+      }
     }
   };
 
   const deleteWorkspace = (id: string) => {
-    dispatch({ type: "DELETE_WORKSPACE", payload: id });
-    // Remove from localStorage
-    const workspaces = JSON.parse(
-      localStorage.getItem("mission_workspaces") || "[]"
-    );
-    const filtered = workspaces.filter((w: Workspace) => w.id !== id);
-    localStorage.setItem("mission_workspaces", JSON.stringify(filtered));
+    useWorkspaceStore.getState().deleteWorkspace(id);
   };
 
   const flyToObject = (objectId: string) => {
@@ -665,14 +606,14 @@ export function MissionProvider({
         });
     } else {
       console.warn(
-        `[flyToObject] Entity with ID '${objectId}' not found in viewer or data sources`
+        `[flyToObject] Entity with ID '${objectId}' not found in viewer or data sources`,
       );
     }
   };
 
   const toggleEntityVisibility = async (
     entityType: string,
-    isVisible: boolean
+    isVisible: boolean,
   ) => {
     if (!cesiumViewer || !cesiumViewer.cesiumElement) return;
 
@@ -758,7 +699,7 @@ export function MissionProvider({
             newLighting: isVisible,
             previousAtmosphere: currentAtmosphere,
             newAtmosphere: isVisible,
-          }
+          },
         );
       }
 
@@ -772,7 +713,7 @@ export function MissionProvider({
     if (entityType === "ground_station") {
       const entities = viewer.entities.values;
       const groundStations = entities.filter(
-        (e: Entity) => e.id && e.id.toString().includes("ground_station")
+        (e: Entity) => e.id && e.id.toString().includes("ground_station"),
       );
 
       if (isVisible) {
@@ -805,12 +746,12 @@ export function MissionProvider({
           const viewer = cesiumViewer.cesiumElement;
 
           console.log(
-            `Loading ${data.ground_stations.length} ground stations...`
+            `Loading ${data.ground_stations.length} ground stations...`,
           );
 
           // First, remove any existing ground stations to avoid duplicates
           const existingStations = viewer.entities.values.filter(
-            (e: Entity) => e.id && e.id.toString().includes("ground_station")
+            (e: Entity) => e.id && e.id.toString().includes("ground_station"),
           );
           existingStations.forEach((entity: Entity) => {
             viewer.entities.remove(entity);
@@ -831,7 +772,7 @@ export function MissionProvider({
               position: Cartesian3.fromDegrees(
                 station.longitude,
                 station.latitude,
-                0
+                0,
               ),
               billboard: {
                 image:
@@ -883,7 +824,7 @@ export function MissionProvider({
                   station.type || "Ground Station"
                 }</p>
                 <p style="color: #FFF; margin: 5px 0;"><strong>Location:</strong> ${station.latitude.toFixed(
-                  4
+                  4,
                 )}°, ${station.longitude.toFixed(4)}°</p>
                 <p style="color: #FFF; margin: 5px 0;"><strong>Description:</strong> ${
                   station.description || "Communication ground station"
@@ -894,7 +835,7 @@ export function MissionProvider({
           });
 
           console.log(
-            `${data.ground_stations.length} ground stations loaded successfully`
+            `${data.ground_stations.length} ground stations loaded successfully`,
           );
 
           // Force render and visibility update using multiple strategies
@@ -902,7 +843,7 @@ export function MissionProvider({
 
           // Strategy 1: Immediate visibility update
           const groundStations = viewer.entities.values.filter(
-            (e: Entity) => e.id && e.id.toString().includes("ground_station")
+            (e: Entity) => e.id && e.id.toString().includes("ground_station"),
           );
           groundStations.forEach((entity: Entity) => {
             entity.show = forceVisible;
@@ -932,18 +873,10 @@ export function MissionProvider({
         });
       }
     },
-    [cesiumViewer]
+    [cesiumViewer],
   );
 
-  React.useEffect(() => {
-    // Load workspaces from localStorage on mount
-    const savedWorkspaces = JSON.parse(
-      localStorage.getItem("mission_workspaces") || "[]"
-    );
-    savedWorkspaces.forEach((workspace: Workspace) => {
-      dispatch({ type: "SAVE_WORKSPACE", payload: workspace });
-    });
-  }, []);
+  // Workspaces are now auto-loaded from localStorage via workspaceStore's persist middleware
 
   const value: MissionContextType = {
     state,

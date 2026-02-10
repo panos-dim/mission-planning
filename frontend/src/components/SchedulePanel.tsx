@@ -4,12 +4,13 @@
  * Per UX_MINIMAL_SPEC.md Section 3.4
  */
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useCallback } from "react";
 import { CheckSquare, AlertTriangle, History, Clock } from "lucide-react";
 import AcceptedOrders from "./AcceptedOrders";
 import ConflictsPanel from "./ConflictsPanel";
 import ScheduleTimeline from "./ScheduleTimeline";
 import { useConflictStore } from "../store/conflictStore";
+import { useLockStore } from "../store/lockStore";
 import { AcceptedOrder } from "../types";
 import {
   SCHEDULE_TABS,
@@ -44,7 +45,20 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
     (s) => s.getConflictsForAcquisition,
   );
 
+  // PR-LOCK-OPS-01: Lock store for merging lock levels into timeline acquisitions
+  const lockLevels = useLockStore((s) => s.levels);
+  const toggleLock = useLockStore((s) => s.toggleLock);
+
+  // PR-LOCK-OPS-01: Handle lock toggle from timeline
+  const handleLockToggle = useCallback(
+    (acquisitionId: string) => {
+      toggleLock(acquisitionId);
+    },
+    [toggleLock],
+  );
+
   // PR-OPS-REPAIR-DEFAULT-01: Convert orders to timeline acquisitions
+  // PR-LOCK-OPS-01: Merge lock levels from lockStore
   const timelineAcquisitions = useMemo((): ScheduledAcquisition[] => {
     const acquisitions: ScheduledAcquisition[] = [];
     for (const order of orders) {
@@ -56,7 +70,7 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
           target_id: item.target_id,
           start_time: item.start_time,
           end_time: item.end_time,
-          lock_level: "none", // Default to unlocked for schedule items
+          lock_level: lockLevels.get(acqId) ?? "none",
           state: "committed",
           mode: undefined,
           has_conflict: getConflictsForAcquisition(acqId).length > 0,
@@ -65,7 +79,7 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
       }
     }
     return acquisitions;
-  }, [orders, getConflictsForAcquisition]);
+  }, [orders, getConflictsForAcquisition, lockLevels]);
 
   const tabs: Tab[] = [
     {
@@ -176,7 +190,10 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
 
         {/* PR-OPS-REPAIR-DEFAULT-01: Timeline tab */}
         {activeTab === SCHEDULE_TABS.TIMELINE && (
-          <ScheduleTimeline acquisitions={timelineAcquisitions} />
+          <ScheduleTimeline
+            acquisitions={timelineAcquisitions}
+            onLockToggle={handleLockToggle}
+          />
         )}
 
         {activeTab === SCHEDULE_TABS.HISTORY && showHistoryTab && (
