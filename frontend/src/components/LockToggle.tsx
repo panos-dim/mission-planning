@@ -29,14 +29,6 @@ const LOCK_CONFIG: Record<
     label: "Unlocked",
     description: "Fully flexible, can be rearranged by repair",
   },
-  soft: {
-    // Deprecated: kept for backwards compatibility, treated as 'none'
-    icon: Unlock,
-    color: "text-gray-400",
-    bgColor: "bg-gray-700",
-    label: "Unlocked",
-    description: "Fully flexible, can be rearranged by repair",
-  },
   hard: {
     icon: Shield,
     color: "text-red-400",

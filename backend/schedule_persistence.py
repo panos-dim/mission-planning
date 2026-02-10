@@ -194,7 +194,7 @@ class Acquisition:
     swath_width_km: Optional[float]
     scene_length_km: Optional[float]
     state: str  # tentative | locked | committed | executing | completed | failed
-    lock_level: str  # none | soft | hard
+    lock_level: str  # none | hard
     source: str  # auto | manual | reshuffle
     order_id: Optional[str]
     plan_id: Optional[str]
@@ -1332,7 +1332,7 @@ class ScheduleDB:
                   AND start_time < ?
                   AND end_time > ?
                   AND (state IN ('committed', 'locked', 'executing')
-                       OR lock_level IN ('soft', 'hard'))
+                       OR lock_level = 'hard')
             """
             params: List[Any] = [satellite_id, end_time, start_time]
 
@@ -1373,9 +1373,11 @@ class ScheduleDB:
             params.append(state)
 
         if lock_level:
-            valid_locks = ["none", "soft", "hard"]
+            valid_locks = ["none", "hard"]
             if lock_level not in valid_locks:
-                raise ValueError(f"Invalid lock_level: {lock_level}")
+                raise ValueError(
+                    f"Invalid lock_level: {lock_level}. Must be 'none' or 'hard'"
+                )
             updates.append("lock_level = ?")
             params.append(lock_level)
 
@@ -2171,7 +2173,7 @@ class ScheduleDB:
 
         Args:
             acquisition_id: Acquisition ID to update
-            lock_level: New lock level (none | soft | hard)
+            lock_level: New lock level (none | hard)
 
         Returns:
             True if updated successfully
@@ -2187,12 +2189,12 @@ class ScheduleDB:
 
         Args:
             acquisition_ids: List of acquisition IDs to update
-            lock_level: New lock level (none | soft | hard)
+            lock_level: New lock level (none | hard)
 
         Returns:
             Dict with updated count and any failures
         """
-        valid_locks = ["none", "soft", "hard"]
+        valid_locks = ["none", "hard"]
         if lock_level not in valid_locks:
             raise ValueError(
                 f"Invalid lock_level: {lock_level}. Must be one of {valid_locks}"
@@ -2459,7 +2461,7 @@ class ScheduleDB:
         self,
         plan_id: str,
         item_ids: List[str],
-        lock_level: str = "soft",
+        lock_level: str = "none",
         mode: str = "OPTICAL",
         workspace_id: Optional[str] = None,
         drop_acquisition_ids: Optional[List[str]] = None,
@@ -2484,8 +2486,8 @@ class ScheduleDB:
             ValueError: If plan not found or invalid
             Exception: On database error (transaction rolled back)
         """
-        if lock_level not in ["soft", "hard"]:
-            lock_level = "soft"
+        if lock_level not in ["none", "hard"]:
+            lock_level = "none"
 
         created_acquisitions: List[Dict[str, str]] = []
         dropped_acquisitions: List[str] = []

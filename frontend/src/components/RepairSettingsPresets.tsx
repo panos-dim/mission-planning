@@ -1,9 +1,8 @@
 import { Shield, Zap, Scale, Info } from "lucide-react";
 import { useState } from "react";
-import type { SoftLockPolicy, RepairObjective } from "../api/scheduleApi";
+import type { RepairObjective } from "../api/scheduleApi";
 
 export interface RepairSettings {
-  soft_lock_policy: SoftLockPolicy;
   max_changes: number;
   objective: RepairObjective;
 }
@@ -13,7 +12,6 @@ export interface RepairSettings {
  * Use this as initial state for repair mode UI.
  */
 export const DEFAULT_SAFE_REPAIR_SETTINGS: RepairSettings = {
-  soft_lock_policy: "freeze_soft",
   max_changes: 10,
   objective: "minimize_changes",
 };
@@ -33,9 +31,8 @@ const PRESETS: Record<string, PresetConfig> = {
     icon: Shield,
     color: "text-green-400",
     bgColor: "bg-green-900/30 hover:bg-green-900/50",
-    description: "Minimal changes. Freeze soft locks, minimize disruption.",
+    description: "Minimal changes, minimize disruption.",
     settings: {
-      soft_lock_policy: "freeze_soft",
       max_changes: 10,
       objective: "minimize_changes",
     },
@@ -45,9 +42,8 @@ const PRESETS: Record<string, PresetConfig> = {
     icon: Scale,
     color: "text-blue-400",
     bgColor: "bg-blue-900/30 hover:bg-blue-900/50",
-    description: "Allow shifts, moderate changes, maximize score.",
+    description: "Moderate changes, maximize score.",
     settings: {
-      soft_lock_policy: "allow_shift",
       max_changes: 20,
       objective: "maximize_score",
     },
@@ -57,9 +53,8 @@ const PRESETS: Record<string, PresetConfig> = {
     icon: Zap,
     color: "text-orange-400",
     bgColor: "bg-orange-900/30 hover:bg-orange-900/50",
-    description: "Full flexibility. Replace soft locks, maximize value.",
+    description: "Full flexibility. Replace unlocked items, maximize value.",
     settings: {
-      soft_lock_policy: "allow_replace",
       max_changes: 50,
       objective: "maximize_score",
     },
@@ -83,7 +78,6 @@ export default function RepairSettingsPresets({
     for (const [key, preset] of Object.entries(PRESETS)) {
       const s = preset.settings;
       if (
-        s.soft_lock_policy === currentSettings.soft_lock_policy &&
         s.max_changes === currentSettings.max_changes &&
         s.objective === currentSettings.objective
       ) {
@@ -175,29 +169,6 @@ export function RepairSettingsForm({
 }: RepairSettingsFormProps): JSX.Element {
   return (
     <div className="space-y-4">
-      <div>
-        <label className="block text-xs font-medium text-gray-400 mb-1">
-          Soft Lock Policy
-        </label>
-        <select
-          value={settings.soft_lock_policy}
-          onChange={(e) =>
-            onChange({
-              ...settings,
-              soft_lock_policy: e.target.value as SoftLockPolicy,
-            })
-          }
-          disabled={disabled}
-          className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm text-white"
-        >
-          <option value="freeze_soft">Freeze Soft (treat as hard)</option>
-          <option value="allow_shift">Allow Shift (time adjust only)</option>
-          <option value="allow_replace">
-            Allow Replace (full flexibility)
-          </option>
-        </select>
-      </div>
-
       <div>
         <label className="block text-xs font-medium text-gray-400 mb-1">
           Max Changes: {settings.max_changes}

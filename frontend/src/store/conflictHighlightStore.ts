@@ -10,7 +10,7 @@
  */
 
 import { create } from "zustand";
-import { subscribeWithSelector } from "zustand/middleware";
+import { devtools, subscribeWithSelector } from "zustand/middleware";
 
 // Dev mode check
 const isDev = import.meta.env?.DEV ?? false;
@@ -119,187 +119,190 @@ const initialState: ConflictHighlightState = {
 export const useConflictHighlightStore = create<
   ConflictHighlightState & ConflictHighlightActions
 >()(
-  subscribeWithSelector((set, get) => ({
-    ...initialState,
+  devtools(
+    subscribeWithSelector((set, get) => ({
+      ...initialState,
 
-    registerAcquisitionEntity: (acquisitionId, entityId, _type) => {
-      set((state) => {
-        const newMap = new Map(state.acquisitionEntityMap);
-        const existing = newMap.get(acquisitionId) || [];
-        if (!existing.includes(entityId)) {
-          newMap.set(acquisitionId, [...existing, entityId]);
+      registerAcquisitionEntity: (acquisitionId, entityId, _type) => {
+        set((state) => {
+          const newMap = new Map(state.acquisitionEntityMap);
+          const existing = newMap.get(acquisitionId) || [];
+          if (!existing.includes(entityId)) {
+            newMap.set(acquisitionId, [...existing, entityId]);
+          }
+          return { acquisitionEntityMap: newMap };
+        });
+
+        if (isDev) {
+          console.log(
+            `[ConflictHighlight] Registered entity ${entityId} for acquisition ${acquisitionId}`,
+          );
         }
-        return { acquisitionEntityMap: newMap };
-      });
+      },
 
-      if (isDev) {
-        console.log(
-          `[ConflictHighlight] Registered entity ${entityId} for acquisition ${acquisitionId}`,
-        );
-      }
-    },
+      unregisterAcquisitionEntity: (acquisitionId, entityId) => {
+        set((state) => {
+          const newMap = new Map(state.acquisitionEntityMap);
+          const existing = newMap.get(acquisitionId) || [];
+          const filtered = existing.filter((id) => id !== entityId);
+          if (filtered.length > 0) {
+            newMap.set(acquisitionId, filtered);
+          } else {
+            newMap.delete(acquisitionId);
+          }
+          return { acquisitionEntityMap: newMap };
+        });
+      },
 
-    unregisterAcquisitionEntity: (acquisitionId, entityId) => {
-      set((state) => {
-        const newMap = new Map(state.acquisitionEntityMap);
-        const existing = newMap.get(acquisitionId) || [];
-        const filtered = existing.filter((id) => id !== entityId);
-        if (filtered.length > 0) {
-          newMap.set(acquisitionId, filtered);
-        } else {
-          newMap.delete(acquisitionId);
+      clearEntityMap: () => {
+        set({ acquisitionEntityMap: new Map() });
+        if (isDev) {
+          console.log("[ConflictHighlight] Cleared entity map");
         }
-        return { acquisitionEntityMap: newMap };
-      });
-    },
+      },
 
-    clearEntityMap: () => {
-      set({ acquisitionEntityMap: new Map() });
-      if (isDev) {
-        console.log("[ConflictHighlight] Cleared entity map");
-      }
-    },
-
-    setHighlightedAcquisitions: (acquisitionIds, acquisitionData) => {
-      if (isDev) {
-        console.log(
-          `[ConflictHighlight] Setting highlighted acquisitions: ${acquisitionIds.length} items`,
-        );
-      }
-
-      set({ isProcessing: true });
-
-      // Resolve entity IDs from acquisition IDs
-      const { acquisitionEntityMap } = get();
-      const entityIds: string[] = [];
-
-      for (const acqId of acquisitionIds) {
-        const entities = acquisitionEntityMap.get(acqId);
-        if (entities) {
-          entityIds.push(...entities);
+      setHighlightedAcquisitions: (acquisitionIds, acquisitionData) => {
+        if (isDev) {
+          console.log(
+            `[ConflictHighlight] Setting highlighted acquisitions: ${acquisitionIds.length} items`,
+          );
         }
-        // Also try common entity ID patterns
-        entityIds.push(`sar_swath_${acqId}`);
-        entityIds.push(`target_${acqId}`);
-        entityIds.push(`opp_${acqId}`);
-        entityIds.push(`swath_${acqId}`);
-      }
 
-      // Compute time range if acquisition data provided
-      let timeRange: ConflictTimeRange | null = null;
-      let focusTarget: {
-        latitude: number;
-        longitude: number;
-        acquisitionId: string;
-      } | null = null;
+        set({ isProcessing: true });
 
-      if (acquisitionData && acquisitionData.length > 0) {
-        const startTimes = acquisitionData
-          .map((a) => new Date(a.start_time).getTime())
-          .filter((t) => !isNaN(t));
-        const endTimes = acquisitionData
-          .map((a) => new Date(a.end_time).getTime())
-          .filter((t) => !isNaN(t));
+        // Resolve entity IDs from acquisition IDs
+        const { acquisitionEntityMap } = get();
+        const entityIds: string[] = [];
 
-        if (startTimes.length > 0 && endTimes.length > 0) {
-          const minStart = new Date(Math.min(...startTimes));
-          const maxEnd = new Date(Math.max(...endTimes));
+        for (const acqId of acquisitionIds) {
+          const entities = acquisitionEntityMap.get(acqId);
+          if (entities) {
+            entityIds.push(...entities);
+          }
+          // Also try common entity ID patterns
+          entityIds.push(`sar_swath_${acqId}`);
+          entityIds.push(`target_${acqId}`);
+          entityIds.push(`opp_${acqId}`);
+          entityIds.push(`swath_${acqId}`);
+        }
 
-          timeRange = {
-            start: minStart.toISOString(),
-            end: maxEnd.toISOString(),
-            padding: 3, // 3 minutes padding
-          };
+        // Compute time range if acquisition data provided
+        let timeRange: ConflictTimeRange | null = null;
+        let focusTarget: {
+          latitude: number;
+          longitude: number;
+          acquisitionId: string;
+        } | null = null;
 
-          if (isDev) {
-            console.log(
-              `[ConflictHighlight] Computed time range: ${timeRange.start} - ${timeRange.end}`,
-            );
+        if (acquisitionData && acquisitionData.length > 0) {
+          const startTimes = acquisitionData
+            .map((a) => new Date(a.start_time).getTime())
+            .filter((t) => !isNaN(t));
+          const endTimes = acquisitionData
+            .map((a) => new Date(a.end_time).getTime())
+            .filter((t) => !isNaN(t));
+
+          if (startTimes.length > 0 && endTimes.length > 0) {
+            const minStart = new Date(Math.min(...startTimes));
+            const maxEnd = new Date(Math.max(...endTimes));
+
+            timeRange = {
+              start: minStart.toISOString(),
+              end: maxEnd.toISOString(),
+              padding: 3, // 3 minutes padding
+            };
+
+            if (isDev) {
+              console.log(
+                `[ConflictHighlight] Computed time range: ${timeRange.start} - ${timeRange.end}`,
+              );
+            }
+          }
+
+          // Set camera focus to first acquisition with coordinates
+          const firstWithCoords = acquisitionData.find(
+            (a) => a.latitude !== undefined && a.longitude !== undefined,
+          );
+          if (
+            firstWithCoords &&
+            firstWithCoords.latitude &&
+            firstWithCoords.longitude
+          ) {
+            focusTarget = {
+              latitude: firstWithCoords.latitude,
+              longitude: firstWithCoords.longitude,
+              acquisitionId: firstWithCoords.id,
+            };
           }
         }
 
-        // Set camera focus to first acquisition with coordinates
-        const firstWithCoords = acquisitionData.find(
-          (a) => a.latitude !== undefined && a.longitude !== undefined,
-        );
-        if (
-          firstWithCoords &&
-          firstWithCoords.latitude &&
-          firstWithCoords.longitude
-        ) {
-          focusTarget = {
-            latitude: firstWithCoords.latitude,
-            longitude: firstWithCoords.longitude,
-            acquisitionId: firstWithCoords.id,
-          };
+        // Deduplicate entity IDs
+        const uniqueEntityIds = [...new Set(entityIds)];
+
+        set({
+          highlightedEntityIds: uniqueEntityIds,
+          conflictTimeRange: timeRange,
+          shouldFocusTimeline: timeRange !== null,
+          cameraFocusTarget: focusTarget,
+          isProcessing: false,
+        });
+
+        if (isDev) {
+          console.log(
+            `[ConflictHighlight] Highlighted ${uniqueEntityIds.length} entities for ${acquisitionIds.length} acquisitions`,
+          );
         }
-      }
+      },
 
-      // Deduplicate entity IDs
-      const uniqueEntityIds = [...new Set(entityIds)];
-
-      set({
-        highlightedEntityIds: uniqueEntityIds,
-        conflictTimeRange: timeRange,
-        shouldFocusTimeline: timeRange !== null,
-        cameraFocusTarget: focusTarget,
-        isProcessing: false,
-      });
-
-      if (isDev) {
-        console.log(
-          `[ConflictHighlight] Highlighted ${uniqueEntityIds.length} entities for ${acquisitionIds.length} acquisitions`,
-        );
-      }
-    },
-
-    clearHighlights: () => {
-      if (isDev) {
-        console.log("[ConflictHighlight] Clearing all highlights");
-      }
-
-      set({
-        highlightedEntityIds: [],
-        conflictTimeRange: null,
-        shouldFocusTimeline: false,
-        cameraFocusTarget: null,
-      });
-    },
-
-    setConflictTimeRange: (range) => {
-      set({ conflictTimeRange: range, shouldFocusTimeline: range !== null });
-    },
-
-    focusTimelineOnConflict: () => {
-      set({ shouldFocusTimeline: true });
-    },
-
-    clearTimelineFocus: () => {
-      set({ shouldFocusTimeline: false });
-    },
-
-    setCameraFocusTarget: (target) => {
-      set({ cameraFocusTarget: target });
-    },
-
-    resolveEntityIds: (acquisitionIds) => {
-      const { acquisitionEntityMap } = get();
-      const entityIds: string[] = [];
-
-      for (const acqId of acquisitionIds) {
-        const entities = acquisitionEntityMap.get(acqId);
-        if (entities) {
-          entityIds.push(...entities);
+      clearHighlights: () => {
+        if (isDev) {
+          console.log("[ConflictHighlight] Clearing all highlights");
         }
-        // Also try common patterns
-        entityIds.push(`sar_swath_${acqId}`);
-        entityIds.push(`target_${acqId}`);
-        entityIds.push(`opp_${acqId}`);
-      }
 
-      return [...new Set(entityIds)];
-    },
-  })),
+        set({
+          highlightedEntityIds: [],
+          conflictTimeRange: null,
+          shouldFocusTimeline: false,
+          cameraFocusTarget: null,
+        });
+      },
+
+      setConflictTimeRange: (range) => {
+        set({ conflictTimeRange: range, shouldFocusTimeline: range !== null });
+      },
+
+      focusTimelineOnConflict: () => {
+        set({ shouldFocusTimeline: true });
+      },
+
+      clearTimelineFocus: () => {
+        set({ shouldFocusTimeline: false });
+      },
+
+      setCameraFocusTarget: (target) => {
+        set({ cameraFocusTarget: target });
+      },
+
+      resolveEntityIds: (acquisitionIds) => {
+        const { acquisitionEntityMap } = get();
+        const entityIds: string[] = [];
+
+        for (const acqId of acquisitionIds) {
+          const entities = acquisitionEntityMap.get(acqId);
+          if (entities) {
+            entityIds.push(...entities);
+          }
+          // Also try common patterns
+          entityIds.push(`sar_swath_${acqId}`);
+          entityIds.push(`target_${acqId}`);
+          entityIds.push(`opp_${acqId}`);
+        }
+
+        return [...new Set(entityIds)];
+      },
+    })),
+    { name: "ConflictHighlightStore", enabled: import.meta.env?.DEV ?? false },
+  ),
 );
 
 // =============================================================================

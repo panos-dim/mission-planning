@@ -207,7 +207,7 @@ export default function OrdersArea({
 
     setLoading(true);
     try {
-      await commitBatch(batchId, { lock_level: "soft" });
+      await commitBatch(batchId, { lock_level: "none" });
       setPlanResult(null);
       setSelectedBatch(null);
       loadBatches();

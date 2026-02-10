@@ -12,7 +12,7 @@
  */
 
 import { create } from "zustand";
-import { subscribeWithSelector } from "zustand/middleware";
+import { devtools, subscribeWithSelector } from "zustand/middleware";
 import type { RepairDiffType } from "./repairHighlightStore";
 import type { HighlightMode } from "../adapters/highlightAdapter";
 
@@ -137,191 +137,200 @@ const initialState: UnifiedHighlightState = {
 export const useUnifiedHighlightStore = create<
   UnifiedHighlightState & UnifiedHighlightActions
 >()(
-  subscribeWithSelector((set, get) => ({
-    ...initialState,
+  devtools(
+    subscribeWithSelector((set, get) => ({
+      ...initialState,
 
-    highlightConflict: (acquisitionIds, timeRange, cameraTarget) => {
-      if (isDev) {
-        console.log(
-          `[UnifiedHighlight] Highlighting conflict: ${acquisitionIds.length} acquisitions`,
-        );
-      }
-
-      const { timelineVisible } = get();
-      let pendingFocus: PendingTimelineFocus | null = null;
-
-      // If timeline is hidden, store pending focus
-      if (timeRange && !timelineVisible) {
-        pendingFocus = {
-          range: timeRange,
-          jumpToStart: true,
-          requestedAt: Date.now(),
-        };
+      highlightConflict: (acquisitionIds, timeRange, cameraTarget) => {
         if (isDev) {
           console.log(
-            `[UnifiedHighlight] Timeline hidden, storing pending focus`,
+            `[UnifiedHighlight] Highlighting conflict: ${acquisitionIds.length} acquisitions`,
           );
         }
-      }
 
-      set({
-        activeMode: "conflict",
-        highlightedIds: acquisitionIds,
-        ghostIds: [],
-        repairDiffType: null,
-        timeRange: timeRange || null,
-        shouldFocusTimeline: timeRange !== undefined && timelineVisible,
-        pendingTimelineFocus: pendingFocus,
-        cameraFocusTarget: cameraTarget || null,
-        isProcessing: false,
-      });
-    },
+        const { timelineVisible } = get();
+        let pendingFocus: PendingTimelineFocus | null = null;
 
-    highlightRepair: (itemIds, diffType, ghostIds, timeRange, cameraTarget) => {
-      if (isDev) {
-        console.log(
-          `[UnifiedHighlight] Highlighting repair (${diffType}): ${itemIds.length} items, ${ghostIds?.length || 0} ghosts`,
-        );
-      }
-
-      const { timelineVisible } = get();
-      let pendingFocus: PendingTimelineFocus | null = null;
-
-      if (timeRange && !timelineVisible) {
-        pendingFocus = {
-          range: timeRange,
-          jumpToStart: true,
-          requestedAt: Date.now(),
-        };
-      }
-
-      set({
-        activeMode: "repair",
-        highlightedIds: itemIds,
-        ghostIds: ghostIds || [],
-        repairDiffType: diffType,
-        timeRange: timeRange || null,
-        shouldFocusTimeline: timeRange !== undefined && timelineVisible,
-        pendingTimelineFocus: pendingFocus,
-        cameraFocusTarget: cameraTarget || null,
-        isProcessing: false,
-      });
-    },
-
-    highlightSelection: (itemIds, timeRange, cameraTarget) => {
-      if (isDev) {
-        console.log(
-          `[UnifiedHighlight] Highlighting selection: ${itemIds.length} items`,
-        );
-      }
-
-      const { timelineVisible } = get();
-      let pendingFocus: PendingTimelineFocus | null = null;
-
-      if (timeRange && !timelineVisible) {
-        pendingFocus = {
-          range: timeRange,
-          jumpToStart: true,
-          requestedAt: Date.now(),
-        };
-      }
-
-      set({
-        activeMode: "selection",
-        highlightedIds: itemIds,
-        ghostIds: [],
-        repairDiffType: null,
-        timeRange: timeRange || null,
-        shouldFocusTimeline: timeRange !== undefined && timelineVisible,
-        pendingTimelineFocus: pendingFocus,
-        cameraFocusTarget: cameraTarget || null,
-        isProcessing: false,
-      });
-    },
-
-    clearHighlights: () => {
-      if (isDev) {
-        console.log(`[UnifiedHighlight] Clearing all highlights`);
-      }
-
-      set({
-        activeMode: null,
-        highlightedIds: [],
-        ghostIds: [],
-        repairDiffType: null,
-        timeRange: null,
-        shouldFocusTimeline: false,
-        pendingTimelineFocus: null,
-        cameraFocusTarget: null,
-        isProcessing: false,
-      });
-    },
-
-    setTimelineVisible: (visible) => {
-      const prev = get().timelineVisible;
-      if (prev === visible) return;
-
-      if (isDev) {
-        console.log(`[UnifiedHighlight] Timeline visibility: ${visible}`);
-      }
-
-      set({ timelineVisible: visible });
-
-      // If timeline just became visible and we have pending focus, trigger it
-      if (visible) {
-        const { pendingTimelineFocus, timeRange } = get();
-        if (pendingTimelineFocus) {
-          if (isDev) {
-            console.log(
-              `[UnifiedHighlight] Applying pending timeline focus from ${pendingTimelineFocus.requestedAt}`,
-            );
-          }
-          set({
-            shouldFocusTimeline: true,
-            timeRange: pendingTimelineFocus.range,
-            pendingTimelineFocus: null,
-          });
-        } else if (timeRange) {
-          // Re-apply existing time range focus
-          set({ shouldFocusTimeline: true });
-        }
-      }
-    },
-
-    consumePendingTimelineFocus: () => {
-      const { pendingTimelineFocus } = get();
-      if (pendingTimelineFocus) {
-        set({ pendingTimelineFocus: null });
-        return pendingTimelineFocus;
-      }
-      return null;
-    },
-
-    requestTimelineFocus: () => {
-      const { timeRange, timelineVisible } = get();
-      if (!timeRange) return;
-
-      if (timelineVisible) {
-        set({ shouldFocusTimeline: true });
-      } else {
-        set({
-          pendingTimelineFocus: {
+        // If timeline is hidden, store pending focus
+        if (timeRange && !timelineVisible) {
+          pendingFocus = {
             range: timeRange,
             jumpToStart: true,
             requestedAt: Date.now(),
-          },
+          };
+          if (isDev) {
+            console.log(
+              `[UnifiedHighlight] Timeline hidden, storing pending focus`,
+            );
+          }
+        }
+
+        set({
+          activeMode: "conflict",
+          highlightedIds: acquisitionIds,
+          ghostIds: [],
+          repairDiffType: null,
+          timeRange: timeRange || null,
+          shouldFocusTimeline: timeRange !== undefined && timelineVisible,
+          pendingTimelineFocus: pendingFocus,
+          cameraFocusTarget: cameraTarget || null,
+          isProcessing: false,
         });
-      }
-    },
+      },
 
-    clearTimelineFocus: () => {
-      set({ shouldFocusTimeline: false });
-    },
+      highlightRepair: (
+        itemIds,
+        diffType,
+        ghostIds,
+        timeRange,
+        cameraTarget,
+      ) => {
+        if (isDev) {
+          console.log(
+            `[UnifiedHighlight] Highlighting repair (${diffType}): ${itemIds.length} items, ${ghostIds?.length || 0} ghosts`,
+          );
+        }
 
-    setCameraFocusTarget: (target) => {
-      set({ cameraFocusTarget: target });
-    },
-  })),
+        const { timelineVisible } = get();
+        let pendingFocus: PendingTimelineFocus | null = null;
+
+        if (timeRange && !timelineVisible) {
+          pendingFocus = {
+            range: timeRange,
+            jumpToStart: true,
+            requestedAt: Date.now(),
+          };
+        }
+
+        set({
+          activeMode: "repair",
+          highlightedIds: itemIds,
+          ghostIds: ghostIds || [],
+          repairDiffType: diffType,
+          timeRange: timeRange || null,
+          shouldFocusTimeline: timeRange !== undefined && timelineVisible,
+          pendingTimelineFocus: pendingFocus,
+          cameraFocusTarget: cameraTarget || null,
+          isProcessing: false,
+        });
+      },
+
+      highlightSelection: (itemIds, timeRange, cameraTarget) => {
+        if (isDev) {
+          console.log(
+            `[UnifiedHighlight] Highlighting selection: ${itemIds.length} items`,
+          );
+        }
+
+        const { timelineVisible } = get();
+        let pendingFocus: PendingTimelineFocus | null = null;
+
+        if (timeRange && !timelineVisible) {
+          pendingFocus = {
+            range: timeRange,
+            jumpToStart: true,
+            requestedAt: Date.now(),
+          };
+        }
+
+        set({
+          activeMode: "selection",
+          highlightedIds: itemIds,
+          ghostIds: [],
+          repairDiffType: null,
+          timeRange: timeRange || null,
+          shouldFocusTimeline: timeRange !== undefined && timelineVisible,
+          pendingTimelineFocus: pendingFocus,
+          cameraFocusTarget: cameraTarget || null,
+          isProcessing: false,
+        });
+      },
+
+      clearHighlights: () => {
+        if (isDev) {
+          console.log(`[UnifiedHighlight] Clearing all highlights`);
+        }
+
+        set({
+          activeMode: null,
+          highlightedIds: [],
+          ghostIds: [],
+          repairDiffType: null,
+          timeRange: null,
+          shouldFocusTimeline: false,
+          pendingTimelineFocus: null,
+          cameraFocusTarget: null,
+          isProcessing: false,
+        });
+      },
+
+      setTimelineVisible: (visible) => {
+        const prev = get().timelineVisible;
+        if (prev === visible) return;
+
+        if (isDev) {
+          console.log(`[UnifiedHighlight] Timeline visibility: ${visible}`);
+        }
+
+        set({ timelineVisible: visible });
+
+        // If timeline just became visible and we have pending focus, trigger it
+        if (visible) {
+          const { pendingTimelineFocus, timeRange } = get();
+          if (pendingTimelineFocus) {
+            if (isDev) {
+              console.log(
+                `[UnifiedHighlight] Applying pending timeline focus from ${pendingTimelineFocus.requestedAt}`,
+              );
+            }
+            set({
+              shouldFocusTimeline: true,
+              timeRange: pendingTimelineFocus.range,
+              pendingTimelineFocus: null,
+            });
+          } else if (timeRange) {
+            // Re-apply existing time range focus
+            set({ shouldFocusTimeline: true });
+          }
+        }
+      },
+
+      consumePendingTimelineFocus: () => {
+        const { pendingTimelineFocus } = get();
+        if (pendingTimelineFocus) {
+          set({ pendingTimelineFocus: null });
+          return pendingTimelineFocus;
+        }
+        return null;
+      },
+
+      requestTimelineFocus: () => {
+        const { timeRange, timelineVisible } = get();
+        if (!timeRange) return;
+
+        if (timelineVisible) {
+          set({ shouldFocusTimeline: true });
+        } else {
+          set({
+            pendingTimelineFocus: {
+              range: timeRange,
+              jumpToStart: true,
+              requestedAt: Date.now(),
+            },
+          });
+        }
+      },
+
+      clearTimelineFocus: () => {
+        set({ shouldFocusTimeline: false });
+      },
+
+      setCameraFocusTarget: (target) => {
+        set({ cameraFocusTarget: target });
+      },
+    })),
+    { name: "UnifiedHighlightStore", enabled: import.meta.env?.DEV ?? false },
+  ),
 );
 
 // =============================================================================

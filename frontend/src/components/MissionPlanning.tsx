@@ -20,14 +20,18 @@ import {
   RefreshCw,
   AlertTriangle,
   CheckCircle,
+  ChevronDown,
+  ChevronUp,
+  Settings,
+  Shield,
 } from "lucide-react";
 import debug from "../utils/debug";
+import { ApiError, NetworkError, TimeoutError } from "../api/errors";
 import {
   getScheduleContext,
   createRepairPlan,
   type PlanningMode,
   type LockPolicy,
-  type SoftLockPolicy,
   type RepairObjective,
   type RepairPlanResponse,
 } from "../api/scheduleApi";
@@ -40,6 +44,7 @@ import { useRepairHighlightStore } from "../store/repairHighlightStore";
 import {
   isAdvancedPlanningEnabled,
   isDebugMode,
+  COLLAPSED_BY_DEFAULT,
 } from "../constants/simpleMode";
 
 interface MissionPlanningProps {
@@ -84,8 +89,6 @@ export default function MissionPlanning({
   const [includeTentative, setIncludeTentative] = useState(false);
 
   // State for repair mode
-  const [softLockPolicy, setSoftLockPolicy] =
-    useState<SoftLockPolicy>("allow_replace");
   const [repairObjective, setRepairObjective] =
     useState<RepairObjective>("maximize_score");
   const [maxChanges, setMaxChanges] = useState(100);
@@ -120,6 +123,52 @@ export default function MissionPlanning({
   const [pendingCommitAlgorithm, setPendingCommitAlgorithm] = useState<
     string | null
   >(null);
+
+  // PR-PARAM-GOV-01: Advanced accordion collapsed by default
+  const [showAdvancedPlanning, setShowAdvancedPlanning] = useState(
+    !COLLAPSED_BY_DEFAULT.planningAdvanced,
+  );
+
+  // PR-PARAM-GOV-01: Config summary from backend (read-only platform truth)
+  const [configSummary, setConfigSummary] = useState<
+    Array<{
+      id: string;
+      name: string;
+      imaging_type: string;
+      bus: {
+        max_roll_deg: number;
+        max_roll_rate_dps: number;
+        max_pitch_deg: number;
+        max_pitch_rate_dps: number;
+        settling_time_s: number;
+        agility_dps: number;
+      };
+      sensor: {
+        fov_half_angle_deg: number;
+        swath_width_km: number | null;
+        resolution_m: number | null;
+      };
+      sar_capable: boolean;
+    }>
+  >([]);
+
+  // PR-PARAM-GOV-01: Fetch config summary on mount
+  useEffect(() => {
+    const fetchConfigSummary = async () => {
+      try {
+        const response = await fetch("/api/v1/config/satellite-config-summary");
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.satellites) {
+            setConfigSummary(data.satellites);
+          }
+        }
+      } catch {
+        // Config summary is optional - silently ignore errors
+      }
+    };
+    fetchConfigSummary();
+  }, []);
 
   // State for planning configuration
   // NOTE: Only roll_pitch_best_fit is used - other algorithms are deprecated
@@ -320,7 +369,6 @@ export default function MissionPlanning({
           planning_mode: "repair" as const,
           workspace_id: workspaceId,
           include_tentative: includeTentative,
-          soft_lock_policy: softLockPolicy,
           max_changes: maxChanges,
           objective: repairObjective,
           imaging_time_s: config.imaging_time_s,
@@ -428,6 +476,18 @@ export default function MissionPlanning({
           body: JSON.stringify(request),
         });
 
+        if (!response.ok) {
+          let detail = `Planning failed (HTTP ${response.status})`;
+          try {
+            const errBody = await response.json();
+            detail = errBody.detail || errBody.message || detail;
+          } catch {
+            /* non-JSON body */
+          }
+          setError(detail);
+          return;
+        }
+
         const data: PlanningResponse = await response.json();
 
         debug.apiResponse("POST /api/planning/schedule", data, {
@@ -463,7 +523,19 @@ export default function MissionPlanning({
         }
       }
     } catch (err) {
-      setError("Failed to run planning");
+      // PR-PARAM-GOV-01: Human-readable error extraction
+      let msg = "Failed to run planning";
+      if (err instanceof ApiError) {
+        const detail = (err.data as Record<string, unknown>)?.detail;
+        msg = typeof detail === "string" ? detail : err.message;
+      } else if (err instanceof NetworkError) {
+        msg = "Network error — is the backend running?";
+      } else if (err instanceof TimeoutError) {
+        msg = `Request timed out after ${err.timeoutMs / 1000}s`;
+      } else if (err instanceof Error) {
+        msg = err.message;
+      }
+      setError(msg);
       console.error("Planning error:", err);
     } finally {
       setIsPlanning(false);
@@ -912,30 +984,6 @@ export default function MissionPlanning({
                     </div>
                   )}
 
-                  {/* Soft Lock Policy */}
-                  <div className="space-y-2 mb-3">
-                    <label className="block text-[10px] text-gray-400">
-                      Soft Lock Policy
-                    </label>
-                    <select
-                      value={softLockPolicy}
-                      onChange={(e) =>
-                        setSoftLockPolicy(e.target.value as SoftLockPolicy)
-                      }
-                      className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs"
-                    >
-                      <option value="allow_replace">
-                        Allow Replace (drop soft for better)
-                      </option>
-                      <option value="allow_shift">
-                        Allow Shift (move timing only)
-                      </option>
-                      <option value="freeze_soft">
-                        Freeze Soft (treat as hard)
-                      </option>
-                    </select>
-                  </div>
-
                   {/* Max Changes Slider */}
                   <div className="space-y-2 mb-3">
                     <div className="flex justify-between">
@@ -995,233 +1043,23 @@ export default function MissionPlanning({
             </div>
           )}
 
-          <h3 className="text-sm font-semibold text-white border-b border-gray-700 pb-2">
-            Planning Parameters
-          </h3>
-
-          {/* Mission Configuration */}
-          <div className="space-y-3">
-            <h4 className="text-xs font-semibold text-blue-400 uppercase tracking-wide">
-              Mission Configuration
-            </h4>
-            <div className="grid grid-cols-2 gap-3">
-              {/* Imaging Time */}
-              <div>
-                <label className="block text-xs font-medium text-gray-300 mb-1.5">
-                  Imaging Time (τ)
-                </label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    value={config.imaging_time_s}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        imaging_time_s: parseFloat(e.target.value),
-                      })
-                    }
-                    className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                    step="0.1"
-                    min="0.1"
-                  />
-                  <span className="absolute right-3 top-2 text-xs text-gray-500">
-                    sec
-                  </span>
-                </div>
-              </div>
-
-              {/* Look Window */}
-              <div>
-                <label className="block text-xs font-medium text-gray-300 mb-1.5">
-                  Look Window
-                </label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    value={config.look_window_s}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        look_window_s: parseFloat(e.target.value),
-                      })
-                    }
-                    className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                    step="60"
-                    min="60"
-                  />
-                  <span className="absolute right-3 top-2 text-xs text-gray-500">
-                    sec
-                  </span>
-                </div>
-              </div>
+          {/* PR-PARAM-GOV-01: Planning Parameters — Basic + Advanced accordion */}
+          <div className="flex items-center justify-between border-b border-gray-700 pb-2">
+            <h3 className="text-sm font-semibold text-white">
+              Planning Parameters
+            </h3>
+            <div className="flex items-center gap-1 text-[10px] text-gray-500">
+              <Shield size={10} />
+              <span>Governed</span>
             </div>
           </div>
 
-          {/* Spacecraft Agility - Advanced only */}
-          {showAdvancedOptions && (
-            <div className="space-y-3 pt-2">
-              <h4 className="text-xs font-semibold text-blue-400 uppercase tracking-wide">
-                Spacecraft Agility
-              </h4>
-
-              {/* Roll Axis */}
-              <div className="bg-gray-750 rounded-lg p-3 border border-gray-700">
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="w-2 h-2 rounded-full bg-purple-500"></div>
-                  <h5 className="text-xs font-semibold text-gray-300">
-                    Roll Axis (Cross-Track)
-                  </h5>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">
-                      Rate
-                    </label>
-                    <div className="relative">
-                      <input
-                        type="number"
-                        value={config.max_roll_rate_dps}
-                        onChange={(e) =>
-                          setConfig({
-                            ...config,
-                            max_roll_rate_dps: parseFloat(e.target.value),
-                          })
-                        }
-                        className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
-                        step="0.1"
-                        min="0.1"
-                      />
-                      <span className="absolute right-2 top-1.5 text-xs text-gray-500">
-                        °/s
-                      </span>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">
-                      Acceleration
-                    </label>
-                    <div className="relative">
-                      <input
-                        type="number"
-                        value={config.max_roll_accel_dps2}
-                        onChange={(e) =>
-                          setConfig({
-                            ...config,
-                            max_roll_accel_dps2: parseFloat(e.target.value),
-                          })
-                        }
-                        className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
-                        step="0.1"
-                        min="0.1"
-                      />
-                      <span className="absolute right-2 top-1.5 text-xs text-gray-500">
-                        °/s²
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Pitch Axis (Along-Track) */}
-              <div className="bg-gray-750 rounded-lg p-3 border border-green-900/50">
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="w-2 h-2 rounded-full bg-green-500"></div>
-                  <h5 className="text-xs font-semibold text-gray-300">
-                    Pitch Axis (Along-Track)
-                  </h5>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">
-                      Rate
-                    </label>
-                    <div className="relative">
-                      <input
-                        type="number"
-                        value={config.max_pitch_rate_dps}
-                        onChange={(e) =>
-                          setConfig({
-                            ...config,
-                            max_pitch_rate_dps: parseFloat(e.target.value),
-                          })
-                        }
-                        className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm focus:border-green-500 focus:ring-1 focus:ring-green-500"
-                        step="0.1"
-                        min="0"
-                      />
-                      <span className="absolute right-2 top-1.5 text-xs text-gray-500">
-                        °/s
-                      </span>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">
-                      Acceleration
-                    </label>
-                    <div className="relative">
-                      <input
-                        type="number"
-                        value={config.max_pitch_accel_dps2}
-                        onChange={(e) =>
-                          setConfig({
-                            ...config,
-                            max_pitch_accel_dps2: parseFloat(e.target.value),
-                          })
-                        }
-                        className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm focus:border-green-500 focus:ring-1 focus:ring-green-500"
-                        step="0.1"
-                        min="0"
-                      />
-                      <span className="absolute right-2 top-1.5 text-xs text-gray-500">
-                        °/s²
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Value Source - Advanced only */}
-          {showAdvancedOptions && (
-            <div className="pt-2">
-              <label className="block text-xs font-medium text-gray-300 mb-1.5">
-                Target Value Source
-              </label>
-              <select
-                value={config.value_source}
-                onChange={(e) =>
-                  setConfig({
-                    ...config,
-                    value_source: e.target
-                      .value as PlanningRequest["value_source"],
-                  })
-                }
-                className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-              >
-                <option value="uniform">Uniform (all = 1)</option>
-                <option value="target_priority">
-                  Target Priority (from analysis)
-                </option>
-                <option value="custom">Custom Values (CSV upload)</option>
-              </select>
-            </div>
-          )}
-        </div>
-
-        {/* Value Scoring Weights - Advanced only */}
-        {showAdvancedOptions && (
-          <div
-            className={`bg-gray-800 rounded-lg p-3 space-y-3 ${
-              isDisabled ? "opacity-50 pointer-events-none" : ""
-            }`}
-          >
-            <h3 className="text-sm font-semibold text-white mb-2">
-              Value Scoring Weights
-            </h3>
-
-            {/* Preset Buttons */}
-            <div className="flex flex-wrap gap-1.5 mb-3">
+          {/* === BASIC: Scoring Strategy (always visible) === */}
+          <div className="space-y-2">
+            <h4 className="text-xs font-semibold text-blue-400 uppercase tracking-wide">
+              Scoring Strategy
+            </h4>
+            <div className="flex flex-wrap gap-1.5">
               {Object.entries(WEIGHT_PRESETS).map(([key, preset]) => (
                 <button
                   key={key}
@@ -1237,227 +1075,415 @@ export default function MissionPlanning({
                 </button>
               ))}
             </div>
-
-            {/* Weight Sliders */}
-            <div className="space-y-2">
-              {/* Priority Weight */}
-              <div>
-                <div className="flex justify-between items-center mb-0.5">
-                  <label className="text-xs text-gray-400">Priority</label>
-                  <span className="text-xs text-blue-400">
-                    {getNormalizedWeights().priority.toFixed(0)}%
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  step="5"
-                  value={config.weight_priority}
-                  onChange={(e) =>
-                    setConfig({
-                      ...config,
-                      weight_priority: parseInt(e.target.value),
-                      weight_preset: null,
-                    })
-                  }
-                  className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                />
-              </div>
-
-              {/* Geometry Weight */}
-              <div>
-                <div className="flex justify-between items-center mb-0.5">
-                  <label className="text-xs text-gray-400">Geometry</label>
-                  <span className="text-xs text-green-400">
-                    {getNormalizedWeights().geometry.toFixed(0)}%
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  step="5"
-                  value={config.weight_geometry}
-                  onChange={(e) =>
-                    setConfig({
-                      ...config,
-                      weight_geometry: parseInt(e.target.value),
-                      weight_preset: null,
-                    })
-                  }
-                  className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-green-500"
-                />
-              </div>
-
-              {/* Timing Weight */}
-              <div>
-                <div className="flex justify-between items-center mb-0.5">
-                  <label className="text-xs text-gray-400">Timing</label>
-                  <span className="text-xs text-orange-400">
-                    {getNormalizedWeights().timing.toFixed(0)}%
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  step="5"
-                  value={config.weight_timing}
-                  onChange={(e) =>
-                    setConfig({
-                      ...config,
-                      weight_timing: parseInt(e.target.value),
-                      weight_preset: null,
-                    })
-                  }
-                  className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
-                />
-              </div>
-            </div>
-
-            {/* Weight Visualization Bar */}
-            <div className="h-2 flex rounded overflow-hidden mt-2">
+            <div className="h-1.5 flex rounded overflow-hidden">
               <div
                 className="bg-blue-500 transition-all"
                 style={{ width: `${getNormalizedWeights().priority}%` }}
-                title={`Priority: ${getNormalizedWeights().priority.toFixed(0)}%`}
               />
               <div
                 className="bg-green-500 transition-all"
                 style={{ width: `${getNormalizedWeights().geometry}%` }}
-                title={`Geometry: ${getNormalizedWeights().geometry.toFixed(0)}%`}
               />
               <div
                 className="bg-orange-500 transition-all"
                 style={{ width: `${getNormalizedWeights().timing}%` }}
-                title={`Timing: ${getNormalizedWeights().timing.toFixed(0)}%`}
               />
             </div>
-            <div className="flex justify-between text-[10px] text-gray-500">
-              <span>Priority</span>
-              <span>Geometry</span>
-              <span>Timing</span>
+            <div className="flex justify-between text-[9px] text-gray-500">
+              <span>
+                Priority {getNormalizedWeights().priority.toFixed(0)}%
+              </span>
+              <span>
+                Geometry {getNormalizedWeights().geometry.toFixed(0)}%
+              </span>
+              <span>Timing {getNormalizedWeights().timing.toFixed(0)}%</span>
             </div>
-
-            {/* Formula Display */}
-            <div className="mt-3 p-3 bg-gray-900/80 rounded-lg border border-gray-600">
-              <div className="text-xs font-medium text-gray-300 mb-2">
-                📐 Value Calculation
-              </div>
-              <div className="font-mono text-sm text-white bg-gray-800 px-3 py-2 rounded mb-2">
-                Value ={" "}
-                <span className="text-blue-400">
-                  {getNormalizedWeights().priority.toFixed(0)}%
-                </span>
-                ×priority +{" "}
-                <span className="text-green-400">
-                  {getNormalizedWeights().geometry.toFixed(0)}%
-                </span>
-                ×geometry +{" "}
-                <span className="text-orange-400">
-                  {getNormalizedWeights().timing.toFixed(0)}%
-                </span>
-                ×timing
-              </div>
-              <div className="text-[11px] text-gray-400 space-y-1 mt-2">
-                <div className="font-medium text-gray-300 mb-1">
-                  Score Components (all normalized 0-1):
-                </div>
-                <div>
-                  • <span className="text-blue-400">priority</span> =
-                  (target_priority - 1) / 4{" "}
-                  <span className="text-gray-500">← maps 1-5 to 0-1</span>
-                </div>
-                <div>
-                  • <span className="text-green-400">geometry</span> = exp(-0.02
-                  × off_nadir°){" "}
-                  <span className="text-gray-500">
-                    ← lower angle = higher score
-                  </span>
-                </div>
-                <div>
-                  • <span className="text-orange-400">timing</span> = 1 - (index
-                  / total){" "}
-                  <span className="text-gray-500">
-                    ← earlier = higher score
-                  </span>
-                </div>
-              </div>
-              <div className="text-[10px] text-gray-500 mt-2 pt-2 border-t border-gray-700">
-                Output range: 0-1 (higher = better opportunity)
-              </div>
-            </div>
-
-            {/* Quality Model Dropdown */}
-            <div className="pt-2 border-t border-gray-700">
-              <label className="block text-xs font-medium text-gray-400 mb-1">
-                Quality Model
-              </label>
-              <select
-                value={config.quality_model}
-                onChange={(e) =>
-                  setConfig({
-                    ...config,
-                    quality_model: e.target
-                      .value as PlanningRequest["quality_model"],
-                  })
-                }
-                className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm"
-              >
-                <option value="off">Off (no quality adjustment)</option>
-                <option value="monotonic">
-                  Monotonic (lower off-nadir = better) — Optical
-                </option>
-                <option value="band">Band (ideal ± width) — SAR</option>
-              </select>
-            </div>
-
-            {/* Band Model Parameters (conditional) */}
-            {config.quality_model === "band" && (
-              <div className="grid grid-cols-2 gap-3 pt-2 border-t border-gray-700">
-                <div>
-                  <label className="block text-xs font-medium text-gray-400 mb-1">
-                    Ideal Off-Nadir (°)
-                  </label>
-                  <input
-                    type="number"
-                    value={config.ideal_incidence_deg}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        ideal_incidence_deg: parseFloat(e.target.value),
-                      })
-                    }
-                    className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm"
-                    step="1"
-                    min="0"
-                    max="90"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-400 mb-1">
-                    Band Width (°)
-                  </label>
-                  <input
-                    type="number"
-                    value={config.band_width_deg}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        band_width_deg: parseFloat(e.target.value),
-                      })
-                    }
-                    className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm"
-                    step="0.5"
-                    min="0.5"
-                    max="45"
-                  />
-                </div>
-              </div>
-            )}
           </div>
-        )}
+
+          {/* === ADVANCED ACCORDION === */}
+          <button
+            onClick={() => setShowAdvancedPlanning(!showAdvancedPlanning)}
+            className="flex items-center justify-between w-full px-3 py-2 bg-gray-800/80 rounded-lg border border-gray-700 hover:border-gray-600 transition-colors"
+          >
+            <span className="flex items-center gap-1.5 text-xs text-gray-400">
+              <Settings size={12} />
+              Advanced Parameters
+            </span>
+            {showAdvancedPlanning ? (
+              <ChevronUp size={14} className="text-gray-500" />
+            ) : (
+              <ChevronDown size={14} className="text-gray-500" />
+            )}
+          </button>
+
+          {showAdvancedPlanning && (
+            <div className="space-y-3 pl-2 border-l-2 border-gray-700/50">
+              {/* Imaging Time + Look Window */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-300 mb-1.5">
+                    Imaging Time (τ)
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      value={config.imaging_time_s}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          imaging_time_s: parseFloat(e.target.value),
+                        })
+                      }
+                      className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                      step="0.1"
+                      min="0.1"
+                    />
+                    <span className="absolute right-3 top-2 text-xs text-gray-500">
+                      sec
+                    </span>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-300 mb-1.5">
+                    Look Window
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      value={config.look_window_s}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          look_window_s: parseFloat(e.target.value),
+                        })
+                      }
+                      className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                      step="60"
+                      min="60"
+                    />
+                    <span className="absolute right-3 top-2 text-xs text-gray-500">
+                      sec
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Value Source */}
+              <div>
+                <label className="block text-xs font-medium text-gray-300 mb-1.5">
+                  Target Value Source
+                </label>
+                <select
+                  value={config.value_source}
+                  onChange={(e) =>
+                    setConfig({
+                      ...config,
+                      value_source: e.target
+                        .value as PlanningRequest["value_source"],
+                    })
+                  }
+                  className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                >
+                  <option value="uniform">Uniform (all = 1)</option>
+                  <option value="target_priority">
+                    Target Priority (from analysis)
+                  </option>
+                  <option value="custom">Custom Values (CSV upload)</option>
+                </select>
+              </div>
+
+              {/* Quality Model */}
+              <div>
+                <label className="block text-xs font-medium text-gray-400 mb-1">
+                  Quality Model
+                </label>
+                <select
+                  value={config.quality_model}
+                  onChange={(e) =>
+                    setConfig({
+                      ...config,
+                      quality_model: e.target
+                        .value as PlanningRequest["quality_model"],
+                    })
+                  }
+                  className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm"
+                >
+                  <option value="off">Off (no quality adjustment)</option>
+                  <option value="monotonic">
+                    Monotonic (lower off-nadir = better) — Optical
+                  </option>
+                  <option value="band">Band (ideal ± width) — SAR</option>
+                </select>
+              </div>
+
+              {/* Band Model Parameters (conditional) */}
+              {config.quality_model === "band" && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-400 mb-1">
+                      Ideal Off-Nadir (°)
+                    </label>
+                    <input
+                      type="number"
+                      value={config.ideal_incidence_deg}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          ideal_incidence_deg: parseFloat(e.target.value),
+                        })
+                      }
+                      className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm"
+                      step="1"
+                      min="0"
+                      max="90"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-400 mb-1">
+                      Band Width (°)
+                    </label>
+                    <input
+                      type="number"
+                      value={config.band_width_deg}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          band_width_deg: parseFloat(e.target.value),
+                        })
+                      }
+                      className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm"
+                      step="0.5"
+                      min="0.5"
+                      max="45"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Fine-tune Weight Sliders */}
+              <div className="space-y-2 pt-2 border-t border-gray-700/50">
+                <h5 className="text-xs text-gray-400">Fine-tune Weights</h5>
+                <div>
+                  <div className="flex justify-between items-center mb-0.5">
+                    <label className="text-xs text-gray-400">Priority</label>
+                    <span className="text-xs text-blue-400">
+                      {getNormalizedWeights().priority.toFixed(0)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="5"
+                    value={config.weight_priority}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        weight_priority: parseInt(e.target.value),
+                        weight_preset: null,
+                      })
+                    }
+                    className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                  />
+                </div>
+                <div>
+                  <div className="flex justify-between items-center mb-0.5">
+                    <label className="text-xs text-gray-400">Geometry</label>
+                    <span className="text-xs text-green-400">
+                      {getNormalizedWeights().geometry.toFixed(0)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="5"
+                    value={config.weight_geometry}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        weight_geometry: parseInt(e.target.value),
+                        weight_preset: null,
+                      })
+                    }
+                    className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-green-500"
+                  />
+                </div>
+                <div>
+                  <div className="flex justify-between items-center mb-0.5">
+                    <label className="text-xs text-gray-400">Timing</label>
+                    <span className="text-xs text-orange-400">
+                      {getNormalizedWeights().timing.toFixed(0)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="5"
+                    value={config.weight_timing}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        weight_timing: parseInt(e.target.value),
+                        weight_preset: null,
+                      })
+                    }
+                    className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
+                  />
+                </div>
+              </div>
+
+              {/* Spacecraft Agility — developer mode only */}
+              {showAdvancedOptions && (
+                <div className="space-y-2 pt-2 border-t border-gray-700/50">
+                  <h5 className="text-xs text-gray-400 flex items-center gap-1">
+                    Spacecraft Agility
+                    <span className="text-[9px] text-yellow-500">
+                      (developer)
+                    </span>
+                  </h5>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] text-gray-500 mb-0.5">
+                        Roll Rate
+                      </label>
+                      <input
+                        type="number"
+                        value={config.max_roll_rate_dps}
+                        onChange={(e) =>
+                          setConfig({
+                            ...config,
+                            max_roll_rate_dps: parseFloat(e.target.value),
+                          })
+                        }
+                        className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs"
+                        step="0.1"
+                        min="0.1"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-gray-500 mb-0.5">
+                        Roll Accel
+                      </label>
+                      <input
+                        type="number"
+                        value={config.max_roll_accel_dps2}
+                        onChange={(e) =>
+                          setConfig({
+                            ...config,
+                            max_roll_accel_dps2: parseFloat(e.target.value),
+                          })
+                        }
+                        className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs"
+                        step="0.1"
+                        min="0.1"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-gray-500 mb-0.5">
+                        Pitch Rate
+                      </label>
+                      <input
+                        type="number"
+                        value={config.max_pitch_rate_dps}
+                        onChange={(e) =>
+                          setConfig({
+                            ...config,
+                            max_pitch_rate_dps: parseFloat(e.target.value),
+                          })
+                        }
+                        className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs"
+                        step="0.1"
+                        min="0"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-gray-500 mb-0.5">
+                        Pitch Accel
+                      </label>
+                      <input
+                        type="number"
+                        value={config.max_pitch_accel_dps2}
+                        onChange={(e) =>
+                          setConfig({
+                            ...config,
+                            max_pitch_accel_dps2: parseFloat(e.target.value),
+                          })
+                        }
+                        className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs"
+                        step="0.1"
+                        min="0"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* PR-PARAM-GOV-01: Read-only Config Summary */}
+              {configSummary.length > 0 && (
+                <div className="bg-gray-900/60 rounded-lg p-3 border border-gray-700/50">
+                  <h5 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2 flex items-center gap-1">
+                    <Shield size={10} />
+                    Platform Config (read-only)
+                  </h5>
+                  {configSummary.slice(0, 3).map((sat) => (
+                    <div
+                      key={sat.id}
+                      className="text-[10px] space-y-0.5 mb-2 last:mb-0"
+                    >
+                      <div className="text-gray-300 font-medium">
+                        {sat.name}
+                      </div>
+                      <div className="grid grid-cols-2 gap-x-3 text-gray-500">
+                        <span>
+                          Roll limit:{" "}
+                          <span className="text-gray-300">
+                            {sat.bus.max_roll_deg}°
+                          </span>
+                        </span>
+                        <span>
+                          Roll rate:{" "}
+                          <span className="text-gray-300">
+                            {sat.bus.max_roll_rate_dps}°/s
+                          </span>
+                        </span>
+                        <span>
+                          Pitch limit:{" "}
+                          <span className="text-gray-300">
+                            {sat.bus.max_pitch_deg}°
+                          </span>
+                        </span>
+                        <span>
+                          FOV:{" "}
+                          <span className="text-gray-300">
+                            {sat.sensor.fov_half_angle_deg}°
+                          </span>
+                        </span>
+                        {sat.sensor.swath_width_km && (
+                          <span>
+                            Swath:{" "}
+                            <span className="text-gray-300">
+                              {sat.sensor.swath_width_km} km
+                            </span>
+                          </span>
+                        )}
+                        {sat.sar_capable && (
+                          <span className="text-purple-400">SAR capable</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  {configSummary.length > 3 && (
+                    <div className="text-[9px] text-gray-500 mt-1">
+                      +{configSummary.length - 3} more satellites
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* Action Button */}
         <div

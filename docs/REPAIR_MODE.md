@@ -2,7 +2,7 @@
 
 ## Overview
 
-Repair Mode is an advanced planning mode that allows modifying an existing schedule to improve it while respecting hard constraints. Unlike incremental mode which only adds new acquisitions around existing ones, repair mode can intelligently **drop**, **move**, or **replace** soft-locked items to achieve better schedule quality.
+Repair Mode is an advanced planning mode that allows modifying an existing schedule to improve it while respecting hard constraints. Unlike incremental mode which only adds new acquisitions around existing ones, repair mode can intelligently **drop**, **move**, or **replace** unlocked items to achieve better schedule quality.
 
 ## Key Concepts
 
@@ -12,17 +12,16 @@ Repair Mode is an advanced planning mode that allows modifying an existing sched
 |------|------------------|----------|
 | `from_scratch` | Ignored | Plans as if timeline is empty |
 | `incremental` | Respected | Adds new acquisitions around existing |
-| `repair` | Optimized | Keeps hard locks, modifies soft items, fills gaps |
+| `repair` | Optimized | Keeps hard locks, replaces unlocked items, fills gaps |
 
-### Soft Lock Policy
+### Lock Levels
 
-Controls how soft-locked acquisitions are treated during repair:
+| Level | Behavior |
+|-------|----------|
+| `none` | Fully flexible — can be rearranged, replaced, or dropped by repair |
+| `hard` | Immutable — never touched by repair mode |
 
-| Policy | Description | Use Case |
-|--------|-------------|----------|
-| `allow_replace` | Soft items can be dropped and replaced with better alternatives | Maximum optimization |
-| `allow_shift` | Soft items can be moved in time but not removed | Preserve targets, optimize timing |
-| `freeze_soft` | Soft items treated as hard locks (no modifications) | Minimal disruption |
+> **Note:** Soft locks have been removed from the codebase. Only `none` and `hard` lock levels exist.
 
 ### Repair Objective
 
@@ -52,7 +51,7 @@ Repair mode uses a "Repair then Fill" approach:
 ┌─────────────────────────────────────────────────────────────┐
 │  Stage A: Load & Partition                                  │
 │  ┌─────────────┐    ┌─────────────┐                        │
-│  │ Hard Locks  │    │ Soft Locks  │                        │
+│  │ Hard Locks  │    │  Unlocked   │                        │
 │  │ (Fixed Set) │    │ (Flex Set)  │                        │
 │  └─────────────┘    └─────────────┘                        │
 └─────────────────────────────────────────────────────────────┘
@@ -87,7 +86,6 @@ POST /api/v1/schedule/repair
 ```json
 {
   "workspace_id": "default",
-  "soft_lock_policy": "allow_replace",
   "max_changes": 100,
   "objective": "maximize_score",
   "repair_scope": "workspace_horizon",
@@ -156,8 +154,7 @@ In the Mission Planning panel, click the **Repair** button in the Planning Mode 
 
 ### 2. Configure Repair Settings
 
-- **Soft Lock Policy**: Choose how to handle soft-locked items
-- **Max Changes**: Use the slider to limit disruption (0-100)
+- **Max Changes**: Use the slider to limit disruption (1-100)
 - **Objective**: Select optimization goal
 
 ### 3. Run Repair Planning
@@ -187,11 +184,6 @@ class PlanningMode(Enum):
     INCREMENTAL = "incremental"
     REPAIR = "repair"
 
-class SoftLockPolicy(Enum):
-    ALLOW_SHIFT = "allow_shift"
-    ALLOW_REPLACE = "allow_replace"
-    FREEZE_SOFT = "freeze_soft"
-
 class RepairObjective(Enum):
     MAXIMIZE_SCORE = "maximize_score"
     MAXIMIZE_PRIORITY = "maximize_priority"
@@ -206,12 +198,11 @@ class FlexibleAcquisition:
     original_start: datetime
     original_end: datetime
     roll_angle_deg: float
-    lock_level: str = "soft"
+    lock_level: str = "none"
     action: str = "keep"  # keep | drop | shift | replace
 
 @dataclass
 class RepairPlanningContext:
-    soft_lock_policy: SoftLockPolicy
     objective: RepairObjective
     max_changes: int
     fixed_set: List[BlockedInterval]  # Hard locks
@@ -245,11 +236,11 @@ pytest tests/unit/test_incremental_planning.py::TestRepairPlanningMode -v
 
 ## Best Practices
 
-1. **Start with `freeze_soft`** to preview impact without changes
+1. **Hard-lock critical acquisitions** before running repair
 2. **Use `max_changes` conservatively** to limit disruption
 3. **Review the repair diff** before committing
-4. **Hard-lock critical acquisitions** before running repair
-5. **Use `minimize_changes` objective** when stability is important
+4. **Use `minimize_changes` objective** when stability is important
+5. **Start with the Conservative preset** for first-time repairs
 
 ## Troubleshooting
 
@@ -257,13 +248,13 @@ pytest tests/unit/test_incremental_planning.py::TestRepairPlanningMode -v
 
 - Check if all acquisitions are hard-locked
 - Verify `max_changes` > 0
-- Ensure `soft_lock_policy` allows modifications
+- Ensure there are unlocked acquisitions in the horizon
 
 ### Too Many Changes
 
 - Reduce `max_changes` slider
-- Use `freeze_soft` policy
 - Switch to `minimize_changes` objective
+- Hard-lock acquisitions you want to protect
 
 ### Conflicts Remain
 

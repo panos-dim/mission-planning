@@ -11,19 +11,13 @@ Supports:
 
 import logging
 import os
-import sys
 import tempfile
 import time
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-# Add project paths
-project_root = os.path.dirname(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-)
-sys.path.insert(0, project_root)
-sys.path.insert(0, os.path.join(project_root, "src"))
+import backend._paths  # noqa: F401, E402  — centralised path setup
 
 from .assertions import SARAssertionChecker
 from .models import (

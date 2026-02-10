@@ -4,18 +4,19 @@ import { Ion } from "cesium";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import { queryClient } from "./lib/queryClient";
-import MultiViewContainer from "./components/Map/MultiViewContainer";
+import { LazyAdminPanel, LazyMultiViewContainer } from "./components/lazy";
+import SuspenseWrapper from "./components/SuspenseWrapper";
 import ViewModeToggle from "./components/Header/ViewModeToggle";
 import UIModeToggle from "./components/Header/UIModeToggle";
 import LeftSidebar from "./components/LeftSidebar";
 import RightSidebar from "./components/RightSidebar";
 import ErrorBoundary from "./components/ErrorBoundary";
-import AdminPanel from "./components/AdminPanel";
 import { MissionProvider } from "./context/MissionContext";
 import { useVisStore } from "./store/visStore";
 import { useTargetAddStore } from "./store/targetAddStore";
 import { useSwathStore } from "./store/swathStore";
 import { useSelectionStore } from "./store/selectionStore";
+import LockToastContainer from "./components/LockToast";
 import "./App.css";
 
 // Set Cesium Ion access token from environment variable
@@ -142,9 +143,9 @@ function AppContent(): JSX.Element {
             right: rightSidebarOpen ? `${rightSidebarWidth + 48}px` : "48px",
           }}
         >
-          <ErrorBoundary>
-            <MultiViewContainer />
-          </ErrorBoundary>
+          <SuspenseWrapper>
+            <LazyMultiViewContainer />
+          </SuspenseWrapper>
         </div>
 
         <ErrorBoundary>
@@ -154,15 +155,20 @@ function AppContent(): JSX.Element {
 
       {/* Admin Panel Modal */}
       {adminPanelOpen && (
-        <AdminPanel
-          isOpen={adminPanelOpen}
-          onClose={() => setAdminPanelOpen(false)}
-          onConfigUpdate={() => {
-            // Trigger refresh of ground stations
-            setRefreshKey((prev) => prev + 1);
-          }}
-        />
+        <SuspenseWrapper>
+          <LazyAdminPanel
+            isOpen={adminPanelOpen}
+            onClose={() => setAdminPanelOpen(false)}
+            onConfigUpdate={() => {
+              // Trigger refresh of ground stations
+              setRefreshKey((prev) => prev + 1);
+            }}
+          />
+        </SuspenseWrapper>
       )}
+
+      {/* PR-LOCK-OPS-01: Global lock operation toast notifications */}
+      <LockToastContainer />
     </div>
   );
 }

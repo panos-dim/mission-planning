@@ -58,9 +58,9 @@ export const SatellitePositionSchema = z.object({
 
 // SAR mission data schema
 export const SARMissionDataSchema = z.object({
-  imaging_mode: z.string().optional(),
-  look_side: z.string().optional(),
-  pass_direction: z.string().optional(),
+  imaging_mode: z.enum(["spot", "strip", "scan", "dwell"]).optional(),
+  look_side: z.enum(["LEFT", "RIGHT", "ANY"]).optional(),
+  pass_direction: z.enum(["ASCENDING", "DESCENDING", "ANY"]).optional(),
   incidence_min_deg: z.number().optional(),
   incidence_max_deg: z.number().optional(),
   sar_passes_count: z.number().optional(),

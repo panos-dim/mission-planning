@@ -10,6 +10,7 @@
  */
 
 import { create } from "zustand";
+import { devtools } from "zustand/middleware";
 
 // Swath visibility modes for the Layers toggle group
 export type SwathVisibilityMode = "off" | "selected_plan" | "filtered" | "all";
@@ -85,7 +86,7 @@ interface SwathStore {
   selectSwath: (swathId: string | null, opportunityId?: string | null) => void;
   setHoveredSwath: (
     swathId: string | null,
-    opportunityId?: string | null
+    opportunityId?: string | null,
   ) => void;
   clearSelection: () => void;
 
@@ -145,133 +146,138 @@ const VISIBILITY_MODE_ORDER: SwathVisibilityMode[] = [
   "all",
 ];
 
-export const useSwathStore = create<SwathStore>((set, get) => ({
-  // Initial state
-  selectedSwathId: null,
-  selectedOpportunityId: null,
-  hoveredSwathId: null,
-  hoveredOpportunityId: null,
-  activeRunId: null,
-  visibilityMode: "filtered", // Default to filtered mode
-  filteredTargetId: null,
-  autoFilterEnabled: true, // Auto-filter when selecting target
-  lodConfig: DEFAULT_LOD_CONFIG,
-  debugEnabled: false,
-  debugInfo: INITIAL_DEBUG_INFO,
-  renderedSwathIds: new Set(),
-  visibleSwathCount: 0,
-
-  // Selection actions
-  selectSwath: (swathId, opportunityId) => {
-    set({
-      selectedSwathId: swathId,
-      selectedOpportunityId: opportunityId ?? null,
-    });
-    // Update debug info
-    get().updateDebugInfo({
-      selectedOpportunityId: opportunityId ?? null,
-    });
-  },
-
-  setHoveredSwath: (swathId, opportunityId) => {
-    set({
-      hoveredSwathId: swathId,
-      hoveredOpportunityId: opportunityId ?? null,
-    });
-    get().updateDebugInfo({
-      hoveredOpportunityId: opportunityId ?? null,
-    });
-  },
-
-  clearSelection: () => {
-    set({
+export const useSwathStore = create<SwathStore>()(
+  devtools(
+    (set, get) => ({
+      // Initial state
       selectedSwathId: null,
       selectedOpportunityId: null,
       hoveredSwathId: null,
       hoveredOpportunityId: null,
-    });
-    get().updateDebugInfo({
-      selectedOpportunityId: null,
-      hoveredOpportunityId: null,
-    });
-  },
+      activeRunId: null,
+      visibilityMode: "filtered", // Default to filtered mode
+      filteredTargetId: null,
+      autoFilterEnabled: true, // Auto-filter when selecting target
+      lodConfig: DEFAULT_LOD_CONFIG,
+      debugEnabled: false,
+      debugInfo: INITIAL_DEBUG_INFO,
+      renderedSwathIds: new Set(),
+      visibleSwathCount: 0,
 
-  // Run context
-  setActiveRunId: (runId) => {
-    set({ activeRunId: runId });
-    get().updateDebugInfo({ currentRunId: runId });
-  },
+      // Selection actions
+      selectSwath: (swathId, opportunityId) => {
+        set({
+          selectedSwathId: swathId,
+          selectedOpportunityId: opportunityId ?? null,
+        });
+        // Update debug info
+        get().updateDebugInfo({
+          selectedOpportunityId: opportunityId ?? null,
+        });
+      },
 
-  // Visibility mode
-  setVisibilityMode: (mode) => {
-    set({ visibilityMode: mode });
-    get().updateDebugInfo({ visibilityMode: mode });
-  },
+      setHoveredSwath: (swathId, opportunityId) => {
+        set({
+          hoveredSwathId: swathId,
+          hoveredOpportunityId: opportunityId ?? null,
+        });
+        get().updateDebugInfo({
+          hoveredOpportunityId: opportunityId ?? null,
+        });
+      },
 
-  cycleVisibilityMode: () => {
-    const { visibilityMode } = get();
-    const currentIndex = VISIBILITY_MODE_ORDER.indexOf(visibilityMode);
-    const nextIndex = (currentIndex + 1) % VISIBILITY_MODE_ORDER.length;
-    const nextMode = VISIBILITY_MODE_ORDER[nextIndex];
-    set({ visibilityMode: nextMode });
-    get().updateDebugInfo({ visibilityMode: nextMode });
-  },
+      clearSelection: () => {
+        set({
+          selectedSwathId: null,
+          selectedOpportunityId: null,
+          hoveredSwathId: null,
+          hoveredOpportunityId: null,
+        });
+        get().updateDebugInfo({
+          selectedOpportunityId: null,
+          hoveredOpportunityId: null,
+        });
+      },
 
-  // Filtering
-  setFilteredTarget: (targetId) => {
-    set({ filteredTargetId: targetId });
-    get().updateDebugInfo({ filterActive: targetId !== null });
-  },
+      // Run context
+      setActiveRunId: (runId) => {
+        set({ activeRunId: runId });
+        get().updateDebugInfo({ currentRunId: runId });
+      },
 
-  setAutoFilterEnabled: (enabled) => {
-    set({ autoFilterEnabled: enabled });
-  },
+      // Visibility mode
+      setVisibilityMode: (mode) => {
+        set({ visibilityMode: mode });
+        get().updateDebugInfo({ visibilityMode: mode });
+      },
 
-  clearFilters: () => {
-    set({ filteredTargetId: null });
-    get().updateDebugInfo({ filterActive: false });
-  },
+      cycleVisibilityMode: () => {
+        const { visibilityMode } = get();
+        const currentIndex = VISIBILITY_MODE_ORDER.indexOf(visibilityMode);
+        const nextIndex = (currentIndex + 1) % VISIBILITY_MODE_ORDER.length;
+        const nextMode = VISIBILITY_MODE_ORDER[nextIndex];
+        set({ visibilityMode: nextMode });
+        get().updateDebugInfo({ visibilityMode: nextMode });
+      },
 
-  // LOD configuration
-  setLODConfig: (config) => {
-    set((state) => ({
-      lodConfig: { ...state.lodConfig, ...config },
-    }));
-  },
+      // Filtering
+      setFilteredTarget: (targetId) => {
+        set({ filteredTargetId: targetId });
+        get().updateDebugInfo({ filterActive: targetId !== null });
+      },
 
-  // Debug
-  setDebugEnabled: (enabled) => {
-    set({ debugEnabled: enabled });
-  },
+      setAutoFilterEnabled: (enabled) => {
+        set({ autoFilterEnabled: enabled });
+      },
 
-  updateDebugInfo: (info) => {
-    set((state) => ({
-      debugInfo: { ...state.debugInfo, ...info },
-    }));
-  },
+      clearFilters: () => {
+        set({ filteredTargetId: null });
+        get().updateDebugInfo({ filterActive: false });
+      },
 
-  // Rendered swaths tracking
-  setRenderedSwaths: (swathIds) => {
-    set({
-      renderedSwathIds: new Set(swathIds),
-      visibleSwathCount: swathIds.length,
-    });
-    get().updateDebugInfo({ renderedSwathCount: swathIds.length });
-  },
+      // LOD configuration
+      setLODConfig: (config) => {
+        set((state) => ({
+          lodConfig: { ...state.lodConfig, ...config },
+        }));
+      },
 
-  updateVisibleCount: (count) => {
-    set({ visibleSwathCount: count });
-    get().updateDebugInfo({ renderedSwathCount: count });
-  },
+      // Debug
+      setDebugEnabled: (enabled) => {
+        set({ debugEnabled: enabled });
+      },
 
-  // Utility to extract opportunity_id from entity ID
-  getSwathOpportunityId: (entityId) => {
-    // Entity ID format: sar_swath_{target}_{timestamp}_{index}
-    if (!entityId.startsWith("sar_swath_")) return null;
-    // Extract the opportunity_id portion (everything after "sar_swath_")
-    return entityId.replace("sar_swath_", "");
-  },
-}));
+      updateDebugInfo: (info) => {
+        set((state) => ({
+          debugInfo: { ...state.debugInfo, ...info },
+        }));
+      },
+
+      // Rendered swaths tracking
+      setRenderedSwaths: (swathIds) => {
+        set({
+          renderedSwathIds: new Set(swathIds),
+          visibleSwathCount: swathIds.length,
+        });
+        get().updateDebugInfo({ renderedSwathCount: swathIds.length });
+      },
+
+      updateVisibleCount: (count) => {
+        set({ visibleSwathCount: count });
+        get().updateDebugInfo({ renderedSwathCount: count });
+      },
+
+      // Utility to extract opportunity_id from entity ID
+      getSwathOpportunityId: (entityId) => {
+        // Entity ID format: sar_swath_{target}_{timestamp}_{index}
+        if (!entityId.startsWith("sar_swath_")) return null;
+        // Extract the opportunity_id portion (everything after "sar_swath_")
+        return entityId.replace("sar_swath_", "");
+      },
+    }),
+    { name: "SwathStore", enabled: import.meta.env?.DEV ?? false },
+  ),
+);
 
 // Selector hooks for common patterns
 export const useSwathSelection = () =>

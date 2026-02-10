@@ -8,7 +8,7 @@
  * - Recompute button
  */
 
-import React, { useEffect, useCallback } from "react";
+import React, { useEffect, useCallback, memo } from "react";
 import {
   AlertTriangle,
   AlertCircle,
@@ -22,6 +22,121 @@ import { useConflictStore } from "../store/conflictStore";
 import { useSelectionStore } from "../store/selectionStore";
 import { useMission } from "../context/MissionContext";
 import { getConflicts, recomputeConflicts, Conflict } from "../api/scheduleApi";
+
+// ── Memoized conflict list item ──────────────────────────────────────
+
+interface ConflictItemProps {
+  conflict: Conflict;
+  isSelected: boolean;
+  onClick: (conflict: Conflict) => void;
+}
+
+const getSeverityIcon = (severity: string) => {
+  switch (severity) {
+    case "error":
+      return <AlertCircle className="w-4 h-4 text-red-500" />;
+    case "warning":
+      return <AlertTriangle className="w-4 h-4 text-yellow-500" />;
+    default:
+      return <Info className="w-4 h-4 text-blue-400" />;
+  }
+};
+
+const getTypeIcon = (type: string) => {
+  switch (type) {
+    case "temporal_overlap":
+      return <Clock className="w-4 h-4 text-orange-400" />;
+    case "slew_infeasible":
+      return <Zap className="w-4 h-4 text-purple-400" />;
+    default:
+      return <AlertTriangle className="w-4 h-4 text-gray-400" />;
+  }
+};
+
+const getTypeLabel = (type: string) => {
+  switch (type) {
+    case "temporal_overlap":
+      return "Time Overlap";
+    case "slew_infeasible":
+      return "Slew Infeasible";
+    default:
+      return type;
+  }
+};
+
+const ConflictItem = memo<ConflictItemProps>(
+  ({ conflict, isSelected, onClick }) => (
+    <div
+      onClick={() => onClick(conflict)}
+      className={`p-3 cursor-pointer transition-colors ${
+        isSelected
+          ? "bg-blue-900/30 border-l-2 border-blue-500"
+          : "hover:bg-gray-800/50"
+      }`}
+    >
+      {/* Conflict header */}
+      <div className="flex items-center justify-between mb-1">
+        <div className="flex items-center space-x-2">
+          {getSeverityIcon(conflict.severity)}
+          <span
+            className={`text-xs font-medium ${
+              conflict.severity === "error"
+                ? "text-red-400"
+                : conflict.severity === "warning"
+                  ? "text-yellow-400"
+                  : "text-gray-300"
+            }`}
+          >
+            {conflict.severity.toUpperCase()}
+          </span>
+        </div>
+        <div className="flex items-center space-x-1 text-xs text-gray-500">
+          {getTypeIcon(conflict.type)}
+          <span>{getTypeLabel(conflict.type)}</span>
+        </div>
+      </div>
+
+      {/* Description */}
+      {conflict.description && (
+        <p className="text-xs text-gray-400 line-clamp-2 mb-2">
+          {conflict.description}
+        </p>
+      )}
+
+      {/* Affected acquisitions */}
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-gray-500">
+          {conflict.acquisition_ids.length} acquisitions affected
+        </span>
+        <ChevronRight
+          className={`w-4 h-4 text-gray-500 transition-transform ${
+            isSelected ? "rotate-90" : ""
+          }`}
+        />
+      </div>
+
+      {/* Expanded details when selected */}
+      {isSelected && (
+        <div className="mt-2 pt-2 border-t border-gray-700">
+          <div className="text-xs text-gray-400 mb-1">Acquisition IDs:</div>
+          <div className="flex flex-wrap gap-1">
+            {conflict.acquisition_ids.map((id) => (
+              <span
+                key={id}
+                className="px-1.5 py-0.5 bg-gray-700 rounded text-xs text-gray-300 font-mono"
+              >
+                {id.slice(0, 16)}...
+              </span>
+            ))}
+          </div>
+          <div className="mt-2 text-xs text-gray-500">
+            Detected: {new Date(conflict.detected_at).toLocaleString()}
+          </div>
+        </div>
+      )}
+    </div>
+  ),
+);
 
 // Dev mode check
 const isDev = import.meta.env?.DEV ?? false;
@@ -92,58 +207,33 @@ const ConflictsPanel: React.FC<ConflictsPanelProps> = ({ className = "" }) => {
     fetchConflicts();
   }, [fetchConflicts]);
 
-  const getSeverityIcon = (severity: string) => {
-    switch (severity) {
-      case "error":
-        return <AlertCircle className="w-4 h-4 text-red-500" />;
-      case "warning":
-        return <AlertTriangle className="w-4 h-4 text-yellow-500" />;
-      default:
-        return <Info className="w-4 h-4 text-blue-400" />;
-    }
-  };
+  const handleConflictClick = useCallback(
+    (conflict: Conflict) => {
+      const isDeselect = selectedConflictId === conflict.id;
 
-  const getTypeIcon = (type: string) => {
-    switch (type) {
-      case "temporal_overlap":
-        return <Clock className="w-4 h-4 text-orange-400" />;
-      case "slew_infeasible":
-        return <Zap className="w-4 h-4 text-purple-400" />;
-      default:
-        return <AlertTriangle className="w-4 h-4 text-gray-400" />;
-    }
-  };
+      if (isDev) {
+        console.log(
+          `[ConflictsPanel] ${isDeselect ? "deselect" : "select"} conflict: ${conflict.id} (source: conflicts_panel)`,
+        );
+      }
 
-  const getTypeLabel = (type: string) => {
-    switch (type) {
-      case "temporal_overlap":
-        return "Time Overlap";
-      case "slew_infeasible":
-        return "Slew Infeasible";
-      default:
-        return type;
-    }
-  };
-
-  const handleConflictClick = (conflict: Conflict) => {
-    const isDeselect = selectedConflictId === conflict.id;
-
-    if (isDev) {
-      console.log(
-        `[ConflictsPanel] ${isDeselect ? "deselect" : "select"} conflict: ${conflict.id} (source: conflicts_panel)`,
-      );
-    }
-
-    if (isDeselect) {
-      // Clear both local and unified selection
-      localSelectConflict(null);
-      clearSelection();
-    } else {
-      // Select in both stores - unified store handles cross-component sync
-      localSelectConflict(conflict.id);
-      unifiedSelectConflict(conflict.id, conflict.acquisition_ids);
-    }
-  };
+      if (isDeselect) {
+        // Clear both local and unified selection
+        localSelectConflict(null);
+        clearSelection();
+      } else {
+        // Select in both stores - unified store handles cross-component sync
+        localSelectConflict(conflict.id);
+        unifiedSelectConflict(conflict.id, conflict.acquisition_ids);
+      }
+    },
+    [
+      selectedConflictId,
+      localSelectConflict,
+      clearSelection,
+      unifiedSelectConflict,
+    ],
+  );
 
   return (
     <div className={`flex flex-col h-full ${className}`}>
@@ -209,79 +299,12 @@ const ConflictsPanel: React.FC<ConflictsPanelProps> = ({ className = "" }) => {
         ) : (
           <div className="divide-y divide-gray-800">
             {conflicts.map((conflict) => (
-              <div
+              <ConflictItem
                 key={conflict.id}
-                onClick={() => handleConflictClick(conflict)}
-                className={`p-3 cursor-pointer transition-colors ${
-                  selectedConflictId === conflict.id
-                    ? "bg-blue-900/30 border-l-2 border-blue-500"
-                    : "hover:bg-gray-800/50"
-                }`}
-              >
-                {/* Conflict header */}
-                <div className="flex items-center justify-between mb-1">
-                  <div className="flex items-center space-x-2">
-                    {getSeverityIcon(conflict.severity)}
-                    <span
-                      className={`text-xs font-medium ${
-                        conflict.severity === "error"
-                          ? "text-red-400"
-                          : conflict.severity === "warning"
-                            ? "text-yellow-400"
-                            : "text-gray-300"
-                      }`}
-                    >
-                      {conflict.severity.toUpperCase()}
-                    </span>
-                  </div>
-                  <div className="flex items-center space-x-1 text-xs text-gray-500">
-                    {getTypeIcon(conflict.type)}
-                    <span>{getTypeLabel(conflict.type)}</span>
-                  </div>
-                </div>
-
-                {/* Description */}
-                {conflict.description && (
-                  <p className="text-xs text-gray-400 line-clamp-2 mb-2">
-                    {conflict.description}
-                  </p>
-                )}
-
-                {/* Affected acquisitions */}
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-gray-500">
-                    {conflict.acquisition_ids.length} acquisitions affected
-                  </span>
-                  <ChevronRight
-                    className={`w-4 h-4 text-gray-500 transition-transform ${
-                      selectedConflictId === conflict.id ? "rotate-90" : ""
-                    }`}
-                  />
-                </div>
-
-                {/* Expanded details when selected */}
-                {selectedConflictId === conflict.id && (
-                  <div className="mt-2 pt-2 border-t border-gray-700">
-                    <div className="text-xs text-gray-400 mb-1">
-                      Acquisition IDs:
-                    </div>
-                    <div className="flex flex-wrap gap-1">
-                      {conflict.acquisition_ids.map((id) => (
-                        <span
-                          key={id}
-                          className="px-1.5 py-0.5 bg-gray-700 rounded text-xs text-gray-300 font-mono"
-                        >
-                          {id.slice(0, 16)}...
-                        </span>
-                      ))}
-                    </div>
-                    <div className="mt-2 text-xs text-gray-500">
-                      Detected:{" "}
-                      {new Date(conflict.detected_at).toLocaleString()}
-                    </div>
-                  </div>
-                )}
-              </div>
+                conflict={conflict}
+                isSelected={selectedConflictId === conflict.id}
+                onClick={handleConflictClick}
+              />
             ))}
           </div>
         )}

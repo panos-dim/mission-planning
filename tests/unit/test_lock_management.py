@@ -49,7 +49,7 @@ def sample_acquisitions(
     now = datetime.utcnow()
 
     acquisitions: List[Acquisition] = []
-    for i, lock_level in enumerate(["none", "soft", "hard", "none", "soft"]):
+    for i, lock_level in enumerate(["none", "none", "hard", "none", "hard"]):
         acq = temp_db.create_acquisition(
             satellite_id=f"SAT-{i}",
             target_id=f"TARGET-{i}",
@@ -70,36 +70,16 @@ def sample_acquisitions(
 class TestLockLevelUpdates:
     """Tests for single acquisition lock level updates."""
 
-    def test_update_lock_level_to_soft(
-        self,
-        temp_db: ScheduleDB,
-        sample_acquisitions: Tuple[str, List[Acquisition]],
-    ) -> None:
-        """Test updating lock level from none to soft."""
-        _workspace_id, acquisitions = sample_acquisitions
-
-        # Get an acquisition with lock_level=none
-        acq = [a for a in acquisitions if a.lock_level == "none"][0]
-
-        # Update to soft
-        result = temp_db.update_acquisition_lock_level(acq.id, "soft")
-        assert result is True
-
-        # Verify update
-        updated = temp_db.get_acquisition(acq.id)
-        assert updated is not None
-        assert updated.lock_level == "soft"
-
     def test_update_lock_level_to_hard(
         self,
         temp_db: ScheduleDB,
         sample_acquisitions: Tuple[str, List[Acquisition]],
     ) -> None:
-        """Test updating lock level from soft to hard."""
+        """Test updating lock level from none to hard."""
         _workspace_id, acquisitions = sample_acquisitions
 
-        # Get an acquisition with lock_level=soft
-        acq = [a for a in acquisitions if a.lock_level == "soft"][0]
+        # Get an acquisition with lock_level=none
+        acq = [a for a in acquisitions if a.lock_level == "none"][0]
 
         # Update to hard
         result = temp_db.update_acquisition_lock_level(acq.id, "hard")
@@ -115,11 +95,11 @@ class TestLockLevelUpdates:
         temp_db: ScheduleDB,
         sample_acquisitions: Tuple[str, List[Acquisition]],
     ) -> None:
-        """Test updating lock level from soft to none (unlock)."""
+        """Test updating lock level from hard to none (unlock)."""
         _workspace_id, acquisitions = sample_acquisitions
 
-        # Get an acquisition with lock_level=soft
-        acq = [a for a in acquisitions if a.lock_level == "soft"][0]
+        # Get an acquisition with lock_level=hard
+        acq = [a for a in acquisitions if a.lock_level == "hard"][0]
 
         # Update to none
         result = temp_db.update_acquisition_lock_level(acq.id, "none")
@@ -144,35 +124,12 @@ class TestLockLevelUpdates:
 
     def test_update_nonexistent_acquisition(self, temp_db: ScheduleDB) -> None:
         """Test updating a non-existent acquisition returns False."""
-        result = temp_db.update_acquisition_lock_level("nonexistent_id", "soft")
+        result = temp_db.update_acquisition_lock_level("nonexistent_id", "none")
         assert result is False
 
 
 class TestBulkLockOperations:
     """Tests for bulk lock operations."""
-
-    def test_bulk_update_to_soft(
-        self,
-        temp_db: ScheduleDB,
-        sample_acquisitions: Tuple[str, List[Acquisition]],
-    ) -> None:
-        """Test bulk update of multiple acquisitions to soft lock."""
-        _workspace_id, acquisitions = sample_acquisitions
-
-        # Get IDs of acquisitions with lock_level=none
-        none_ids = [a.id for a in acquisitions if a.lock_level == "none"]
-
-        result = temp_db.bulk_update_lock_levels(none_ids, "soft")
-
-        assert result["updated"] == len(none_ids)
-        assert result["lock_level"] == "soft"
-        assert len(result["failed"]) == 0
-
-        # Verify all are now soft
-        for acq_id in none_ids:
-            acq = temp_db.get_acquisition(acq_id)
-            assert acq is not None
-            assert acq.lock_level == "soft"
 
     def test_bulk_update_to_hard(
         self,
@@ -205,7 +162,7 @@ class TestBulkLockOperations:
         invalid_ids = ["invalid_1", "invalid_2"]
         all_ids = valid_ids + invalid_ids
 
-        result = temp_db.bulk_update_lock_levels(all_ids, "soft")
+        result = temp_db.bulk_update_lock_levels(all_ids, "none")
 
         assert result["updated"] == 2
         assert len(result["failed"]) == 2
@@ -401,7 +358,7 @@ class TestAtomicCommit:
         result = temp_db.commit_plan_atomic(
             plan_id=plan.id,
             item_ids=[],
-            lock_level="soft",
+            lock_level="none",
             mode="OPTICAL",
             workspace_id=workspace_id,
         )
@@ -434,7 +391,7 @@ class TestAtomicCommit:
         result = temp_db.commit_plan_atomic(
             plan_id=plan.id,
             item_ids=[],
-            lock_level="soft",
+            lock_level="none",
             mode="OPTICAL",
             workspace_id=workspace_id,
             drop_acquisition_ids=[to_drop.id],
@@ -519,21 +476,6 @@ class TestLockLevelFiltering:
         assert len(result) == expected_count
         for acq in result:
             assert acq.lock_level == "hard"
-
-    def test_get_acquisitions_by_lock_level_soft(
-        self,
-        temp_db: ScheduleDB,
-        sample_acquisitions: Tuple[str, List[Acquisition]],
-    ) -> None:
-        """Test getting only soft-locked acquisitions."""
-        workspace_id, acquisitions = sample_acquisitions
-
-        expected_count = len([a for a in acquisitions if a.lock_level == "soft"])
-        result = temp_db.get_acquisitions_by_lock_level(workspace_id, "soft")
-
-        assert len(result) == expected_count
-        for acq in result:
-            assert acq.lock_level == "soft"
 
     def test_get_acquisitions_by_lock_level_none(
         self,

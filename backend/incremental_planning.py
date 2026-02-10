@@ -53,28 +53,26 @@ class RepairScope(str, Enum):
     TARGET_SUBSET = "target_subset"  # Repair only specified targets
 
 
-class SoftLockPolicy(str, Enum):
-    """Policy for handling soft-locked acquisitions during repair.
-
-    PR-OPS-REPAIR-DEFAULT-01: Soft locks are deprecated. All non-hard-locked
-    items are now treated as fully flexible (ALLOW_REPLACE behavior).
-    """
-
-    ALLOW_SHIFT = "allow_shift"  # May move timing within original window
-    ALLOW_REPLACE = (
-        "allow_replace"  # May drop and replace with better candidates (DEFAULT)
-    )
-    FREEZE_SOFT = (
-        "freeze_soft"  # Treat soft locks like hard locks (repair = incremental)
-    )
-
-
 class RepairObjective(str, Enum):
     """Optimization objective for repair mode."""
 
     MAXIMIZE_SCORE = "maximize_score"  # Maximize total schedule value
     MAXIMIZE_PRIORITY = "maximize_priority"  # Prioritize high-priority targets
     MINIMIZE_CHANGES = "minimize_changes"  # Make fewest changes to existing schedule
+
+
+class RepairReasonCode(str, Enum):
+    """Deterministic reason codes for repair changes."""
+
+    HARD_LOCK_CONSTRAINT = "HARD_LOCK_CONSTRAINT"
+    CONFLICT_RESOLUTION = "CONFLICT_RESOLUTION"
+    PRIORITY_UPGRADE = "PRIORITY_UPGRADE"
+    QUALITY_SCORE_UPGRADE = "QUALITY_SCORE_UPGRADE"
+    SLEW_CHAIN_FEASIBILITY = "SLEW_CHAIN_FEASIBILITY"
+    HORIZON_LIMIT = "HORIZON_LIMIT"
+    RESOURCE_LIMIT = "RESOURCE_LIMIT"
+    KEPT_UNCHANGED = "KEPT_UNCHANGED"
+    ADDED_NEW = "ADDED_NEW"
 
 
 @dataclass
@@ -93,7 +91,7 @@ class BlockedInterval:
     roll_angle_deg: float
     pitch_angle_deg: float = 0.0
     state: str = "committed"
-    lock_level: str = "soft"
+    lock_level: str = "none"
 
     @property
     def duration_s(self) -> float:
@@ -147,13 +145,27 @@ class IncrementalPlanningContext:
         Returns:
             Tuple of (is_blocked, blocking_interval or None)
         """
+        # Normalize candidate times to naive UTC for comparison
+        _start = start_time.replace(tzinfo=None) if start_time.tzinfo else start_time
+        _end = end_time.replace(tzinfo=None) if end_time.tzinfo else end_time
+
         for interval in self.get_blocked_for_satellite(satellite_id):
-            # Apply margin
-            interval_start = interval.start_time - timedelta(seconds=margin_s)
-            interval_end = interval.end_time + timedelta(seconds=margin_s)
+            # Apply margin and normalize to naive UTC
+            i_start = (
+                interval.start_time.replace(tzinfo=None)
+                if interval.start_time.tzinfo
+                else interval.start_time
+            )
+            i_end = (
+                interval.end_time.replace(tzinfo=None)
+                if interval.end_time.tzinfo
+                else interval.end_time
+            )
+            interval_start = i_start - timedelta(seconds=margin_s)
+            interval_end = i_end + timedelta(seconds=margin_s)
 
             # Check for overlap: candidate.start < interval.end AND candidate.end > interval.start
-            if start_time < interval_end and end_time > interval_start:
+            if _start < interval_end and _end > interval_start:
                 return True, interval
 
         return False, None
@@ -182,16 +194,43 @@ class IncrementalPlanningContext:
         previous: Optional[BlockedInterval] = None
         next_interval: Optional[BlockedInterval] = None
 
+        # Normalize candidate times to naive UTC
+        _start = (
+            candidate_start.replace(tzinfo=None)
+            if candidate_start.tzinfo
+            else candidate_start
+        )
+        _end = (
+            candidate_end.replace(tzinfo=None)
+            if candidate_end.tzinfo
+            else candidate_end
+        )
+
         for interval in intervals:
-            if interval.end_time <= candidate_start:
+            i_end = (
+                interval.end_time.replace(tzinfo=None)
+                if interval.end_time.tzinfo
+                else interval.end_time
+            )
+            i_start = (
+                interval.start_time.replace(tzinfo=None)
+                if interval.start_time.tzinfo
+                else interval.start_time
+            )
+            if i_end <= _start:
                 # This interval ends before candidate starts - potential previous
-                if previous is None or interval.end_time > previous.end_time:
+                if previous is None or i_end > (
+                    previous.end_time.replace(tzinfo=None)
+                    if previous.end_time.tzinfo
+                    else previous.end_time
+                ):
                     previous = interval
-            elif interval.start_time >= candidate_end:
+            elif i_start >= _end:
                 # This interval starts after candidate ends - potential next
-                if (
-                    next_interval is None
-                    or interval.start_time < next_interval.start_time
+                if next_interval is None or i_start < (
+                    next_interval.start_time.replace(tzinfo=None)
+                    if next_interval.start_time.tzinfo
+                    else next_interval.start_time
                 ):
                     next_interval = interval
 
@@ -214,7 +253,7 @@ class FlexibleAcquisition:
     roll_angle_deg: float
     pitch_angle_deg: float = 0.0
     value: float = 1.0
-    lock_level: str = "soft"
+    lock_level: str = "none"
     # Proposed changes (None = keep original)
     proposed_start: Optional[datetime] = None
     proposed_end: Optional[datetime] = None
@@ -252,7 +291,6 @@ class RepairPlanningContext:
 
     mode: PlanningMode = PlanningMode.REPAIR
     repair_scope: RepairScope = RepairScope.WORKSPACE_HORIZON
-    soft_lock_policy: SoftLockPolicy = SoftLockPolicy.ALLOW_REPLACE
     objective: RepairObjective = RepairObjective.MAXIMIZE_SCORE
     max_changes: int = 100  # Cap on how disruptive repair can be
 
@@ -436,10 +474,6 @@ class RepairPlanRequest(BaseModel):
         default="workspace_horizon",
         description="Repair scope: 'workspace_horizon', 'satellite_subset', or 'target_subset'",
     )
-    soft_lock_policy: str = Field(
-        default="allow_replace",
-        description="Soft lock policy: 'allow_shift', 'allow_replace', or 'freeze_soft'",
-    )
     max_changes: int = Field(
         default=100,
         description="Maximum number of changes allowed (cap disruption)",
@@ -504,6 +538,50 @@ class MoveReasonInfo(BaseModel):
     reason: str
 
 
+# ---- PR-OPS-REPAIR-REPORT-01: Structured change log entries ----
+
+
+class DroppedEntry(BaseModel):
+    """Structured entry for a dropped acquisition."""
+
+    acquisition_id: str
+    satellite_id: str
+    target_id: str
+    start: str
+    end: str
+    reason_code: str  # RepairReasonCode value
+    reason_text: str
+    replaced_by: List[str] = Field(default_factory=list)
+
+
+class AddedEntry(BaseModel):
+    """Structured entry for a newly added acquisition."""
+
+    acquisition_id: str
+    satellite_id: str
+    target_id: str
+    start: str
+    end: str
+    reason_code: str  # RepairReasonCode value
+    reason_text: str
+    replaces: List[str] = Field(default_factory=list)
+    value: Optional[float] = None
+
+
+class MovedEntry(BaseModel):
+    """Structured entry for a moved acquisition."""
+
+    acquisition_id: str
+    satellite_id: str
+    target_id: str
+    from_start: str
+    from_end: str
+    to_start: str
+    to_end: str
+    reason_code: str  # RepairReasonCode value
+    reason_text: str
+
+
 class ChangeScore(BaseModel):
     """Summary of changes made during repair."""
 
@@ -534,6 +612,11 @@ class RepairDiff(BaseModel):
     hard_lock_warnings: List[str] = Field(
         default_factory=list,
         description="Warnings about hard-locked acquisitions that could not be resolved",
+    )
+    # PR-OPS-REPAIR-REPORT-01: Structured change log
+    change_log: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Structured change log with dropped/added/moved entries and reason_codes",
     )
 
 
@@ -665,8 +748,8 @@ def load_blocked_intervals(
                 # Still block committed states even without hard lock
                 should_block = True
         else:
-            # Respect both hard and soft locks
-            if acq.lock_level in ("hard", "soft"):
+            # Respect hard locks only (soft locks no longer exist)
+            if acq.lock_level == "hard":
                 should_block = True
 
         # Optionally include tentative
@@ -787,9 +870,24 @@ def check_adjacency_feasibility(
         satellite_id, candidate_start, candidate_end
     )
 
+    # Normalize candidate times to naive UTC for arithmetic
+    _cand_start = (
+        candidate_start.replace(tzinfo=None)
+        if candidate_start.tzinfo
+        else candidate_start
+    )
+    _cand_end = (
+        candidate_end.replace(tzinfo=None) if candidate_end.tzinfo else candidate_end
+    )
+
     # Check slew from previous
     if previous is not None:
-        available_time_s = (candidate_start - previous.end_time).total_seconds()
+        _prev_end = (
+            previous.end_time.replace(tzinfo=None)
+            if previous.end_time.tzinfo
+            else previous.end_time
+        )
+        available_time_s = (_cand_start - _prev_end).total_seconds()
 
         # Calculate required slew time
         roll_delta = abs(candidate_roll_deg - previous.roll_angle_deg)
@@ -815,7 +913,12 @@ def check_adjacency_feasibility(
 
     # Check slew to next
     if next_interval is not None:
-        available_time_s = (next_interval.start_time - candidate_end).total_seconds()
+        _next_start = (
+            next_interval.start_time.replace(tzinfo=None)
+            if next_interval.start_time.tzinfo
+            else next_interval.start_time
+        )
+        available_time_s = (_next_start - _cand_end).total_seconds()
 
         # Calculate required slew time
         roll_delta = abs(next_interval.roll_angle_deg - candidate_roll_deg)
@@ -1062,7 +1165,6 @@ def load_repair_context(
     workspace_id: str,
     horizon_start: datetime,
     horizon_end: datetime,
-    soft_lock_policy: SoftLockPolicy = SoftLockPolicy.ALLOW_REPLACE,
     repair_scope: RepairScope = RepairScope.WORKSPACE_HORIZON,
     satellite_subset: Optional[List[str]] = None,
     target_subset: Optional[List[str]] = None,
@@ -1078,7 +1180,6 @@ def load_repair_context(
         workspace_id: Workspace to query
         horizon_start: Start of planning horizon
         horizon_end: End of planning horizon
-        soft_lock_policy: How to treat soft-locked acquisitions
         repair_scope: Scope of repair operation
         satellite_subset: If repair_scope is satellite_subset, which satellites to include
         target_subset: If repair_scope is target_subset, which targets to include
@@ -1090,7 +1191,6 @@ def load_repair_context(
     context = RepairPlanningContext(
         mode=PlanningMode.REPAIR,
         repair_scope=repair_scope,
-        soft_lock_policy=soft_lock_policy,
         horizon_start=horizon_start,
         horizon_end=horizon_end,
         workspace_id=workspace_id,
@@ -1125,7 +1225,7 @@ def load_repair_context(
             a for a in acquisitions if a.target_id in target_subset
         ]
 
-    # Partition into fixed (hard locks) and flex (soft locks) sets
+    # Partition into fixed (hard-locked) and flex (unlocked) sets
     total_score = 0.0
 
     for acq in filtered_acquisitions:
@@ -1142,8 +1242,8 @@ def load_repair_context(
             logger.warning(f"Failed to parse times for acquisition {acq.id}")
             continue
 
-        # Get value (default to 1.0)
-        value = acq.quality_score if acq.quality_score else 1.0
+        # Get value: prefer quality_score, fall back to value field
+        value = acq.quality_score or getattr(acq, "value", None) or 1.0
         total_score += value
 
         # Determine if fixed or flex based on lock level and policy
@@ -1164,22 +1264,8 @@ def load_repair_context(
                 lock_level=acq.lock_level,
             )
             context.fixed_set.append(interval)
-        elif soft_lock_policy == SoftLockPolicy.FREEZE_SOFT:
-            # Treat soft locks like hard locks
-            interval = BlockedInterval(
-                acquisition_id=acq.id,
-                satellite_id=acq.satellite_id,
-                target_id=acq.target_id,
-                start_time=start_dt,
-                end_time=end_dt,
-                roll_angle_deg=acq.roll_angle_deg,
-                pitch_angle_deg=acq.pitch_angle_deg or 0.0,
-                state=acq.state,
-                lock_level=acq.lock_level,
-            )
-            context.fixed_set.append(interval)
         else:
-            # Soft locks go to flex set
+            # Non-hard-locked items go to flex set
             flex = FlexibleAcquisition(
                 acquisition_id=acq.id,
                 satellite_id=acq.satellite_id,
@@ -1198,7 +1284,7 @@ def load_repair_context(
 
     logger.info(
         f"[RepairPlanning] Partitioned: {len(context.fixed_set)} fixed (immutable), "
-        f"{len(context.flex_set)} flex (modifiable). Policy: {soft_lock_policy.value}"
+        f"{len(context.flex_set)} flex (modifiable)"
     )
 
     return context
@@ -1320,11 +1406,7 @@ def execute_repair_planning(
 
     # If objective is MAXIMIZE_SCORE and we have room for changes,
     # consider replacing low-value flex items with high-value opportunities
-    if (
-        objective == RepairObjective.MAXIMIZE_SCORE
-        and repair_context.soft_lock_policy == SoftLockPolicy.ALLOW_REPLACE
-        and changes_made < max_changes
-    ):
+    if objective == RepairObjective.MAXIMIZE_SCORE and changes_made < max_changes:
         # Sort opportunities by value (highest first)
         sorted_opps = sorted(
             feasible_opps,
@@ -1466,6 +1548,132 @@ def execute_repair_planning(
         (changes_made / total_original * 100) if total_original > 0 else 0.0
     )
 
+    # PR-OPS-REPAIR-REPORT-01: Build structured change log
+    # Derive reason codes from existing drop_reasons / move_reasons
+    def _derive_reason_code(reason_text: str) -> str:
+        """Derive a RepairReasonCode from free-text reason."""
+        reason_lower = reason_text.lower()
+        if "hard-lock" in reason_lower or "hard_lock" in reason_lower:
+            return RepairReasonCode.HARD_LOCK_CONSTRAINT.value
+        if "higher-value" in reason_lower or "replaced by" in reason_lower:
+            return RepairReasonCode.PRIORITY_UPGRADE.value
+        if "quality" in reason_lower or "score" in reason_lower:
+            return RepairReasonCode.QUALITY_SCORE_UPGRADE.value
+        if "slew" in reason_lower or "feasib" in reason_lower:
+            return RepairReasonCode.SLEW_CHAIN_FEASIBILITY.value
+        if "horizon" in reason_lower or "boundary" in reason_lower:
+            return RepairReasonCode.HORIZON_LIMIT.value
+        if "resource" in reason_lower or "capacity" in reason_lower:
+            return RepairReasonCode.RESOURCE_LIMIT.value
+        if "conflict" in reason_lower:
+            return RepairReasonCode.CONFLICT_RESOLUTION.value
+        return RepairReasonCode.CONFLICT_RESOLUTION.value
+
+    # Build lookup for flex items and opportunities by ID
+    flex_lookup: Dict[str, FlexibleAcquisition] = {
+        f.acquisition_id: f for f in repair_context.flex_set
+    }
+    fixed_lookup: Dict[str, BlockedInterval] = {
+        b.acquisition_id: b for b in repair_context.fixed_set
+    }
+    opp_lookup: Dict[str, Dict[str, Any]] = {}
+    for opp in opportunities:
+        oid = opp.get("id", opp.get("opportunity_id", ""))
+        if oid:
+            opp_lookup[oid] = opp
+
+    # Build drop reason lookup
+    drop_reason_lookup: Dict[str, str] = {dr["id"]: dr["reason"] for dr in drop_reasons}
+
+    # Build dropped entries
+    dropped_entries = []
+    for did in dropped_ids:
+        flex_item = flex_lookup.get(did)
+        reason_text = drop_reason_lookup.get(did, "Dropped during repair optimization")
+        reason_code = _derive_reason_code(reason_text)
+        # Check if this was replaced by an added item (same satellite)
+        replaced_by_ids = []
+        if flex_item:
+            for aid in added_ids:
+                opp = opp_lookup.get(aid, {})
+                if opp.get("satellite_id") == flex_item.satellite_id:
+                    replaced_by_ids.append(aid)
+        dropped_entries.append(
+            DroppedEntry(
+                acquisition_id=did,
+                satellite_id=flex_item.satellite_id if flex_item else "",
+                target_id=flex_item.target_id if flex_item else "",
+                start=flex_item.original_start.isoformat() + "Z" if flex_item else "",
+                end=flex_item.original_end.isoformat() + "Z" if flex_item else "",
+                reason_code=reason_code,
+                reason_text=reason_text,
+                replaced_by=replaced_by_ids,
+            ).model_dump()
+        )
+
+    # Build added entries
+    added_entries = []
+    for aid in added_ids:
+        opp = opp_lookup.get(aid, {})
+        # Check if this replaces a dropped item (same satellite)
+        replaces_ids = []
+        opp_sat = opp.get("satellite_id", "")
+        for did in dropped_ids:
+            flex_item = flex_lookup.get(did)
+            if flex_item and flex_item.satellite_id == opp_sat:
+                replaces_ids.append(did)
+        reason_code = (
+            RepairReasonCode.PRIORITY_UPGRADE.value
+            if replaces_ids
+            else RepairReasonCode.ADDED_NEW.value
+        )
+        reason_text = (
+            f"Replaced lower-value acquisition(s) on {opp_sat}"
+            if replaces_ids
+            else "Added to fill schedule gap"
+        )
+        added_entries.append(
+            AddedEntry(
+                acquisition_id=aid,
+                satellite_id=opp_sat,
+                target_id=opp.get("target_id", ""),
+                start=opp.get("start_time", ""),
+                end=opp.get("end_time", ""),
+                reason_code=reason_code,
+                reason_text=reason_text,
+                replaces=replaces_ids,
+                value=opp.get("value"),
+            ).model_dump()
+        )
+
+    # Build moved entries (currently empty since repair doesn't move, but structure is ready)
+    moved_entries = []
+    for m in moved_items:
+        flex_item = flex_lookup.get(m.id)
+        move_reason_lookup = {mr["id"]: mr["reason"] for mr in move_reasons}
+        reason_text = move_reason_lookup.get(m.id, "Rescheduled to a better time slot")
+        reason_code = _derive_reason_code(reason_text)
+        moved_entries.append(
+            MovedEntry(
+                acquisition_id=m.id,
+                satellite_id=flex_item.satellite_id if flex_item else "",
+                target_id=flex_item.target_id if flex_item else "",
+                from_start=m.from_start,
+                from_end=m.from_end,
+                to_start=m.to_start,
+                to_end=m.to_end,
+                reason_code=reason_code,
+                reason_text=reason_text,
+            ).model_dump()
+        )
+
+    change_log = {
+        "dropped": dropped_entries,
+        "added": added_entries,
+        "moved": moved_entries,
+        "kept_count": len(kept_ids),
+    }
+
     # Build diff
     repair_diff = RepairDiff(
         kept=kept_ids,
@@ -1481,6 +1689,7 @@ def execute_repair_planning(
             percent_changed=round(percent_changed, 2),
         ),
         hard_lock_warnings=hard_lock_warnings,
+        change_log=change_log,
     )
 
     metrics = {

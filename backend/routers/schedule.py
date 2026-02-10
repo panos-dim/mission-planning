@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from backend.schedule_persistence import get_schedule_db
+from backend.schedule_persistence import ScheduleDB, get_schedule_db
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ class AcquisitionSummary(BaseModel):
     start_time: str
     end_time: str
     state: str = "tentative"  # tentative | locked | committed | executing | completed
-    lock_level: str = "none"  # none | soft | hard
+    lock_level: str = "none"  # none | hard
     order_id: Optional[str] = None
 
 
@@ -556,7 +556,7 @@ class UpdateLockRequest(BaseModel):
     """Request to update acquisition lock level."""
 
     acquisition_id: str = Field(..., description="Acquisition ID to update")
-    lock_level: str = Field(..., description="New lock level: none | soft | hard")
+    lock_level: str = Field(..., description="New lock level: none | hard")
 
 
 class UpdateLockResponse(BaseModel):
@@ -572,7 +572,7 @@ class BulkLockRequest(BaseModel):
     """Request for bulk lock operations."""
 
     acquisition_ids: List[str] = Field(..., description="Acquisition IDs to update")
-    lock_level: str = Field(..., description="Lock level: none | soft | hard")
+    lock_level: str = Field(..., description="Lock level: none | hard")
 
 
 class BulkLockResponse(BaseModel):
@@ -800,10 +800,10 @@ async def commit_plan(request: CommitPlanRequest) -> CommitPlanResponse:
     db = get_schedule_db()
 
     # Validate lock level
-    if request.lock_level not in ["soft", "hard"]:
+    if request.lock_level not in ["none", "hard"]:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid lock_level: {request.lock_level}. Must be 'soft' or 'hard'",
+            detail=f"Invalid lock_level: {request.lock_level}. Must be 'none' or 'hard'",
         )
 
     # Check plan exists
@@ -889,7 +889,7 @@ async def commit_plan(request: CommitPlanRequest) -> CommitPlanResponse:
 
 
 def _check_commit_conflicts(
-    db: "ScheduleDB",
+    db: ScheduleDB,
     items: List["DirectCommitItem"],
     workspace_id: Optional[str],
 ) -> List[str]:
@@ -986,7 +986,7 @@ class DirectCommitRequest(BaseModel):
         default="unknown", description="Algorithm that generated this schedule"
     )
     mode: str = Field(default="OPTICAL", description="Mission mode: OPTICAL | SAR")
-    lock_level: str = Field(default="soft", description="Lock level: soft | hard")
+    lock_level: str = Field(default="none", description="Lock level: none | hard")
     workspace_id: Optional[str] = None
     notes: Optional[str] = None
 
@@ -1069,6 +1069,7 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
                 roll_angle_deg=item.roll_angle_deg,
                 pitch_angle_deg=item.pitch_angle_deg,
                 value=item.value,
+                quality_score=item.value,
             )
 
         # Commit the plan
@@ -1607,10 +1608,6 @@ class RepairPlanRequestModel(BaseModel):
         default="workspace_horizon",
         description="'workspace_horizon', 'satellite_subset', or 'target_subset'",
     )
-    soft_lock_policy: str = Field(
-        default="allow_replace",
-        description="Deprecated: soft locks no longer exist. All unlocked items are fully flexible.",
-    )
     max_changes: int = Field(default=100, ge=0, description="Max changes allowed")
     objective: str = Field(
         default="maximize_score",
@@ -1662,6 +1659,11 @@ class RepairDiffResponse(BaseModel):
     hard_lock_warnings: List[str] = Field(
         default_factory=list,
         description="Warnings about hard-locked acquisitions that could not be resolved",
+    )
+    # PR-OPS-REPAIR-REPORT-01: Structured change log
+    change_log: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Structured change log with dropped/added/moved entries and reason_codes",
     )
 
 
@@ -1724,9 +1726,9 @@ async def create_repair_plan(
     Create a repair plan that modifies an existing schedule.
 
     Repair mode:
-    1. Loads existing acquisitions and partitions into fixed (hard locks) and flex (soft locks)
+    1. Loads existing acquisitions and partitions into fixed (hard-locked) and flex (unlocked)
     2. Hard-locked items are immutable
-    3. Soft-locked items may be shifted/replaced based on soft_lock_policy
+    3. Unlocked items may be replaced with better opportunities
     4. Fills gaps with new opportunities
     5. Returns a diff showing kept/dropped/added/moved items
 
@@ -1740,7 +1742,6 @@ async def create_repair_plan(
         RepairObjective,
         RepairScope,
         SlewConfig,
-        SoftLockPolicy,
         execute_repair_planning,
         load_repair_context,
         predict_commit_conflicts,
@@ -1781,15 +1782,6 @@ async def create_repair_plan(
 
     # Parse enums
     try:
-        soft_lock_policy = SoftLockPolicy(request.soft_lock_policy)
-    except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid soft_lock_policy: {request.soft_lock_policy}. "
-            f"Must be 'allow_shift', 'allow_replace', or 'freeze_soft'",
-        )
-
-    try:
         repair_scope = RepairScope(request.repair_scope)
     except ValueError:
         raise HTTPException(
@@ -1809,7 +1801,7 @@ async def create_repair_plan(
 
     logger.info(
         f"[Repair Plan] workspace={request.workspace_id}, "
-        f"scope={repair_scope.value}, policy={soft_lock_policy.value}, "
+        f"scope={repair_scope.value}, "
         f"max_changes={request.max_changes}, objective={objective.value}"
     )
 
@@ -1819,7 +1811,6 @@ async def create_repair_plan(
         workspace_id=request.workspace_id or "default",
         horizon_start=horizon_start,
         horizon_end=horizon_end,
-        soft_lock_policy=soft_lock_policy,
         repair_scope=repair_scope,
         satellite_subset=request.satellite_subset or None,
         target_subset=request.target_subset or None,
@@ -1897,7 +1888,6 @@ async def create_repair_plan(
         algorithm="repair_mode",
         config={
             "planning_mode": "repair",
-            "soft_lock_policy": soft_lock_policy.value,
             "repair_scope": repair_scope.value,
             "objective": objective.value,
             "max_changes": request.max_changes,
@@ -1987,6 +1977,7 @@ async def create_repair_plan(
             percent_changed=repair_diff.change_score.percent_changed,
         ),
         hard_lock_warnings=repair_diff.hard_lock_warnings,
+        change_log=repair_diff.change_log,
     )
 
     # Build commit preview
@@ -2009,7 +2000,6 @@ async def create_repair_plan(
     # Build schedule context
     schedule_context = {
         "planning_mode": "repair",
-        "soft_lock_policy": soft_lock_policy.value,
         "repair_scope": repair_scope.value,
         "objective": objective.value,
         "max_changes": request.max_changes,

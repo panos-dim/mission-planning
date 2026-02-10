@@ -56,7 +56,7 @@ class TestBlockedInterval:
         )
         assert interval.pitch_angle_deg == 0.0
         assert interval.state == "committed"
-        assert interval.lock_level == "soft"
+        assert interval.lock_level == "none"
 
 
 # =============================================================================
@@ -416,7 +416,7 @@ class TestIncrementalPlanningIntegration:
                 roll_angle_deg=15.0,
                 pitch_angle_deg=0.0,
                 state="committed",
-                lock_level="soft",
+                lock_level="none",
             ),
             MagicMock(
                 id="acq_tentative",
@@ -898,14 +898,6 @@ class TestRepairPlanningMode:
         assert RepairScope.SATELLITE_SUBSET.value == "satellite_subset"
         assert RepairScope.TARGET_SUBSET.value == "target_subset"
 
-    def test_soft_lock_policy_enum(self) -> None:
-        """Test SoftLockPolicy enum values."""
-        from backend.incremental_planning import SoftLockPolicy
-
-        assert SoftLockPolicy.ALLOW_SHIFT.value == "allow_shift"
-        assert SoftLockPolicy.ALLOW_REPLACE.value == "allow_replace"
-        assert SoftLockPolicy.FREEZE_SOFT.value == "freeze_soft"
-
     def test_repair_objective_enum(self) -> None:
         """Test RepairObjective enum values."""
         from backend.incremental_planning import RepairObjective
@@ -925,12 +917,12 @@ class TestRepairPlanningMode:
             original_start=datetime(2024, 1, 15, 10, 0, 0),
             original_end=datetime(2024, 1, 15, 10, 5, 0),
             roll_angle_deg=5.0,
-            lock_level="soft",
+            lock_level="none",
         )
 
         assert flex_acq.acquisition_id == "acq-1"
         assert flex_acq.satellite_id == "SAT-1"
-        assert flex_acq.lock_level == "soft"
+        assert flex_acq.lock_level == "none"
         assert flex_acq.action == "keep"  # default
 
     def test_repair_planning_context_partitioning(self) -> None:
@@ -939,7 +931,6 @@ class TestRepairPlanningMode:
             FlexibleAcquisition,
             RepairObjective,
             RepairPlanningContext,
-            SoftLockPolicy,
         )
 
         # Create a context with mixed acquisitions
@@ -954,20 +945,19 @@ class TestRepairPlanningMode:
         )
 
         flex_acq = FlexibleAcquisition(
-            acquisition_id="soft-1",
+            acquisition_id="unlocked-1",
             satellite_id="SAT-1",
             target_id="T2",
             original_start=datetime(2024, 1, 15, 11, 0, 0),
             original_end=datetime(2024, 1, 15, 11, 5, 0),
             roll_angle_deg=5.0,
-            lock_level="soft",
+            lock_level="none",
         )
 
         context = RepairPlanningContext(
             horizon_start=datetime(2024, 1, 15, 0, 0, 0),
             horizon_end=datetime(2024, 1, 16, 0, 0, 0),
             workspace_id="default",
-            soft_lock_policy=SoftLockPolicy.ALLOW_REPLACE,
             objective=RepairObjective.MAXIMIZE_SCORE,
             max_changes=100,
             fixed_set=[fixed_acq],
@@ -977,43 +967,7 @@ class TestRepairPlanningMode:
         assert len(context.fixed_set) == 1
         assert len(context.flex_set) == 1
         assert context.fixed_set[0].lock_level == "hard"
-        assert context.flex_set[0].lock_level == "soft"
-
-    def test_repair_context_freeze_soft_policy(self) -> None:
-        """Test that freeze_soft policy treats soft locks as hard locks."""
-        from backend.incremental_planning import (
-            FlexibleAcquisition,
-            RepairObjective,
-            RepairPlanningContext,
-            SoftLockPolicy,
-        )
-
-        # With freeze_soft policy, soft acquisitions should be marked to keep
-        soft_acq = FlexibleAcquisition(
-            acquisition_id="soft-1",
-            satellite_id="SAT-1",
-            target_id="T1",
-            original_start=datetime(2024, 1, 15, 10, 0, 0),
-            original_end=datetime(2024, 1, 15, 10, 5, 0),
-            roll_angle_deg=0.0,
-            lock_level="soft",
-            action="keep",  # frozen - no changes allowed
-        )
-
-        context = RepairPlanningContext(
-            horizon_start=datetime(2024, 1, 15, 0, 0, 0),
-            horizon_end=datetime(2024, 1, 16, 0, 0, 0),
-            workspace_id="default",
-            soft_lock_policy=SoftLockPolicy.FREEZE_SOFT,
-            objective=RepairObjective.MAXIMIZE_SCORE,
-            max_changes=100,
-            fixed_set=[],
-            flex_set=[soft_acq],
-        )
-
-        # With freeze_soft, flex items should remain in 'keep' action
-        assert context.flex_set[0].action == "keep"
-        assert context.soft_lock_policy == SoftLockPolicy.FREEZE_SOFT
+        assert context.flex_set[0].lock_level == "none"
 
     def test_repair_diff_structure(self) -> None:
         """Test RepairDiff Pydantic model structure."""
@@ -1038,11 +992,7 @@ class TestRepairPlanningMode:
 
     def test_repair_hard_locks_immutable(self) -> None:
         """Test that hard-locked acquisitions are never modified in repair mode."""
-        from backend.incremental_planning import (
-            RepairObjective,
-            RepairPlanningContext,
-            SoftLockPolicy,
-        )
+        from backend.incremental_planning import RepairObjective, RepairPlanningContext
 
         hard_acq = BlockedInterval(
             acquisition_id="hard-1",
@@ -1058,7 +1008,6 @@ class TestRepairPlanningMode:
             horizon_start=datetime(2024, 1, 15, 0, 0, 0),
             horizon_end=datetime(2024, 1, 16, 0, 0, 0),
             workspace_id="default",
-            soft_lock_policy=SoftLockPolicy.ALLOW_REPLACE,
             objective=RepairObjective.MAXIMIZE_SCORE,
             max_changes=100,
             fixed_set=[hard_acq],
@@ -1072,17 +1021,12 @@ class TestRepairPlanningMode:
 
     def test_max_changes_constraint(self) -> None:
         """Test that max_changes is properly stored in context."""
-        from backend.incremental_planning import (
-            RepairObjective,
-            RepairPlanningContext,
-            SoftLockPolicy,
-        )
+        from backend.incremental_planning import RepairObjective, RepairPlanningContext
 
         context = RepairPlanningContext(
             horizon_start=datetime(2024, 1, 15, 0, 0, 0),
             horizon_end=datetime(2024, 1, 16, 0, 0, 0),
             workspace_id="default",
-            soft_lock_policy=SoftLockPolicy.ALLOW_REPLACE,
             objective=RepairObjective.MINIMIZE_CHANGES,
             max_changes=5,
             fixed_set=[],

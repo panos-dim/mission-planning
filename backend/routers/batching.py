@@ -109,9 +109,6 @@ class PlanBatchRequest(BaseModel):
     use_repair_mode: Optional[bool] = Field(
         default=None, description="Override policy planning mode"
     )
-    include_soft_lock_replace: Optional[bool] = Field(
-        default=None, description="Override policy soft lock setting"
-    )
 
 
 class PlanMetrics(BaseModel):
@@ -141,7 +138,7 @@ class PlanBatchResponse(BaseModel):
 class CommitBatchRequest(BaseModel):
     """Request to commit a batch plan."""
 
-    lock_level: str = Field(default="soft", description="Lock level: soft | hard")
+    lock_level: str = Field(default="none", description="Lock level: none | hard")
     notes: Optional[str] = None
 
 
@@ -207,7 +204,6 @@ async def list_policies() -> PolicyListResponse:
                 selection_rules=SelectionRulesModel(
                     max_orders_per_batch=policy.selection_rules.max_orders_per_batch,
                     horizon_hours=policy.selection_rules.horizon_hours,
-                    include_soft_lock_replace=policy.selection_rules.include_soft_lock_replace,
                     min_priority=policy.selection_rules.min_priority,
                 ),
                 repair_preset=policy.repair_preset,
@@ -489,10 +485,6 @@ async def plan_batch(batch_id: str, request: PlanBatchRequest) -> PlanBatchRespo
         use_repair = request.use_repair_mode
         if use_repair is None:
             use_repair = policy.planning_mode == "repair"
-
-        include_soft_replace = request.include_soft_lock_replace
-        if include_soft_replace is None:
-            include_soft_replace = policy.selection_rules.include_soft_lock_replace
 
         # Build target list from orders
         targets = [

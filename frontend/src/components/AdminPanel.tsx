@@ -11,65 +11,13 @@ import {
   Globe,
   Settings,
   Upload,
-  AlertCircle,
   Radio,
   History,
-  RotateCcw,
   FlaskConical,
-  CheckCircle,
-  XCircle,
-  Play,
 } from "lucide-react";
-import {
-  listWorkflowScenarios,
-  runWorkflowValidation,
-  WorkflowScenario,
-  WorkflowValidationReport,
-} from "../api/workflowValidation";
 import * as yaml from "js-yaml";
 import debug from "../utils/debug";
-
-// SAR Mode interfaces
-interface SARModeIncidence {
-  recommended_min: number;
-  recommended_max: number;
-  absolute_min: number;
-  absolute_max: number;
-}
-
-interface SARModeScene {
-  width_km: number;
-  length_km: number;
-  max_length_km?: number;
-}
-
-interface SARModeCollection {
-  duration_s?: number;
-  azimuth_resolution_m: number;
-  range_resolution_m: number;
-}
-
-interface SARModeQuality {
-  optimal_incidence_deg: number;
-  quality_model: string;
-}
-
-interface SARMode {
-  display_name: string;
-  description: string;
-  incidence_angle: SARModeIncidence;
-  scene: SARModeScene;
-  collection: SARModeCollection;
-  quality: SARModeQuality;
-}
-
-interface ConfigSnapshot {
-  id: string;
-  timestamp: string;
-  description: string | null;
-  config_hash: string;
-  files: string[];
-}
+import { ValidationTab, SnapshotsTab, SarModesTab, SettingsTab } from "./admin";
 
 interface GroundStation {
   name: string;
@@ -144,13 +92,6 @@ interface SatelliteConfig {
   tle_updated_at?: string;
 }
 
-interface MissionSettingsConfig {
-  defaults?: Record<string, unknown>;
-  elevation_constraints?: Record<string, unknown>;
-  mission_planning?: Record<string, unknown>;
-  [key: string]: unknown;
-}
-
 interface AdminPanelProps {
   isOpen: boolean;
   onClose: () => void;
@@ -170,15 +111,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     | "snapshots"
     | "validation"
   >("ground-stations");
-  // Validation state (PR-VALIDATION-01)
-  const [validationScenarios, setValidationScenarios] = useState<
-    WorkflowScenario[]
-  >([]);
-  const [selectedScenarioId, setSelectedScenarioId] = useState<string>("");
-  const [isRunningValidation, setIsRunningValidation] = useState(false);
-  const [validationReport, setValidationReport] =
-    useState<WorkflowValidationReport | null>(null);
-  const [validationError, setValidationError] = useState<string | null>(null);
   const [config, setConfig] = useState<Config | null>(null);
   const [editingStation, setEditingStation] =
     useState<EditableGroundStation | null>(null);
@@ -196,28 +128,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const [editingSatellite, setEditingSatellite] =
     useState<SatelliteConfig | null>(null);
   const [isAddingSatellite, setIsAddingSatellite] = useState(false);
-  const [missionSettings, setMissionSettings] =
-    useState<MissionSettingsConfig | null>(null);
-  const [isEditingSettings, setIsEditingSettings] = useState(false);
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [refreshingSatelliteId, setRefreshingSatelliteId] = useState<
     string | null
   >(null);
-  // SAR Modes state
-  const [sarModes, setSarModes] = useState<Record<string, SARMode>>({});
-  const [editingSarMode, setEditingSarMode] = useState<string | null>(null);
-  const [editingSarModeData, setEditingSarModeData] = useState<SARMode | null>(
-    null,
-  );
-  const [isSavingSarMode, setIsSavingSarMode] = useState(false);
-  // Config snapshots state
-  const [snapshots, setSnapshots] = useState<ConfigSnapshot[]>([]);
-  const [currentConfigHash, setCurrentConfigHash] = useState<string>("");
-  const [snapshotDescription, setSnapshotDescription] = useState("");
-  const [isCreatingSnapshot, setIsCreatingSnapshot] = useState(false);
-  const [isRestoringSnapshot, setIsRestoringSnapshot] = useState<string | null>(
-    null,
-  );
   // Multi-satellite selection for constellation support
   const [selectedSatelliteIds, setSelectedSatelliteIds] = useState<string[]>(
     () => {
@@ -232,51 +145,13 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
       fetchConfig();
       fetchTleSources();
       fetchSatellites();
-      fetchMissionSettings();
-      fetchSarModes();
-      fetchSnapshots();
-      fetchValidationScenarios();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
-  const fetchValidationScenarios = async () => {
-    try {
-      const scenarios = await listWorkflowScenarios();
-      setValidationScenarios(scenarios);
-      if (scenarios.length > 0 && !selectedScenarioId) {
-        setSelectedScenarioId(scenarios[0].id);
-      }
-    } catch (error) {
-      console.error("Error fetching validation scenarios:", error);
-    }
-  };
-
-  const handleRunValidation = async () => {
-    if (!selectedScenarioId) return;
-
-    setIsRunningValidation(true);
-    setValidationError(null);
-    setValidationReport(null);
-
-    try {
-      const report = await runWorkflowValidation({
-        scenario_id: selectedScenarioId,
-        dry_run: true,
-      });
-      setValidationReport(report);
-    } catch (error) {
-      setValidationError(
-        error instanceof Error ? error.message : "Validation failed",
-      );
-    } finally {
-      setIsRunningValidation(false);
-    }
-  };
-
   const fetchConfig = async () => {
     try {
-      const response = await fetch("/api/config/full");
+      const response = await fetch("/api/v1/config/full");
       const data = await response.json();
       if (data.success) {
         setConfig(data.config);
@@ -288,7 +163,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const fetchTleSources = async () => {
     try {
-      const response = await fetch("/api/tle/sources");
+      const response = await fetch("/api/v1/tle/sources");
       const data = await response.json();
       if (data.sources && data.sources.length > 0) {
         setTleSources(data.sources);
@@ -301,7 +176,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const fetchSatellites = async () => {
     try {
-      const response = await fetch("/api/satellites");
+      const response = await fetch("/api/v1/satellites");
       const data = await response.json();
       if (data.success) {
         const fetchedSatellites = data.satellites || [];
@@ -341,183 +216,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
-  const fetchMissionSettings = async () => {
-    try {
-      const response = await fetch("/api/mission-settings");
-      const data = await response.json();
-      if (data.success) {
-        setMissionSettings(data.settings);
-      }
-    } catch (error) {
-      console.error("Error fetching mission settings:", error);
-    }
-  };
-
-  const fetchSarModes = async () => {
-    try {
-      const response = await fetch("/api/v1/config/sar-modes");
-      const data = await response.json();
-      if (data.success) {
-        setSarModes(data.modes || {});
-      }
-    } catch (error) {
-      console.error("Error fetching SAR modes:", error);
-    }
-  };
-
-  const fetchSnapshots = async () => {
-    try {
-      const response = await fetch("/api/v1/config/snapshots");
-      const data = await response.json();
-      if (data.success) {
-        setSnapshots(data.snapshots || []);
-        setCurrentConfigHash(data.current_hash || "");
-      }
-    } catch (error) {
-      console.error("Error fetching snapshots:", error);
-    }
-  };
-
-  const saveSarMode = async (modeName: string, modeData: SARMode) => {
-    setIsSavingSarMode(true);
-    try {
-      const response = await fetch(`/api/v1/config/sar-modes/${modeName}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(modeData),
-      });
-      const data = await response.json();
-      if (data.success) {
-        await fetchSarModes();
-        await fetchSnapshots();
-        setEditingSarMode(null);
-        setEditingSarModeData(null);
-        if (onConfigUpdate) onConfigUpdate();
-      } else {
-        console.error("Failed to save SAR mode:", data);
-      }
-    } catch (error) {
-      console.error("Error saving SAR mode:", error);
-    } finally {
-      setIsSavingSarMode(false);
-    }
-  };
-
-  const createSnapshot = async () => {
-    setIsCreatingSnapshot(true);
-    try {
-      const response = await fetch("/api/v1/config/snapshots", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ description: snapshotDescription || null }),
-      });
-      const data = await response.json();
-      if (data.success) {
-        await fetchSnapshots();
-        setSnapshotDescription("");
-      }
-    } catch (error) {
-      console.error("Error creating snapshot:", error);
-    } finally {
-      setIsCreatingSnapshot(false);
-    }
-  };
-
-  const restoreSnapshot = async (snapshotId: string) => {
-    setIsRestoringSnapshot(snapshotId);
-    try {
-      const response = await fetch(
-        `/api/v1/config/snapshots/${snapshotId}/restore`,
-        {
-          method: "POST",
-        },
-      );
-      const data = await response.json();
-      if (data.success) {
-        await fetchSnapshots();
-        await fetchSarModes();
-        await fetchMissionSettings();
-        await fetchSatellites();
-        if (onConfigUpdate) onConfigUpdate();
-        alert(
-          `Config restored from snapshot. Backup created: ${data.backup_id}`,
-        );
-      }
-    } catch (error) {
-      console.error("Error restoring snapshot:", error);
-    } finally {
-      setIsRestoringSnapshot(null);
-    }
-  };
-
-  const deleteSnapshot = async (snapshotId: string) => {
-    if (!confirm(`Delete snapshot "${snapshotId}"?`)) return;
-    try {
-      const response = await fetch(`/api/v1/config/snapshots/${snapshotId}`, {
-        method: "DELETE",
-      });
-      const data = await response.json();
-      if (data.success) {
-        await fetchSnapshots();
-      }
-    } catch (error) {
-      console.error("Error deleting snapshot:", error);
-    }
-  };
-
-  const updateMissionSetting = async (
-    section: string,
-    key: string,
-    value: string | number | boolean | Record<string, unknown>,
-  ) => {
-    if (!isEditingSettings) return;
-    setHasUnsavedChanges(true);
-    setMissionSettings((prev) => {
-      if (!prev) return prev;
-      return {
-        ...prev,
-        [section]: {
-          ...(prev[section] as Record<string, unknown>),
-          [key]: value,
-        },
-      };
-    });
-    try {
-      const response = await fetch(`/api/mission-settings/${section}/${key}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ value }),
-      });
-
-      if (response.ok) {
-        // Update local state
-      } else {
-        console.error("Failed to update mission setting");
-      }
-    } catch (error) {
-      console.error("Error updating mission setting:", error);
-    }
-  };
-
-  const reloadMissionSettings = async () => {
-    try {
-      const response = await fetch("/api/mission-settings/reload", {
-        method: "POST",
-      });
-
-      if (response.ok) {
-        // Refresh mission settings from backend
-        await fetchMissionSettings();
-      } else {
-        console.error("Failed to reload mission settings");
-      }
-    } catch (error) {
-      console.error("Error reloading mission settings:", error);
-    }
-  };
-
   const saveGroundStation = async (
     station: EditableGroundStation,
     isNew: boolean = false,
@@ -543,8 +241,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
       };
 
       const url = isNew
-        ? "/api/config/ground-stations"
-        : `/api/config/ground-stations/${encodeURIComponent(station.name)}`;
+        ? "/api/v1/config/ground-stations"
+        : `/api/v1/config/ground-stations/${encodeURIComponent(station.name)}`;
 
       const response = await fetch(url, {
         method: isNew ? "POST" : "PUT",
@@ -572,7 +270,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
     try {
       const response = await fetch(
-        `/api/config/ground-stations/${encodeURIComponent(
+        `/api/v1/config/ground-stations/${encodeURIComponent(
           deleteConfirmation.station.name,
         )}`,
         { method: "DELETE" },
@@ -598,7 +296,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const reloadConfig = async () => {
     try {
-      const response = await fetch("/api/config/reload", { method: "POST" });
+      const response = await fetch("/api/v1/config/reload", { method: "POST" });
       if (response.ok) {
         await fetchConfig();
         if (onConfigUpdate) onConfigUpdate();
@@ -618,7 +316,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     formData.append("file", file);
 
     try {
-      const response = await fetch("/api/config/upload", {
+      const response = await fetch("/api/v1/config/upload", {
         method: "POST",
         body: formData,
       });
@@ -686,7 +384,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
     setIsSearching(true);
     try {
-      const response = await fetch("/api/tle/search", {
+      const response = await fetch("/api/v1/tle/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -707,7 +405,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const selectSatellite = async (satellite: TLESearchResult) => {
     // Add satellite to managed list with default parameters via API
     try {
-      const response = await fetch("/api/satellites", {
+      const response = await fetch("/api/v1/satellites", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -736,7 +434,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const saveSatellite = async (satellite: SatelliteConfig) => {
     try {
-      const response = await fetch(`/api/satellites/${satellite.id}`, {
+      const response = await fetch(`/api/v1/satellites/${satellite.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -765,7 +463,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const removeSatellite = async (satelliteId: string) => {
     try {
-      const response = await fetch(`/api/satellites/${satelliteId}`, {
+      const response = await fetch(`/api/v1/satellites/${satelliteId}`, {
         method: "DELETE",
       });
 
@@ -874,13 +572,13 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     setRefreshingSatelliteId(satelliteId);
 
     debug.section("TLE REFRESH");
-    debug.apiRequest(`POST /api/satellites/${satelliteId}/refresh-tle`, {
+    debug.apiRequest(`POST /api/v1/satellites/${satelliteId}/refresh-tle`, {
       satelliteId,
     });
 
     try {
       const response = await fetch(
-        `/api/satellites/${satelliteId}/refresh-tle`,
+        `/api/v1/satellites/${satelliteId}/refresh-tle`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -890,7 +588,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
       if (response.ok) {
         const data = await response.json();
         debug.apiResponse(
-          `POST /api/satellites/${satelliteId}/refresh-tle`,
+          `POST /api/v1/satellites/${satelliteId}/refresh-tle`,
           data,
           {
             summary: `✅ TLE updated for ${data.satellite?.name}`,
@@ -900,7 +598,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
       } else {
         const errorData = await response.json().catch(() => ({}));
         debug.apiError(
-          `POST /api/satellites/${satelliteId}/refresh-tle`,
+          `POST /api/v1/satellites/${satelliteId}/refresh-tle`,
           errorData,
         );
       }
@@ -1742,1092 +1440,21 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
           )}
 
           {activeTab === "settings" && (
-            <div className="space-y-4">
-              {missionSettings && (
-                <div className="space-y-4">
-                  {/* Edit/Save Controls */}
-                  <div className="bg-gray-800 p-4 rounded-lg flex justify-between items-center">
-                    <h3 className="text-white font-semibold">
-                      Mission Configuration
-                    </h3>
-                    <div className="flex space-x-2">
-                      {!isEditingSettings ? (
-                        <>
-                          <button
-                            onClick={() => setIsEditingSettings(true)}
-                            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center space-x-2"
-                          >
-                            <Edit2 className="w-4 h-4" />
-                            <span>Edit Settings</span>
-                          </button>
-                          <button
-                            onClick={reloadMissionSettings}
-                            className="px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-600 flex items-center space-x-2"
-                          >
-                            <RefreshCw className="w-4 h-4" />
-                            <span>Reload</span>
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            onClick={async () => {
-                              try {
-                                const response = await fetch(
-                                  "/api/config/mission-settings",
-                                  {
-                                    method: "POST",
-                                    headers: {
-                                      "Content-Type": "application/json",
-                                    },
-                                    body: JSON.stringify(missionSettings),
-                                  },
-                                );
-                                if (response.ok) {
-                                  setIsEditingSettings(false);
-                                  setHasUnsavedChanges(false);
-                                  if (onConfigUpdate) onConfigUpdate();
-                                }
-                              } catch (error) {
-                                console.error(
-                                  "Failed to save mission settings:",
-                                  error,
-                                );
-                              }
-                            }}
-                            className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 flex items-center space-x-2"
-                          >
-                            <Save className="w-4 h-4" />
-                            <span>Save Changes</span>
-                          </button>
-                          <button
-                            onClick={() => {
-                              setIsEditingSettings(false);
-                              setHasUnsavedChanges(false);
-                              fetchMissionSettings();
-                            }}
-                            className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700"
-                          >
-                            Cancel
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                  {hasUnsavedChanges && (
-                    <div className="bg-yellow-900 text-yellow-200 p-3 rounded-lg flex items-center space-x-2">
-                      <AlertCircle className="w-4 h-4" />
-                      <span className="text-sm">You have unsaved changes</span>
-                    </div>
-                  )}
-                  {/* Pass Durations */}
-                  <div className="bg-gray-800 p-4 rounded-lg">
-                    <h3 className="text-white font-semibold mb-4">
-                      Pass Duration Settings
-                    </h3>
-                    <div className="space-y-4">
-                      {Object.entries(missionSettings.pass_duration || {})
-                        .filter(([missionType]) => missionType !== "tracking")
-                        .map(([missionType, durations]) => (
-                          <div
-                            key={missionType}
-                            className="border-l-4 border-blue-600 pl-4"
-                          >
-                            <h4 className="text-white capitalize mb-3">
-                              {missionType}
-                            </h4>
-                            <div className="grid grid-cols-3 gap-3">
-                              {Object.entries(
-                                durations as Record<string, number>,
-                              ).map(([durationType, value]) => (
-                                <div key={durationType} className="space-y-2">
-                                  <label className="text-gray-300 text-sm capitalize">
-                                    {durationType.replace(/_/g, " ")}
-                                  </label>
-                                  <input
-                                    type="number"
-                                    value={String(value || "")}
-                                    onChange={(e) => {
-                                      const newValue = parseInt(e.target.value);
-                                      const updatedDurations = {
-                                        ...(durations as Record<
-                                          string,
-                                          number
-                                        >),
-                                        [durationType]: newValue,
-                                      };
-                                      updateMissionSetting(
-                                        "pass_duration",
-                                        missionType,
-                                        updatedDurations,
-                                      );
-                                    }}
-                                    disabled={!isEditingSettings}
-                                    className={`w-full bg-gray-700 text-white px-2 py-1 rounded text-sm ${
-                                      !isEditingSettings
-                                        ? "opacity-60 cursor-not-allowed"
-                                        : ""
-                                    }`}
-                                  />
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                    </div>
-                  </div>
-
-                  {/* Elevation Constraints */}
-                  <div className="bg-gray-800 p-4 rounded-lg">
-                    <h3 className="text-white font-semibold mb-4">
-                      Elevation Constraints
-                    </h3>
-                    <div className="space-y-4">
-                      {Object.entries(
-                        missionSettings.elevation_constraints || {},
-                      )
-                        .filter(([missionType]) => missionType !== "tracking")
-                        .map(([missionType, constraints]) => (
-                          <div
-                            key={missionType}
-                            className="border-l-4 border-green-600 pl-4"
-                          >
-                            <h4 className="text-white capitalize mb-3">
-                              {missionType}
-                            </h4>
-                            <div className="grid grid-cols-3 gap-3">
-                              {Object.entries(
-                                constraints as Record<string, number>,
-                              ).map(([constraintType, value]) => (
-                                <div key={constraintType} className="space-y-2">
-                                  <label className="text-gray-300 text-sm capitalize">
-                                    {constraintType.replace(/_/g, " ")} (°)
-                                  </label>
-                                  <input
-                                    type="number"
-                                    value={String(value || "")}
-                                    onChange={(e) => {
-                                      const newValue = parseFloat(
-                                        e.target.value,
-                                      );
-                                      const updatedConstraints = {
-                                        ...(constraints as Record<
-                                          string,
-                                          number
-                                        >),
-                                        [constraintType]: newValue,
-                                      };
-                                      updateMissionSetting(
-                                        "elevation_constraints",
-                                        missionType,
-                                        updatedConstraints,
-                                      );
-                                    }}
-                                    disabled={!isEditingSettings}
-                                    className={`w-full bg-gray-700 text-white px-2 py-1 rounded text-sm ${
-                                      !isEditingSettings
-                                        ? "opacity-60 cursor-not-allowed"
-                                        : ""
-                                    }`}
-                                    step="0.1"
-                                  />
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                    </div>
-                  </div>
-
-                  {/* Planning Constraints */}
-                  <div className="bg-gray-800 p-4 rounded-lg">
-                    <h3 className="text-white font-semibold mb-4">
-                      Planning Constraints
-                    </h3>
-                    <div className="space-y-4">
-                      {Object.entries(
-                        missionSettings.planning_constraints || {},
-                      ).map(([constraintType, value]) => (
-                        <div
-                          key={constraintType}
-                          className="flex items-center space-x-4"
-                        >
-                          <label className="text-gray-300 flex-1 capitalize">
-                            {constraintType.replace(/_/g, " ")}
-                          </label>
-                          {constraintType === "weather" &&
-                          typeof value === "object" ? (
-                            <div className="flex space-x-4">
-                              {Object.entries(
-                                value as Record<string, number>,
-                              ).map(([weatherKey, weatherValue]) => (
-                                <div
-                                  key={weatherKey}
-                                  className="flex items-center space-x-2"
-                                >
-                                  <label className="text-gray-400 text-sm capitalize">
-                                    {weatherKey.replace(/_/g, " ")}
-                                  </label>
-                                  <input
-                                    type="number"
-                                    value={String(weatherValue || "")}
-                                    onChange={(e) => {
-                                      const updatedWeather = {
-                                        ...(value as Record<string, number>),
-                                        [weatherKey]: Number(e.target.value),
-                                      };
-                                      updateMissionSetting(
-                                        "planning_constraints",
-                                        constraintType,
-                                        updatedWeather,
-                                      );
-                                    }}
-                                    disabled={!isEditingSettings}
-                                    className={`bg-gray-700 text-white px-3 py-1 rounded text-sm w-24 ${
-                                      !isEditingSettings
-                                        ? "opacity-60 cursor-not-allowed"
-                                        : ""
-                                    }`}
-                                  />
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <input
-                              type={
-                                typeof value === "boolean"
-                                  ? "checkbox"
-                                  : typeof value === "number"
-                                    ? "number"
-                                    : "text"
-                              }
-                              checked={
-                                typeof value === "boolean"
-                                  ? (value as boolean)
-                                  : undefined
-                              }
-                              value={
-                                typeof value === "number" ||
-                                typeof value === "string"
-                                  ? String(value)
-                                  : undefined
-                              }
-                              onChange={(e) => {
-                                const newValue =
-                                  typeof value === "boolean"
-                                    ? e.target.checked
-                                    : typeof value === "number"
-                                      ? Number(e.target.value)
-                                      : e.target.value;
-                                updateMissionSetting(
-                                  "planning_constraints",
-                                  constraintType,
-                                  newValue,
-                                );
-                              }}
-                              disabled={!isEditingSettings}
-                              className={`${
-                                typeof value === "boolean"
-                                  ? "h-4 w-4 rounded text-blue-600"
-                                  : "bg-gray-700 text-white px-3 py-1 rounded text-sm w-24"
-                              } ${
-                                !isEditingSettings
-                                  ? "opacity-60 cursor-not-allowed"
-                                  : ""
-                              }`}
-                            />
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Output Settings */}
-                  <div className="bg-gray-800 p-4 rounded-lg">
-                    <h3 className="text-white font-semibold mb-4">
-                      Output Settings
-                    </h3>
-                    <div className="space-y-4">
-                      {Object.entries(
-                        missionSettings.output_settings || {},
-                      ).map(([key, value]) => (
-                        <div key={key} className="space-y-2">
-                          <label className="text-gray-300 text-sm capitalize font-semibold">
-                            {key.replace(/_/g, " ")}
-                          </label>
-                          {Array.isArray(value) ? (
-                            <div className="bg-gray-700 p-3 rounded">
-                              <div className="text-gray-300 text-sm">
-                                {(value as string[]).join(", ")}
-                              </div>
-                              <div className="text-xs text-gray-500 mt-1">
-                                Array values (read-only)
-                              </div>
-                            </div>
-                          ) : typeof value === "object" && value !== null ? (
-                            <div className="bg-gray-700 p-3 rounded space-y-2">
-                              {Object.entries(
-                                value as Record<
-                                  string,
-                                  string | number | boolean
-                                >,
-                              ).map(([subKey, subValue]) => (
-                                <div
-                                  key={subKey}
-                                  className="flex items-center justify-between"
-                                >
-                                  <span className="text-gray-300 text-sm capitalize">
-                                    {subKey.replace(/_/g, " ")}:
-                                  </span>
-                                  {typeof subValue === "boolean" ? (
-                                    <select
-                                      value={subValue.toString()}
-                                      onChange={(e) => {
-                                        const updatedObj = {
-                                          ...(value as Record<
-                                            string,
-                                            string | number | boolean
-                                          >),
-                                          [subKey]: e.target.value === "true",
-                                        };
-                                        updateMissionSetting(
-                                          "output_settings",
-                                          key,
-                                          updatedObj,
-                                        );
-                                      }}
-                                      disabled={!isEditingSettings}
-                                      className={`w-24 bg-gray-600 text-white px-2 py-1 rounded text-sm ${
-                                        !isEditingSettings
-                                          ? "opacity-60 cursor-not-allowed"
-                                          : ""
-                                      }`}
-                                    >
-                                      <option value="true">Yes</option>
-                                      <option value="false">No</option>
-                                    </select>
-                                  ) : (
-                                    <input
-                                      type="text"
-                                      value={String(subValue || "")}
-                                      onChange={(e) => {
-                                        const updatedObj = {
-                                          ...(value as Record<
-                                            string,
-                                            string | number | boolean
-                                          >),
-                                          [subKey]: e.target.value,
-                                        };
-                                        updateMissionSetting(
-                                          "output_settings",
-                                          key,
-                                          updatedObj,
-                                        );
-                                      }}
-                                      disabled={!isEditingSettings}
-                                      className={`w-32 bg-gray-600 text-white px-2 py-1 rounded text-sm ${
-                                        !isEditingSettings
-                                          ? "opacity-60 cursor-not-allowed"
-                                          : ""
-                                      }`}
-                                    />
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          ) : typeof value === "boolean" ? (
-                            <select
-                              value={value.toString()}
-                              onChange={(e) =>
-                                updateMissionSetting(
-                                  "output_settings",
-                                  key,
-                                  e.target.value === "true",
-                                )
-                              }
-                              disabled={!isEditingSettings}
-                              className={`w-full bg-gray-700 text-white px-3 py-2 rounded ${
-                                !isEditingSettings
-                                  ? "opacity-60 cursor-not-allowed"
-                                  : ""
-                              }`}
-                            >
-                              <option value="true">Enabled</option>
-                              <option value="false">Disabled</option>
-                            </select>
-                          ) : (
-                            <input
-                              type="text"
-                              value={String(value || "")}
-                              onChange={(e) =>
-                                updateMissionSetting(
-                                  "output_settings",
-                                  key,
-                                  e.target.value,
-                                )
-                              }
-                              disabled={!isEditingSettings}
-                              className={`w-full bg-gray-700 text-white px-3 py-2 rounded ${
-                                !isEditingSettings
-                                  ? "opacity-60 cursor-not-allowed"
-                                  : ""
-                              }`}
-                            />
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Defaults Section */}
-                  <div className="bg-gray-800 p-4 rounded-lg">
-                    <h3 className="text-white font-semibold mb-4">
-                      Default Settings
-                    </h3>
-                    <div className="grid grid-cols-2 gap-4">
-                      {Object.entries(missionSettings.defaults || {}).map(
-                        ([key, value]) => (
-                          <div key={key} className="space-y-2">
-                            <label className="text-gray-300 text-sm capitalize">
-                              {key.replace(/_/g, " ")}
-                            </label>
-                            {typeof value === "boolean" ? (
-                              <select
-                                value={value.toString()}
-                                onChange={(e) =>
-                                  updateMissionSetting(
-                                    "defaults",
-                                    key,
-                                    e.target.value === "true",
-                                  )
-                                }
-                                disabled={!isEditingSettings}
-                                className={`w-full bg-gray-700 text-white px-3 py-2 rounded ${
-                                  !isEditingSettings
-                                    ? "opacity-60 cursor-not-allowed"
-                                    : ""
-                                }`}
-                              >
-                                <option value="true">Yes</option>
-                                <option value="false">No</option>
-                              </select>
-                            ) : typeof value === "number" ? (
-                              <input
-                                type="number"
-                                value={String(value || "")}
-                                onChange={(e) =>
-                                  updateMissionSetting(
-                                    "defaults",
-                                    key,
-                                    parseFloat(e.target.value),
-                                  )
-                                }
-                                disabled={!isEditingSettings}
-                                className={`w-full bg-gray-700 text-white px-3 py-2 rounded ${
-                                  !isEditingSettings
-                                    ? "opacity-60 cursor-not-allowed"
-                                    : ""
-                                }`}
-                                step="0.1"
-                              />
-                            ) : (
-                              <input
-                                type="text"
-                                value={String(value || "")}
-                                onChange={(e) =>
-                                  updateMissionSetting(
-                                    "defaults",
-                                    key,
-                                    e.target.value,
-                                  )
-                                }
-                                disabled={!isEditingSettings}
-                                className={`w-full bg-gray-700 text-white px-3 py-2 rounded ${
-                                  !isEditingSettings
-                                    ? "opacity-60 cursor-not-allowed"
-                                    : ""
-                                }`}
-                              />
-                            )}
-                          </div>
-                        ),
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
+            <SettingsTab onConfigUpdate={onConfigUpdate} />
           )}
 
           {/* SAR Modes Tab */}
           {activeTab === "sar-modes" && (
-            <div className="space-y-4">
-              <div className="bg-gray-800 p-4 rounded-lg">
-                <div className="flex justify-between items-center mb-4">
-                  <h3 className="text-white font-semibold">
-                    SAR Imaging Modes
-                  </h3>
-                  <div className="text-xs text-gray-400">
-                    Config Hash:{" "}
-                    {currentConfigHash.substring(0, 8) || "loading..."}
-                  </div>
-                </div>
-                <p className="text-gray-400 text-sm mb-4">
-                  Configure incidence angle ranges, scene dimensions, and
-                  quality parameters for each SAR imaging mode.
-                </p>
-
-                {Object.keys(sarModes).length === 0 ? (
-                  <p className="text-gray-500 text-center py-8">
-                    Loading SAR modes...
-                  </p>
-                ) : (
-                  <div className="space-y-4">
-                    {Object.entries(sarModes).map(([modeName, mode]) => (
-                      <div
-                        key={modeName}
-                        className="bg-gray-700 p-4 rounded-lg"
-                      >
-                        {editingSarMode === modeName && editingSarModeData ? (
-                          <div className="space-y-4">
-                            <div className="flex justify-between items-center">
-                              <h4 className="text-white font-medium capitalize">
-                                {modeName}
-                              </h4>
-                              <div className="flex space-x-2">
-                                <button
-                                  onClick={() =>
-                                    saveSarMode(modeName, editingSarModeData)
-                                  }
-                                  disabled={isSavingSarMode}
-                                  className="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 text-sm flex items-center space-x-1"
-                                >
-                                  <Save className="w-3 h-3" />
-                                  <span>
-                                    {isSavingSarMode ? "Saving..." : "Save"}
-                                  </span>
-                                </button>
-                                <button
-                                  onClick={() => {
-                                    setEditingSarMode(null);
-                                    setEditingSarModeData(null);
-                                  }}
-                                  className="px-3 py-1 bg-gray-600 text-white rounded hover:bg-gray-500 text-sm"
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                            </div>
-
-                            {/* Incidence Angles */}
-                            <div className="grid grid-cols-2 gap-4">
-                              <div>
-                                <label className="text-gray-300 text-xs block mb-1">
-                                  Recommended Min (°)
-                                </label>
-                                <input
-                                  type="number"
-                                  value={
-                                    editingSarModeData.incidence_angle
-                                      .recommended_min
-                                  }
-                                  onChange={(e) =>
-                                    setEditingSarModeData({
-                                      ...editingSarModeData,
-                                      incidence_angle: {
-                                        ...editingSarModeData.incidence_angle,
-                                        recommended_min: parseFloat(
-                                          e.target.value,
-                                        ),
-                                      },
-                                    })
-                                  }
-                                  className="w-full bg-gray-600 text-white px-2 py-1 rounded text-sm"
-                                />
-                              </div>
-                              <div>
-                                <label className="text-gray-300 text-xs block mb-1">
-                                  Recommended Max (°)
-                                </label>
-                                <input
-                                  type="number"
-                                  value={
-                                    editingSarModeData.incidence_angle
-                                      .recommended_max
-                                  }
-                                  onChange={(e) =>
-                                    setEditingSarModeData({
-                                      ...editingSarModeData,
-                                      incidence_angle: {
-                                        ...editingSarModeData.incidence_angle,
-                                        recommended_max: parseFloat(
-                                          e.target.value,
-                                        ),
-                                      },
-                                    })
-                                  }
-                                  className="w-full bg-gray-600 text-white px-2 py-1 rounded text-sm"
-                                />
-                              </div>
-                              <div>
-                                <label className="text-gray-300 text-xs block mb-1">
-                                  Absolute Min (°)
-                                </label>
-                                <input
-                                  type="number"
-                                  value={
-                                    editingSarModeData.incidence_angle
-                                      .absolute_min
-                                  }
-                                  onChange={(e) =>
-                                    setEditingSarModeData({
-                                      ...editingSarModeData,
-                                      incidence_angle: {
-                                        ...editingSarModeData.incidence_angle,
-                                        absolute_min: parseFloat(
-                                          e.target.value,
-                                        ),
-                                      },
-                                    })
-                                  }
-                                  className="w-full bg-gray-600 text-white px-2 py-1 rounded text-sm"
-                                />
-                              </div>
-                              <div>
-                                <label className="text-gray-300 text-xs block mb-1">
-                                  Absolute Max (°)
-                                </label>
-                                <input
-                                  type="number"
-                                  value={
-                                    editingSarModeData.incidence_angle
-                                      .absolute_max
-                                  }
-                                  onChange={(e) =>
-                                    setEditingSarModeData({
-                                      ...editingSarModeData,
-                                      incidence_angle: {
-                                        ...editingSarModeData.incidence_angle,
-                                        absolute_max: parseFloat(
-                                          e.target.value,
-                                        ),
-                                      },
-                                    })
-                                  }
-                                  className="w-full bg-gray-600 text-white px-2 py-1 rounded text-sm"
-                                />
-                              </div>
-                            </div>
-
-                            {/* Scene Dimensions */}
-                            <div className="grid grid-cols-2 gap-4">
-                              <div>
-                                <label className="text-gray-300 text-xs block mb-1">
-                                  Scene Width (km)
-                                </label>
-                                <input
-                                  type="number"
-                                  value={editingSarModeData.scene.width_km}
-                                  onChange={(e) =>
-                                    setEditingSarModeData({
-                                      ...editingSarModeData,
-                                      scene: {
-                                        ...editingSarModeData.scene,
-                                        width_km: parseFloat(e.target.value),
-                                      },
-                                    })
-                                  }
-                                  className="w-full bg-gray-600 text-white px-2 py-1 rounded text-sm"
-                                />
-                              </div>
-                              <div>
-                                <label className="text-gray-300 text-xs block mb-1">
-                                  Scene Length (km)
-                                </label>
-                                <input
-                                  type="number"
-                                  value={editingSarModeData.scene.length_km}
-                                  onChange={(e) =>
-                                    setEditingSarModeData({
-                                      ...editingSarModeData,
-                                      scene: {
-                                        ...editingSarModeData.scene,
-                                        length_km: parseFloat(e.target.value),
-                                      },
-                                    })
-                                  }
-                                  className="w-full bg-gray-600 text-white px-2 py-1 rounded text-sm"
-                                />
-                              </div>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="flex justify-between items-start">
-                            <div className="flex-1">
-                              <h4 className="text-white font-medium">
-                                {mode.display_name}
-                              </h4>
-                              <p className="text-gray-400 text-sm mt-1">
-                                {mode.description}
-                              </p>
-                              <div className="grid grid-cols-2 gap-4 mt-3 text-xs text-gray-500">
-                                <div>
-                                  <span className="text-gray-400">
-                                    Incidence:
-                                  </span>{" "}
-                                  {mode.incidence_angle.recommended_min}° -{" "}
-                                  {mode.incidence_angle.recommended_max}°
-                                  <span className="text-gray-600 ml-1">
-                                    (abs: {mode.incidence_angle.absolute_min}° -{" "}
-                                    {mode.incidence_angle.absolute_max}°)
-                                  </span>
-                                </div>
-                                <div>
-                                  <span className="text-gray-400">Scene:</span>{" "}
-                                  {mode.scene.width_km}km ×{" "}
-                                  {mode.scene.length_km}km
-                                </div>
-                                <div>
-                                  <span className="text-gray-400">
-                                    Resolution:
-                                  </span>{" "}
-                                  {mode.collection.azimuth_resolution_m}m ×{" "}
-                                  {mode.collection.range_resolution_m}m
-                                </div>
-                                <div>
-                                  <span className="text-gray-400">
-                                    Optimal Incidence:
-                                  </span>{" "}
-                                  {mode.quality.optimal_incidence_deg}°
-                                </div>
-                              </div>
-                            </div>
-                            <button
-                              onClick={() => {
-                                setEditingSarMode(modeName);
-                                setEditingSarModeData({ ...mode });
-                              }}
-                              className="p-2 text-gray-400 hover:text-white"
-                              title="Edit SAR mode"
-                            >
-                              <Edit2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
+            <SarModesTab onConfigUpdate={onConfigUpdate} />
           )}
 
           {/* Snapshots Tab */}
           {activeTab === "snapshots" && (
-            <div className="space-y-4">
-              <div className="bg-gray-800 p-4 rounded-lg">
-                <div className="flex justify-between items-center mb-4">
-                  <h3 className="text-white font-semibold">
-                    Configuration Snapshots
-                  </h3>
-                  <div className="text-xs text-gray-400">
-                    Current Hash:{" "}
-                    {currentConfigHash.substring(0, 8) || "loading..."}
-                  </div>
-                </div>
-                <p className="text-gray-400 text-sm mb-4">
-                  Create snapshots of your configuration to enable versioning
-                  and rollback capabilities.
-                </p>
-
-                {/* Create Snapshot */}
-                <div className="bg-gray-700 p-4 rounded-lg mb-4">
-                  <h4 className="text-white font-medium mb-3">
-                    Create New Snapshot
-                  </h4>
-                  <div className="flex space-x-2">
-                    <input
-                      type="text"
-                      value={snapshotDescription}
-                      onChange={(e) => setSnapshotDescription(e.target.value)}
-                      placeholder="Optional description..."
-                      className="flex-1 bg-gray-600 text-white px-3 py-2 rounded"
-                    />
-                    <button
-                      onClick={createSnapshot}
-                      disabled={isCreatingSnapshot}
-                      className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center space-x-2"
-                    >
-                      <Download className="w-4 h-4" />
-                      <span>
-                        {isCreatingSnapshot ? "Creating..." : "Create Snapshot"}
-                      </span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Snapshots List */}
-                <div className="space-y-2">
-                  {snapshots.length === 0 ? (
-                    <p className="text-gray-500 text-center py-4">
-                      No snapshots yet. Create one to enable config versioning.
-                    </p>
-                  ) : (
-                    snapshots.map((snapshot) => (
-                      <div
-                        key={snapshot.id}
-                        className="bg-gray-700 p-3 rounded-lg flex justify-between items-center"
-                      >
-                        <div>
-                          <div className="text-white font-medium text-sm">
-                            {snapshot.id}
-                          </div>
-                          <div className="text-gray-400 text-xs">
-                            {new Date(snapshot.timestamp).toLocaleString()}
-                            {snapshot.description && (
-                              <span className="ml-2">
-                                - {snapshot.description}
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-gray-500 text-xs mt-1">
-                            Hash: {snapshot.config_hash.substring(0, 8)} |
-                            Files: {snapshot.files.join(", ")}
-                          </div>
-                        </div>
-                        <div className="flex space-x-2">
-                          <button
-                            onClick={() => restoreSnapshot(snapshot.id)}
-                            disabled={isRestoringSnapshot === snapshot.id}
-                            className="px-3 py-1 bg-yellow-600 text-white rounded hover:bg-yellow-700 text-sm flex items-center space-x-1"
-                            title="Restore this snapshot"
-                          >
-                            <RotateCcw className="w-3 h-3" />
-                            <span>
-                              {isRestoringSnapshot === snapshot.id
-                                ? "Restoring..."
-                                : "Restore"}
-                            </span>
-                          </button>
-                          <button
-                            onClick={() => deleteSnapshot(snapshot.id)}
-                            className="p-1 text-gray-400 hover:text-red-400"
-                            title="Delete snapshot"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
+            <SnapshotsTab onConfigUpdate={onConfigUpdate} />
           )}
 
-          {/* Validation Tab Content (PR-VALIDATION-01) */}
-          {activeTab === "validation" && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-semibold text-white flex items-center space-x-2">
-                  <FlaskConical className="w-5 h-5" />
-                  <span>Workflow Validation</span>
-                </h3>
-                <span className="text-xs text-gray-500">Debug/Admin Mode</span>
-              </div>
-
-              <p className="text-gray-400 text-sm">
-                Run deterministic validation scenarios to verify mission
-                analysis → planning → commit workflows.
-              </p>
-
-              {/* Scenario Selection */}
-              <div className="bg-gray-800 p-4 rounded-lg space-y-4">
-                <div>
-                  <label className="block text-sm text-gray-400 mb-2">
-                    Select Scenario
-                  </label>
-                  <select
-                    value={selectedScenarioId}
-                    onChange={(e) => setSelectedScenarioId(e.target.value)}
-                    className="w-full bg-gray-700 text-white rounded px-3 py-2 border border-gray-600 focus:border-blue-500 focus:outline-none"
-                  >
-                    {validationScenarios.length === 0 ? (
-                      <option value="">No scenarios available</option>
-                    ) : (
-                      validationScenarios.map((scenario) => (
-                        <option key={scenario.id} value={scenario.id}>
-                          {scenario.name} ({scenario.num_satellites} satellites,{" "}
-                          {scenario.num_targets} targets)
-                        </option>
-                      ))
-                    )}
-                  </select>
-                </div>
-
-                <button
-                  onClick={handleRunValidation}
-                  disabled={isRunningValidation || !selectedScenarioId}
-                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
-                >
-                  {isRunningValidation ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>Running...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-4 h-4" />
-                      <span>Run Validation</span>
-                    </>
-                  )}
-                </button>
-              </div>
-
-              {/* Error Display */}
-              {validationError && (
-                <div className="bg-red-900/50 border border-red-600 rounded-lg p-4 flex items-start space-x-3">
-                  <XCircle className="w-5 h-5 text-red-400 mt-0.5" />
-                  <div>
-                    <h4 className="text-red-200 font-medium">
-                      Validation Failed
-                    </h4>
-                    <p className="text-red-300 text-sm mt-1">
-                      {validationError}
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {/* Report Display */}
-              {validationReport && (
-                <div
-                  className={`border rounded-lg p-4 ${
-                    validationReport.passed
-                      ? "bg-green-900/30 border-green-600"
-                      : "bg-red-900/30 border-red-600"
-                  }`}
-                >
-                  <div className="flex items-center space-x-3 mb-4">
-                    {validationReport.passed ? (
-                      <CheckCircle className="w-6 h-6 text-green-400" />
-                    ) : (
-                      <XCircle className="w-6 h-6 text-red-400" />
-                    )}
-                    <h4
-                      className={`text-lg font-medium ${
-                        validationReport.passed
-                          ? "text-green-200"
-                          : "text-red-200"
-                      }`}
-                    >
-                      {validationReport.passed
-                        ? "Validation Passed"
-                        : "Validation Failed"}
-                    </h4>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div>
-                      <span className="text-gray-400">Scenario:</span>
-                      <span className="text-white ml-2">
-                        {validationReport.scenario_name}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-gray-400">Runtime:</span>
-                      <span className="text-white ml-2">
-                        {validationReport.total_runtime_ms.toFixed(0)}ms
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-gray-400">Invariants:</span>
-                      <span className="text-white ml-2">
-                        {validationReport.passed_invariants}/
-                        {validationReport.total_invariants} passed
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-gray-400">Report Hash:</span>
-                      <span className="text-white ml-2 font-mono text-xs">
-                        {validationReport.report_hash}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Counts */}
-                  <div className="mt-4 pt-4 border-t border-gray-700">
-                    <h5 className="text-gray-300 text-sm font-medium mb-2">
-                      Counts
-                    </h5>
-                    <div className="grid grid-cols-4 gap-2 text-sm">
-                      <div className="bg-gray-800 rounded p-2 text-center">
-                        <div className="text-xl font-bold text-white">
-                          {validationReport.counts.opportunities}
-                        </div>
-                        <div className="text-gray-400 text-xs">
-                          Opportunities
-                        </div>
-                      </div>
-                      <div className="bg-gray-800 rounded p-2 text-center">
-                        <div className="text-xl font-bold text-white">
-                          {validationReport.counts.planned}
-                        </div>
-                        <div className="text-gray-400 text-xs">Planned</div>
-                      </div>
-                      <div className="bg-gray-800 rounded p-2 text-center">
-                        <div className="text-xl font-bold text-white">
-                          {validationReport.counts.committed}
-                        </div>
-                        <div className="text-gray-400 text-xs">Committed</div>
-                      </div>
-                      <div className="bg-gray-800 rounded p-2 text-center">
-                        <div className="text-xl font-bold text-white">
-                          {validationReport.counts.conflicts}
-                        </div>
-                        <div className="text-gray-400 text-xs">Conflicts</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Invariants */}
-                  {validationReport.invariants.length > 0 && (
-                    <div className="mt-4 pt-4 border-t border-gray-700">
-                      <h5 className="text-gray-300 text-sm font-medium mb-2">
-                        Invariant Checks
-                      </h5>
-                      <div className="space-y-2">
-                        {validationReport.invariants.map((inv, idx) => (
-                          <div
-                            key={idx}
-                            className={`flex items-center space-x-2 text-sm ${
-                              inv.passed ? "text-green-300" : "text-red-300"
-                            }`}
-                          >
-                            {inv.passed ? (
-                              <CheckCircle className="w-4 h-4" />
-                            ) : (
-                              <XCircle className="w-4 h-4" />
-                            )}
-                            <span className="font-mono text-xs">
-                              {inv.invariant}
-                            </span>
-                            <span className="text-gray-400">-</span>
-                            <span>{inv.message}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Report ID for reference */}
-                  <div className="mt-4 pt-4 border-t border-gray-700 text-xs text-gray-500">
-                    Report ID: {validationReport.report_id}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+          {/* Validation Tab */}
+          {activeTab === "validation" && <ValidationTab />}
         </div>
       </div>
 

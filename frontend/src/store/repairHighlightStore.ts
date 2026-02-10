@@ -11,7 +11,7 @@
  */
 
 import { create } from "zustand";
-import { subscribeWithSelector } from "zustand/middleware";
+import { devtools, subscribeWithSelector } from "zustand/middleware";
 import type {
   RepairDiff,
   MovedAcquisitionInfo,
@@ -144,193 +144,196 @@ const initialState: RepairHighlightState = {
 export const useRepairHighlightStore = create<
   RepairHighlightState & RepairHighlightActions
 >()(
-  subscribeWithSelector((set, get) => ({
-    ...initialState,
+  devtools(
+    subscribeWithSelector((set, get) => ({
+      ...initialState,
 
-    setRepairDiff: (diff, metrics) => {
-      if (isDev) {
-        console.log(
-          "[RepairHighlight] Setting repair diff:",
-          diff
-            ? `${diff.kept.length} kept, ${diff.dropped.length} dropped, ${diff.added.length} added, ${diff.moved.length} moved`
-            : "null",
-        );
-      }
-
-      set({
-        repairDiff: diff,
-        metricsComparison: metrics,
-        isPreviewMode: diff !== null,
-        selectedDiffItem: null,
-        highlightedEntityIds: [],
-        ghostEntityIds: [],
-        repairTimeRange: null,
-        shouldFocusTimeline: false,
-      });
-    },
-
-    selectDiffItem: (id, type, itemData) => {
-      if (isDev) {
-        console.log(`[RepairHighlight] Selecting diff item: ${id} (${type})`);
-      }
-
-      set({ isProcessing: true });
-
-      const { repairDiff } = get();
-
-      // Build entity ID patterns for highlighting
-      const entityIds: string[] = [];
-      const ghostIds: string[] = [];
-
-      // Add common entity ID patterns
-      entityIds.push(id);
-      entityIds.push(`sar_swath_${id}`);
-      entityIds.push(`swath_${id}`);
-      entityIds.push(`opp_${id}`);
-      entityIds.push(`target_${id}`);
-      entityIds.push(`acq_${id}`);
-
-      // For moved items, also add ghost entities for the previous position
-      let movedInfo: MovedAcquisitionInfo | undefined;
-      if (type === "moved" && repairDiff) {
-        movedInfo = repairDiff.moved.find((m) => m.id === id);
-        if (movedInfo) {
-          // Ghost entities show the "from" position
-          ghostIds.push(`ghost_${id}`);
-          ghostIds.push(`ghost_swath_${id}`);
-        }
-      }
-
-      // Compute time range for timeline focus
-      let timeRange: RepairTimeRange | null = null;
-      let focusTarget: {
-        latitude: number;
-        longitude: number;
-        itemId: string;
-      } | null = null;
-
-      if (itemData) {
-        if (itemData.start_time && itemData.end_time) {
-          timeRange = {
-            start: itemData.start_time,
-            end: itemData.end_time,
-            padding: 3, // 3 minutes padding
-          };
+      setRepairDiff: (diff, metrics) => {
+        if (isDev) {
+          console.log(
+            "[RepairHighlight] Setting repair diff:",
+            diff
+              ? `${diff.kept.length} kept, ${diff.dropped.length} dropped, ${diff.added.length} added, ${diff.moved.length} moved`
+              : "null",
+          );
         }
 
-        // For moved items, extend the time range to cover both positions
-        if (movedInfo) {
-          const fromStart = new Date(movedInfo.from_start).getTime();
-          const fromEnd = new Date(movedInfo.from_end).getTime();
-          const toStart = new Date(movedInfo.to_start).getTime();
-          const toEnd = new Date(movedInfo.to_end).getTime();
+        set({
+          repairDiff: diff,
+          metricsComparison: metrics,
+          isPreviewMode: diff !== null,
+          selectedDiffItem: null,
+          highlightedEntityIds: [],
+          ghostEntityIds: [],
+          repairTimeRange: null,
+          shouldFocusTimeline: false,
+        });
+      },
 
-          timeRange = {
-            start: new Date(Math.min(fromStart, toStart)).toISOString(),
-            end: new Date(Math.max(fromEnd, toEnd)).toISOString(),
-            padding: 5, // More padding for moved items
-          };
+      selectDiffItem: (id, type, itemData) => {
+        if (isDev) {
+          console.log(`[RepairHighlight] Selecting diff item: ${id} (${type})`);
         }
 
-        if (
-          itemData.latitude !== undefined &&
-          itemData.longitude !== undefined
-        ) {
-          focusTarget = {
-            latitude: itemData.latitude,
-            longitude: itemData.longitude,
-            itemId: id,
-          };
+        set({ isProcessing: true });
+
+        const { repairDiff } = get();
+
+        // Build entity ID patterns for highlighting
+        const entityIds: string[] = [];
+        const ghostIds: string[] = [];
+
+        // Add common entity ID patterns
+        entityIds.push(id);
+        entityIds.push(`sar_swath_${id}`);
+        entityIds.push(`swath_${id}`);
+        entityIds.push(`opp_${id}`);
+        entityIds.push(`target_${id}`);
+        entityIds.push(`acq_${id}`);
+
+        // For moved items, also add ghost entities for the previous position
+        let movedInfo: MovedAcquisitionInfo | undefined;
+        if (type === "moved" && repairDiff) {
+          movedInfo = repairDiff.moved.find((m) => m.id === id);
+          if (movedInfo) {
+            // Ghost entities show the "from" position
+            ghostIds.push(`ghost_${id}`);
+            ghostIds.push(`ghost_swath_${id}`);
+          }
         }
-      }
 
-      const uniqueEntityIds = [...new Set(entityIds)];
-      const uniqueGhostIds = [...new Set(ghostIds)];
+        // Compute time range for timeline focus
+        let timeRange: RepairTimeRange | null = null;
+        let focusTarget: {
+          latitude: number;
+          longitude: number;
+          itemId: string;
+        } | null = null;
 
-      set({
-        selectedDiffItem: { id, type, movedInfo },
-        highlightedEntityIds: uniqueEntityIds,
-        ghostEntityIds: uniqueGhostIds,
-        repairTimeRange: timeRange,
-        shouldFocusTimeline: timeRange !== null,
-        cameraFocusTarget: focusTarget,
-        isProcessing: false,
-      });
+        if (itemData) {
+          if (itemData.start_time && itemData.end_time) {
+            timeRange = {
+              start: itemData.start_time,
+              end: itemData.end_time,
+              padding: 3, // 3 minutes padding
+            };
+          }
 
-      if (isDev) {
-        console.log(
-          `[RepairHighlight] Highlighted ${uniqueEntityIds.length} entities, ${uniqueGhostIds.length} ghost entities`,
-        );
-      }
-    },
+          // For moved items, extend the time range to cover both positions
+          if (movedInfo) {
+            const fromStart = new Date(movedInfo.from_start).getTime();
+            const fromEnd = new Date(movedInfo.from_end).getTime();
+            const toStart = new Date(movedInfo.to_start).getTime();
+            const toEnd = new Date(movedInfo.to_end).getTime();
 
-    clearSelection: () => {
-      if (isDev) {
-        console.log("[RepairHighlight] Clearing selection");
-      }
+            timeRange = {
+              start: new Date(Math.min(fromStart, toStart)).toISOString(),
+              end: new Date(Math.max(fromEnd, toEnd)).toISOString(),
+              padding: 5, // More padding for moved items
+            };
+          }
 
-      set({
-        selectedDiffItem: null,
-        highlightedEntityIds: [],
-        ghostEntityIds: [],
-        repairTimeRange: null,
-        shouldFocusTimeline: false,
-        cameraFocusTarget: null,
-      });
-    },
+          if (
+            itemData.latitude !== undefined &&
+            itemData.longitude !== undefined
+          ) {
+            focusTarget = {
+              latitude: itemData.latitude,
+              longitude: itemData.longitude,
+              itemId: id,
+            };
+          }
+        }
 
-    clearRepairState: () => {
-      if (isDev) {
-        console.log("[RepairHighlight] Clearing all repair state");
-      }
+        const uniqueEntityIds = [...new Set(entityIds)];
+        const uniqueGhostIds = [...new Set(ghostIds)];
 
-      set(initialState);
-    },
+        set({
+          selectedDiffItem: { id, type, movedInfo },
+          highlightedEntityIds: uniqueEntityIds,
+          ghostEntityIds: uniqueGhostIds,
+          repairTimeRange: timeRange,
+          shouldFocusTimeline: timeRange !== null,
+          cameraFocusTarget: focusTarget,
+          isProcessing: false,
+        });
 
-    setRepairTimeRange: (range) => {
-      set({ repairTimeRange: range, shouldFocusTimeline: range !== null });
-    },
+        if (isDev) {
+          console.log(
+            `[RepairHighlight] Highlighted ${uniqueEntityIds.length} entities, ${uniqueGhostIds.length} ghost entities`,
+          );
+        }
+      },
 
-    focusTimelineOnRepairItem: () => {
-      set({ shouldFocusTimeline: true });
-    },
+      clearSelection: () => {
+        if (isDev) {
+          console.log("[RepairHighlight] Clearing selection");
+        }
 
-    clearTimelineFocus: () => {
-      set({ shouldFocusTimeline: false });
-    },
+        set({
+          selectedDiffItem: null,
+          highlightedEntityIds: [],
+          ghostEntityIds: [],
+          repairTimeRange: null,
+          shouldFocusTimeline: false,
+          cameraFocusTarget: null,
+        });
+      },
 
-    setCameraFocusTarget: (target) => {
-      set({ cameraFocusTarget: target });
-    },
+      clearRepairState: () => {
+        if (isDev) {
+          console.log("[RepairHighlight] Clearing all repair state");
+        }
 
-    setPreviewMode: (isPreview) => {
-      set({ isPreviewMode: isPreview });
-    },
+        set(initialState);
+      },
 
-    getItemsByType: (type) => {
-      const { repairDiff } = get();
-      if (!repairDiff) return [];
+      setRepairTimeRange: (range) => {
+        set({ repairTimeRange: range, shouldFocusTimeline: range !== null });
+      },
 
-      switch (type) {
-        case "kept":
-          return repairDiff.kept;
-        case "dropped":
-          return repairDiff.dropped;
-        case "added":
-          return repairDiff.added;
-        case "moved":
-          return repairDiff.moved.map((m) => m.id);
-        default:
-          return [];
-      }
-    },
+      focusTimelineOnRepairItem: () => {
+        set({ shouldFocusTimeline: true });
+      },
 
-    getMovedItemInfo: (id) => {
-      const { repairDiff } = get();
-      if (!repairDiff) return undefined;
-      return repairDiff.moved.find((m) => m.id === id);
-    },
-  })),
+      clearTimelineFocus: () => {
+        set({ shouldFocusTimeline: false });
+      },
+
+      setCameraFocusTarget: (target) => {
+        set({ cameraFocusTarget: target });
+      },
+
+      setPreviewMode: (isPreview) => {
+        set({ isPreviewMode: isPreview });
+      },
+
+      getItemsByType: (type) => {
+        const { repairDiff } = get();
+        if (!repairDiff) return [];
+
+        switch (type) {
+          case "kept":
+            return repairDiff.kept;
+          case "dropped":
+            return repairDiff.dropped;
+          case "added":
+            return repairDiff.added;
+          case "moved":
+            return repairDiff.moved.map((m) => m.id);
+          default:
+            return [];
+        }
+      },
+
+      getMovedItemInfo: (id) => {
+        const { repairDiff } = get();
+        if (!repairDiff) return undefined;
+        return repairDiff.moved.find((m) => m.id === id);
+      },
+    })),
+    { name: "RepairHighlightStore", enabled: import.meta.env?.DEV ?? false },
+  ),
 );
 
 // =============================================================================
