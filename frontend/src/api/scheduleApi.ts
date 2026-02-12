@@ -7,19 +7,17 @@
  * - Get schedule state
  */
 
-import { apiClient } from "./client";
-import { API_ENDPOINTS } from "./config";
+import { apiClient } from './client'
+import { API_ENDPOINTS } from './config'
 
 /** Build query string from optional params, skipping undefined values. */
-function buildQuery(
-  params: Record<string, string | number | boolean | undefined>,
-): string {
-  const sp = new URLSearchParams();
+function buildQuery(params: Record<string, string | number | boolean | undefined>): string {
+  const sp = new URLSearchParams()
   for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined && v !== null) sp.set(k, String(v));
+    if (v !== undefined && v !== null) sp.set(k, String(v))
   }
-  const qs = sp.toString();
-  return qs ? `?${qs}` : "";
+  const qs = sp.toString()
+  return qs ? `?${qs}` : ''
 }
 
 // =============================================================================
@@ -27,83 +25,83 @@ function buildQuery(
 // =============================================================================
 
 export interface DirectCommitItem {
-  opportunity_id: string;
-  satellite_id: string;
-  target_id: string;
-  start_time: string;
-  end_time: string;
-  roll_angle_deg: number;
-  pitch_angle_deg?: number;
-  value?: number;
-  incidence_angle_deg?: number;
-  sar_mode?: string;
-  look_side?: string;
-  pass_direction?: string;
+  opportunity_id: string
+  satellite_id: string
+  target_id: string
+  start_time: string
+  end_time: string
+  roll_angle_deg: number
+  pitch_angle_deg?: number
+  value?: number
+  incidence_angle_deg?: number
+  sar_mode?: string
+  look_side?: string
+  pass_direction?: string
 }
 
 export interface DirectCommitRequest {
-  items: DirectCommitItem[];
-  algorithm: string;
-  mode?: string; // OPTICAL | SAR
-  lock_level?: string; // none | hard
-  workspace_id?: string;
-  notes?: string;
+  items: DirectCommitItem[]
+  algorithm: string
+  mode?: string // OPTICAL | SAR
+  lock_level?: string // none | hard
+  workspace_id?: string
+  notes?: string
 }
 
 export interface DirectCommitResponse {
-  success: boolean;
-  message: string;
-  plan_id: string;
-  committed: number;
-  acquisition_ids: string[];
+  success: boolean
+  message: string
+  plan_id: string
+  committed: number
+  acquisition_ids: string[]
 }
 
 export interface AcquisitionSummary {
-  id: string;
-  satellite_id: string;
-  target_id: string;
-  start_time: string;
-  end_time: string;
-  state: string;
-  lock_level: string;
-  order_id?: string;
+  id: string
+  satellite_id: string
+  target_id: string
+  start_time: string
+  end_time: string
+  state: string
+  lock_level: string
+  order_id?: string
 }
 
 export interface HorizonInfo {
-  start: string;
-  end: string;
-  freeze_cutoff: string;
+  start: string
+  end: string
+  freeze_cutoff: string
 }
 
 export interface ScheduleHorizonResponse {
-  success: boolean;
-  horizon: HorizonInfo;
-  acquisitions: AcquisitionSummary[];
+  success: boolean
+  horizon: HorizonInfo
+  acquisitions: AcquisitionSummary[]
   statistics: {
-    total_acquisitions: number;
-    by_state: Record<string, number>;
-    by_satellite: Record<string, number>;
-  };
+    total_acquisitions: number
+    by_state: Record<string, number>
+    by_satellite: Record<string, number>
+  }
 }
 
 export interface OrderSummary {
-  id: string;
-  target_id: string;
-  priority: number;
-  status: string;
-  requested_window_start?: string;
-  requested_window_end?: string;
+  id: string
+  target_id: string
+  priority: number
+  status: string
+  requested_window_start?: string
+  requested_window_end?: string
 }
 
 export interface ScheduleStateResponse {
-  success: boolean;
-  message: string;
+  success: boolean
+  message: string
   state: {
-    acquisitions: AcquisitionSummary[];
-    orders: OrderSummary[];
-    conflicts: unknown[];
-    horizon?: HorizonInfo;
-  };
+    acquisitions: AcquisitionSummary[]
+    orders: OrderSummary[]
+    conflicts: unknown[]
+    horizon?: HorizonInfo
+  }
 }
 
 // =============================================================================
@@ -117,10 +115,7 @@ export interface ScheduleStateResponse {
 export async function commitScheduleDirect(
   request: DirectCommitRequest,
 ): Promise<DirectCommitResponse> {
-  return apiClient.post<DirectCommitResponse>(
-    API_ENDPOINTS.SCHEDULE_COMMIT_DIRECT,
-    request,
-  );
+  return apiClient.post<DirectCommitResponse>(API_ENDPOINTS.SCHEDULE_COMMIT_DIRECT, request)
 }
 
 /**
@@ -128,32 +123,26 @@ export async function commitScheduleDirect(
  * Returns committed acquisitions within the specified time window.
  */
 export async function getScheduleHorizon(params?: {
-  from?: string;
-  to?: string;
-  workspace_id?: string;
-  include_tentative?: boolean;
+  from?: string
+  to?: string
+  workspace_id?: string
+  include_tentative?: boolean
 }): Promise<ScheduleHorizonResponse> {
   const qs = buildQuery({
     from: params?.from,
     to: params?.to,
     workspace_id: params?.workspace_id,
     include_tentative: params?.include_tentative,
-  });
-  return apiClient.get<ScheduleHorizonResponse>(
-    `${API_ENDPOINTS.SCHEDULE_HORIZON}${qs}`,
-  );
+  })
+  return apiClient.get<ScheduleHorizonResponse>(`${API_ENDPOINTS.SCHEDULE_HORIZON}${qs}`)
 }
 
 /**
  * Get current schedule state (acquisitions, orders, conflicts).
  */
-export async function getScheduleState(
-  workspace_id?: string,
-): Promise<ScheduleStateResponse> {
-  const qs = buildQuery({ workspace_id });
-  return apiClient.get<ScheduleStateResponse>(
-    `${API_ENDPOINTS.SCHEDULE_STATE}${qs}`,
-  );
+export async function getScheduleState(workspace_id?: string): Promise<ScheduleStateResponse> {
+  const qs = buildQuery({ workspace_id })
+  return apiClient.get<ScheduleStateResponse>(`${API_ENDPOINTS.SCHEDULE_STATE}${qs}`)
 }
 
 // =============================================================================
@@ -161,74 +150,71 @@ export async function getScheduleState(
 // =============================================================================
 
 export interface Order {
-  id: string;
-  created_at: string;
-  updated_at: string;
-  status: string;
-  target_id: string;
-  priority: number;
-  constraints?: Record<string, unknown>;
+  id: string
+  created_at: string
+  updated_at: string
+  status: string
+  target_id: string
+  priority: number
+  constraints?: Record<string, unknown>
   requested_window?: {
-    start?: string;
-    end?: string;
-  };
-  source: string;
-  notes?: string;
-  external_ref?: string;
-  workspace_id?: string;
+    start?: string
+    end?: string
+  }
+  source: string
+  notes?: string
+  external_ref?: string
+  workspace_id?: string
   // PS2.5 Extended fields
-  order_type?: string;
-  due_time?: string;
-  earliest_start?: string;
-  latest_end?: string;
-  batch_id?: string;
-  tags?: string[];
-  requested_satellite_group?: string;
-  user_notes?: string;
-  reject_reason?: string;
+  order_type?: string
+  due_time?: string
+  earliest_start?: string
+  latest_end?: string
+  batch_id?: string
+  tags?: string[]
+  requested_satellite_group?: string
+  user_notes?: string
+  reject_reason?: string
 }
 
 export interface OrderListResponse {
-  success: boolean;
-  orders: Order[];
-  total: number;
+  success: boolean
+  orders: Order[]
+  total: number
 }
 
 /**
  * List orders with optional filters.
  */
 export async function listOrders(params?: {
-  status?: string;
-  workspace_id?: string;
-  limit?: number;
-  offset?: number;
+  status?: string
+  workspace_id?: string
+  limit?: number
+  offset?: number
 }): Promise<OrderListResponse> {
   const qs = buildQuery({
     status: params?.status,
     workspace_id: params?.workspace_id,
     limit: params?.limit,
     offset: params?.offset,
-  });
-  return apiClient.get<OrderListResponse>(`${API_ENDPOINTS.ORDERS}${qs}`);
+  })
+  return apiClient.get<OrderListResponse>(`${API_ENDPOINTS.ORDERS}${qs}`)
 }
 
 /**
  * Create a new order.
  */
 export async function createOrder(params: {
-  target_id: string;
-  priority?: number;
-  constraints?: Record<string, unknown>;
-  requested_window_start?: string;
-  requested_window_end?: string;
-  notes?: string;
-  external_ref?: string;
-  workspace_id?: string;
+  target_id: string
+  priority?: number
+  constraints?: Record<string, unknown>
+  requested_window_start?: string
+  requested_window_end?: string
+  notes?: string
+  external_ref?: string
+  workspace_id?: string
 }): Promise<{ success: boolean; order: Order }> {
-  return apiClient.post<{ success: boolean; order: Order }>(
-    API_ENDPOINTS.ORDERS,
-    params,
-  );
+  return apiClient.post<{ success: boolean; order: Order }>(API_ENDPOINTS.ORDERS, params)
 }
 
 /**
@@ -241,7 +227,7 @@ export async function updateOrderStatus(
   return apiClient.put<{ success: boolean; message: string; order?: Order }>(
     API_ENDPOINTS.ORDER_BY_ID(orderId),
     { status },
-  );
+  )
 }
 
 // =============================================================================
@@ -249,66 +235,66 @@ export async function updateOrderStatus(
 // =============================================================================
 
 export interface Conflict {
-  id: string;
-  detected_at: string;
-  type: "temporal_overlap" | "slew_infeasible";
-  severity: "error" | "warning" | "info";
-  description?: string;
-  acquisition_ids: string[];
-  resolved_at?: string;
-  resolution_action?: string;
+  id: string
+  detected_at: string
+  type: 'temporal_overlap' | 'slew_infeasible'
+  severity: 'error' | 'warning' | 'info'
+  description?: string
+  acquisition_ids: string[]
+  resolved_at?: string
+  resolution_action?: string
 }
 
 export interface ConflictsSummary {
-  total: number;
-  by_type: Record<string, number>;
-  by_severity: Record<string, number>;
-  error_count: number;
-  warning_count: number;
-  conflict_ids: string[];
+  total: number
+  by_type: Record<string, number>
+  by_severity: Record<string, number>
+  error_count: number
+  warning_count: number
+  conflict_ids: string[]
 }
 
 export interface ConflictListResponse {
-  success: boolean;
-  conflicts: Conflict[];
+  success: boolean
+  conflicts: Conflict[]
   summary: {
-    total: number;
-    by_type: Record<string, number>;
-    by_severity: Record<string, number>;
-  };
+    total: number
+    by_type: Record<string, number>
+    by_severity: Record<string, number>
+  }
 }
 
 export interface RecomputeConflictsRequest {
-  workspace_id: string;
-  from_time?: string;
-  to_time?: string;
-  satellite_id?: string;
+  workspace_id: string
+  from_time?: string
+  to_time?: string
+  satellite_id?: string
 }
 
 export interface RecomputeConflictsResponse {
-  success: boolean;
-  message: string;
-  detected: number;
-  persisted: number;
-  conflict_ids: string[];
+  success: boolean
+  message: string
+  detected: number
+  persisted: number
+  conflict_ids: string[]
   summary: {
-    total: number;
-    by_type: Record<string, number>;
-    by_severity: Record<string, number>;
-  };
+    total: number
+    by_type: Record<string, number>
+    by_severity: Record<string, number>
+  }
 }
 
 /**
  * Get schedule conflicts.
  */
 export async function getConflicts(params?: {
-  workspace_id?: string;
-  from?: string;
-  to?: string;
-  satellite_id?: string;
-  conflict_type?: string;
-  severity?: string;
-  include_resolved?: boolean;
+  workspace_id?: string
+  from?: string
+  to?: string
+  satellite_id?: string
+  conflict_type?: string
+  severity?: string
+  include_resolved?: boolean
 }): Promise<ConflictListResponse> {
   const qs = buildQuery({
     workspace_id: params?.workspace_id,
@@ -318,10 +304,8 @@ export async function getConflicts(params?: {
     conflict_type: params?.conflict_type,
     severity: params?.severity,
     include_resolved: params?.include_resolved,
-  });
-  return apiClient.get<ConflictListResponse>(
-    `${API_ENDPOINTS.SCHEDULE_CONFLICTS}${qs}`,
-  );
+  })
+  return apiClient.get<ConflictListResponse>(`${API_ENDPOINTS.SCHEDULE_CONFLICTS}${qs}`)
 }
 
 /**
@@ -333,93 +317,83 @@ export async function recomputeConflicts(
   return apiClient.post<RecomputeConflictsResponse>(
     API_ENDPOINTS.SCHEDULE_CONFLICTS_RECOMPUTE,
     request,
-  );
+  )
 }
 
 // =============================================================================
 // Incremental Planning API
 // =============================================================================
 
-export type PlanningMode = "from_scratch" | "incremental" | "repair";
-export type LockPolicy = "respect_hard_only";
-
-// Repair mode specific types
-export type RepairScope =
-  | "workspace_horizon"
-  | "satellite_subset"
-  | "target_subset";
-export type RepairObjective =
-  | "maximize_score"
-  | "maximize_priority"
-  | "minimize_changes";
+export type PlanningMode = 'from_scratch' | 'incremental' | 'repair'
+export type LockPolicy = 'respect_hard_only'
 
 export interface IncrementalPlanRequest {
-  planning_mode: PlanningMode;
-  horizon_from?: string;
-  horizon_to?: string;
-  workspace_id?: string;
-  include_tentative?: boolean;
-  lock_policy?: LockPolicy;
-  imaging_time_s?: number;
-  max_roll_rate_dps?: number;
-  max_roll_accel_dps2?: number;
-  max_pitch_rate_dps?: number;
-  max_pitch_accel_dps2?: number;
-  look_window_s?: number;
-  value_source?: string;
+  planning_mode: PlanningMode
+  horizon_from?: string
+  horizon_to?: string
+  workspace_id?: string
+  include_tentative?: boolean
+  lock_policy?: LockPolicy
+  imaging_time_s?: number
+  max_roll_rate_dps?: number
+  max_roll_accel_dps2?: number
+  max_pitch_rate_dps?: number
+  max_pitch_accel_dps2?: number
+  look_window_s?: number
+  value_source?: string
 }
 
 export interface ExistingAcquisitionsSummary {
-  count: number;
-  by_state: Record<string, number>;
-  by_satellite: Record<string, number>;
-  acquisition_ids: string[];
-  horizon_start?: string;
-  horizon_end?: string;
+  count: number
+  by_state: Record<string, number>
+  by_satellite: Record<string, number>
+  acquisition_ids: string[]
+  horizon_start?: string
+  horizon_end?: string
 }
 
 export interface PlanItemPreview {
-  opportunity_id: string;
-  satellite_id: string;
-  target_id: string;
-  start_time: string;
-  end_time: string;
-  roll_angle_deg: number;
-  pitch_angle_deg: number;
-  value?: number;
-  quality_score?: number;
-  incidence_angle_deg?: number;
+  opportunity_id: string
+  satellite_id: string
+  target_id: string
+  start_time: string
+  end_time: string
+  roll_angle_deg: number
+  pitch_angle_deg: number
+  value?: number
+  quality_score?: number
+  incidence_angle_deg?: number
 }
 
 export interface CommitPreview {
-  will_create: number;
-  will_conflict_with: number;
+  will_create: number
+  will_conflict_with: number
   conflict_details: Array<{
-    type: string;
-    severity: string;
-    description: string;
-    acquisition_ids: string[];
-    involves_new_item?: boolean;
-  }>;
-  warnings: string[];
+    type: string
+    severity: string
+    description: string
+    acquisition_ids: string[]
+    involves_new_item?: boolean
+  }>
+  warnings: string[]
 }
 
 export interface IncrementalPlanResponse {
-  success: boolean;
-  message: string;
-  planning_mode: string;
-  existing_acquisitions: ExistingAcquisitionsSummary;
-  new_plan_items: PlanItemPreview[];
+  success: boolean
+  message: string
+  planning_mode: string
+  existing_acquisitions: ExistingAcquisitionsSummary
+  new_plan_items: PlanItemPreview[]
   conflicts_if_committed: Array<{
-    type: string;
-    severity: string;
-    description: string;
-    acquisition_ids: string[];
-  }>;
-  commit_preview: CommitPreview;
-  algorithm_metrics: Record<string, unknown>;
-  plan_id?: string;
-  schedule_context: Record<string, unknown>;
+    type: string
+    severity: string
+    description: string
+    acquisition_ids: string[]
+  }>
+  commit_preview: CommitPreview
+  algorithm_metrics: Record<string, unknown>
+  plan_id?: string
+  schedule_context: Record<string, unknown>
 }
 
 /**
@@ -429,10 +403,7 @@ export interface IncrementalPlanResponse {
 export async function createIncrementalPlan(
   request: IncrementalPlanRequest,
 ): Promise<IncrementalPlanResponse> {
-  return apiClient.post<IncrementalPlanResponse>(
-    API_ENDPOINTS.SCHEDULE_PLAN,
-    request,
-  );
+  return apiClient.post<IncrementalPlanResponse>(API_ENDPOINTS.SCHEDULE_PLAN, request)
 }
 
 /**
@@ -440,23 +411,23 @@ export async function createIncrementalPlan(
  * This is a quick way to show schedule context before running planning.
  */
 export async function getScheduleContext(params: {
-  workspace_id: string;
-  from?: string;
-  to?: string;
-  include_tentative?: boolean;
+  workspace_id: string
+  from?: string
+  to?: string
+  include_tentative?: boolean
 }): Promise<{
-  success: boolean;
-  count: number;
-  by_state: Record<string, number>;
-  by_satellite: Record<string, number>;
-  horizon: { start: string; end: string };
+  success: boolean
+  count: number
+  by_state: Record<string, number>
+  by_satellite: Record<string, number>
+  horizon: { start: string; end: string }
 }> {
   const horizonResponse = await getScheduleHorizon({
     workspace_id: params.workspace_id,
     from: params.from,
     to: params.to,
     include_tentative: params.include_tentative,
-  });
+  })
 
   return {
     success: horizonResponse.success,
@@ -464,10 +435,10 @@ export async function getScheduleContext(params: {
     by_state: horizonResponse.statistics.by_state || {},
     by_satellite: horizonResponse.statistics.by_satellite || {},
     horizon: {
-      start: horizonResponse.horizon.start || "",
-      end: horizonResponse.horizon.end || "",
+      start: horizonResponse.horizon.start || '',
+      end: horizonResponse.horizon.end || '',
     },
-  };
+  }
 }
 
 // =============================================================================
@@ -475,188 +446,176 @@ export async function getScheduleContext(params: {
 // =============================================================================
 
 export interface RepairPlanRequest {
-  planning_mode: "repair";
-  horizon_from?: string;
-  horizon_to?: string;
-  workspace_id?: string;
-  include_tentative?: boolean;
-  // Repair-specific
-  repair_scope?: RepairScope;
-  max_changes?: number;
-  objective?: RepairObjective;
-  // Scope filters
-  satellite_subset?: string[];
-  target_subset?: string[];
+  planning_mode: 'repair'
+  horizon_from?: string
+  horizon_to?: string
+  workspace_id?: string
+  include_tentative?: boolean
   // Planning parameters
-  imaging_time_s?: number;
-  max_roll_rate_dps?: number;
-  max_roll_accel_dps2?: number;
-  max_pitch_rate_dps?: number;
-  max_pitch_accel_dps2?: number;
-  look_window_s?: number;
-  value_source?: string;
+  imaging_time_s?: number
+  max_roll_rate_dps?: number
+  max_roll_accel_dps2?: number
+  max_pitch_rate_dps?: number
+  max_pitch_accel_dps2?: number
+  look_window_s?: number
+  value_source?: string
 }
 
 export interface MovedAcquisitionInfo {
-  id: string;
-  from_start: string;
-  from_end: string;
-  to_start: string;
-  to_end: string;
-  from_roll_deg?: number;
-  to_roll_deg?: number;
+  id: string
+  from_start: string
+  from_end: string
+  to_start: string
+  to_end: string
+  from_roll_deg?: number
+  to_roll_deg?: number
 }
 
 export interface ChangeScore {
-  num_changes: number;
-  percent_changed: number;
+  num_changes: number
+  percent_changed: number
 }
 
 // PR-OPS-REPAIR-REPORT-01: Structured change log entry types
 export interface DroppedEntry {
-  acquisition_id: string;
-  satellite_id: string;
-  target_id: string;
-  start: string;
-  end: string;
-  reason_code: string;
-  reason_text: string;
-  replaced_by: string[];
+  acquisition_id: string
+  satellite_id: string
+  target_id: string
+  start: string
+  end: string
+  reason_code: string
+  reason_text: string
+  replaced_by: string[]
 }
 
 export interface AddedEntry {
-  acquisition_id: string;
-  satellite_id: string;
-  target_id: string;
-  start: string;
-  end: string;
-  reason_code: string;
-  reason_text: string;
-  replaces: string[];
-  value?: number;
+  acquisition_id: string
+  satellite_id: string
+  target_id: string
+  start: string
+  end: string
+  reason_code: string
+  reason_text: string
+  replaces: string[]
+  value?: number
 }
 
 export interface MovedEntry {
-  acquisition_id: string;
-  satellite_id: string;
-  target_id: string;
-  from_start: string;
-  from_end: string;
-  to_start: string;
-  to_end: string;
-  reason_code: string;
-  reason_text: string;
+  acquisition_id: string
+  satellite_id: string
+  target_id: string
+  from_start: string
+  from_end: string
+  to_start: string
+  to_end: string
+  reason_code: string
+  reason_text: string
 }
 
 export interface ChangeLog {
-  dropped: DroppedEntry[];
-  added: AddedEntry[];
-  moved: MovedEntry[];
-  kept_count: number;
+  dropped: DroppedEntry[]
+  added: AddedEntry[]
+  moved: MovedEntry[]
+  kept_count: number
 }
 
 export interface RepairDiff {
-  kept: string[];
-  dropped: string[];
-  added: string[];
-  moved: MovedAcquisitionInfo[];
+  kept: string[]
+  dropped: string[]
+  added: string[]
+  moved: MovedAcquisitionInfo[]
   reason_summary: {
-    dropped?: Array<{ id: string; reason: string }>;
-    moved?: Array<{ id: string; reason: string }>;
-  };
-  change_score: ChangeScore;
-  hard_lock_warnings?: string[];
-  change_log?: ChangeLog;
+    dropped?: Array<{ id: string; reason: string }>
+    moved?: Array<{ id: string; reason: string }>
+  }
+  change_score: ChangeScore
+  hard_lock_warnings?: string[]
+  change_log?: ChangeLog
 }
 
 export interface MetricsComparison {
-  score_before: number;
-  score_after: number;
-  score_delta: number;
-  mean_incidence_before?: number;
-  mean_incidence_after?: number;
-  conflicts_before: number;
-  conflicts_after: number;
-  acquisition_count_before: number;
-  acquisition_count_after: number;
+  score_before: number
+  score_after: number
+  score_delta: number
+  mean_incidence_before?: number
+  mean_incidence_after?: number
+  conflicts_before: number
+  conflicts_after: number
+  acquisition_count_before: number
+  acquisition_count_after: number
 }
 
 export interface RepairPlanResponse {
-  success: boolean;
-  message: string;
-  planning_mode: "repair";
+  success: boolean
+  message: string
+  planning_mode: 'repair'
   // Schedule context
-  existing_acquisitions: ExistingAcquisitionsSummary;
-  fixed_count: number;
-  flex_count: number;
+  existing_acquisitions: ExistingAcquisitionsSummary
+  fixed_count: number
+  flex_count: number
   // Proposed schedule
-  new_plan_items: PlanItemPreview[];
+  new_plan_items: PlanItemPreview[]
   // Repair diff (critical)
-  repair_diff: RepairDiff;
+  repair_diff: RepairDiff
   // Metrics comparison
-  metrics_before: Record<string, unknown>;
-  metrics_after: Record<string, unknown>;
-  metrics_comparison: MetricsComparison;
+  metrics_before: Record<string, unknown>
+  metrics_after: Record<string, unknown>
+  metrics_comparison: MetricsComparison
   // Conflict prediction
   conflicts_if_committed: Array<{
-    type: string;
-    severity: string;
-    description: string;
-    acquisition_ids: string[];
-    involves_new_item?: boolean;
-  }>;
+    type: string
+    severity: string
+    description: string
+    acquisition_ids: string[]
+    involves_new_item?: boolean
+  }>
   // Commit preview
-  commit_preview: CommitPreview;
+  commit_preview: CommitPreview
   // Algorithm metrics
-  algorithm_metrics: Record<string, unknown>;
-  plan_id?: string;
-  schedule_context: Record<string, unknown>;
+  algorithm_metrics: Record<string, unknown>
+  plan_id?: string
+  schedule_context: Record<string, unknown>
 }
 
 /**
  * Create a repair plan.
  * Repair mode modifies existing schedule: keeps hard locks, replaces unlocked items with better opportunities.
  */
-export async function createRepairPlan(
-  request: RepairPlanRequest,
-): Promise<RepairPlanResponse> {
-  return apiClient.post<RepairPlanResponse>(
-    API_ENDPOINTS.SCHEDULE_REPAIR,
-    request,
-  );
+export async function createRepairPlan(request: RepairPlanRequest): Promise<RepairPlanResponse> {
+  return apiClient.post<RepairPlanResponse>(API_ENDPOINTS.SCHEDULE_REPAIR, request)
 }
 
 // =============================================================================
 // Lock Management API
 // =============================================================================
 
-export type LockLevel = "none" | "hard";
+export type LockLevel = 'none' | 'hard'
 
 export interface UpdateLockResponse {
-  success: boolean;
-  message: string;
-  acquisition_id: string;
-  lock_level: LockLevel;
+  success: boolean
+  message: string
+  acquisition_id: string
+  lock_level: LockLevel
 }
 
 export interface BulkLockRequest {
-  acquisition_ids: string[];
-  lock_level: LockLevel;
+  acquisition_ids: string[]
+  lock_level: LockLevel
 }
 
 export interface BulkLockResponse {
-  success: boolean;
-  message: string;
-  updated: number;
-  failed: string[];
-  lock_level: LockLevel;
+  success: boolean
+  message: string
+  updated: number
+  failed: string[]
+  lock_level: LockLevel
 }
 
 export interface HardLockCommittedResponse {
-  success: boolean;
-  message: string;
-  updated: number;
-  workspace_id: string;
+  success: boolean
+  message: string
+  updated: number
+  workspace_id: string
 }
 
 /**
@@ -669,19 +628,14 @@ export async function updateAcquisitionLock(
   return apiClient.put<UpdateLockResponse>(
     `${API_ENDPOINTS.SCHEDULE_ACQUISITION_LOCK(acquisitionId)}?lock_level=${lockLevel}`,
     {},
-  );
+  )
 }
 
 /**
  * Bulk update lock levels for multiple acquisitions.
  */
-export async function bulkUpdateLocks(
-  request: BulkLockRequest,
-): Promise<BulkLockResponse> {
-  return apiClient.post<BulkLockResponse>(
-    API_ENDPOINTS.SCHEDULE_BULK_LOCK,
-    request,
-  );
+export async function bulkUpdateLocks(request: BulkLockRequest): Promise<BulkLockResponse> {
+  return apiClient.post<BulkLockResponse>(API_ENDPOINTS.SCHEDULE_BULK_LOCK, request)
 }
 
 /**
@@ -690,10 +644,9 @@ export async function bulkUpdateLocks(
 export async function hardLockAllCommitted(
   workspaceId: string,
 ): Promise<HardLockCommittedResponse> {
-  return apiClient.post<HardLockCommittedResponse>(
-    API_ENDPOINTS.SCHEDULE_HARD_LOCK_COMMITTED,
-    { workspace_id: workspaceId },
-  );
+  return apiClient.post<HardLockCommittedResponse>(API_ENDPOINTS.SCHEDULE_HARD_LOCK_COMMITTED, {
+    workspace_id: workspaceId,
+  })
 }
 
 // =============================================================================
@@ -701,27 +654,27 @@ export async function hardLockAllCommitted(
 // =============================================================================
 
 export interface RepairCommitRequest {
-  plan_id: string;
-  workspace_id: string;
-  drop_acquisition_ids: string[];
-  lock_level?: LockLevel;
-  mode?: string;
-  force?: boolean;
-  notes?: string;
-  score_before?: number;
-  score_after?: number;
-  conflicts_before?: number;
+  plan_id: string
+  workspace_id: string
+  drop_acquisition_ids: string[]
+  lock_level?: LockLevel
+  mode?: string
+  force?: boolean
+  notes?: string
+  score_before?: number
+  score_after?: number
+  conflicts_before?: number
 }
 
 export interface RepairCommitResponse {
-  success: boolean;
-  message: string;
-  plan_id: string;
-  committed: number;
-  dropped: number;
-  audit_log_id: string;
-  conflicts_after: number;
-  warnings: string[];
+  success: boolean
+  message: string
+  plan_id: string
+  committed: number
+  dropped: number
+  audit_log_id: string
+  conflicts_after: number
+  warnings: string[]
 }
 
 /**
@@ -730,10 +683,7 @@ export interface RepairCommitResponse {
 export async function commitRepairPlan(
   request: RepairCommitRequest,
 ): Promise<RepairCommitResponse> {
-  return apiClient.post<RepairCommitResponse>(
-    API_ENDPOINTS.SCHEDULE_REPAIR_COMMIT,
-    request,
-  );
+  return apiClient.post<RepairCommitResponse>(API_ENDPOINTS.SCHEDULE_REPAIR_COMMIT, request)
 }
 
 // =============================================================================
@@ -741,50 +691,48 @@ export async function commitRepairPlan(
 // =============================================================================
 
 export interface AuditLogEntry {
-  id: string;
-  created_at: string;
-  plan_id: string;
-  workspace_id?: string;
-  committed_by?: string;
-  commit_type: string;
-  config_hash: string;
+  id: string
+  created_at: string
+  plan_id: string
+  workspace_id?: string
+  committed_by?: string
+  commit_type: string
+  config_hash: string
   repair_diff?: {
-    dropped?: string[];
-    created?: string[];
-  };
-  acquisitions_created: number;
-  acquisitions_dropped: number;
-  score_before?: number;
-  score_after?: number;
-  conflicts_before: number;
-  conflicts_after: number;
-  notes?: string;
+    dropped?: string[]
+    created?: string[]
+  }
+  acquisitions_created: number
+  acquisitions_dropped: number
+  score_before?: number
+  score_after?: number
+  conflicts_before: number
+  conflicts_after: number
+  notes?: string
 }
 
 export interface AuditLogListResponse {
-  success: boolean;
-  audit_logs: AuditLogEntry[];
-  total: number;
+  success: boolean
+  audit_logs: AuditLogEntry[]
+  total: number
 }
 
 /**
  * Get commit audit history.
  */
 export async function getCommitHistory(params?: {
-  workspace_id?: string;
-  plan_id?: string;
-  limit?: number;
-  offset?: number;
+  workspace_id?: string
+  plan_id?: string
+  limit?: number
+  offset?: number
 }): Promise<AuditLogListResponse> {
   const qs = buildQuery({
     workspace_id: params?.workspace_id,
     plan_id: params?.plan_id,
     limit: params?.limit,
     offset: params?.offset,
-  });
-  return apiClient.get<AuditLogListResponse>(
-    `${API_ENDPOINTS.SCHEDULE_COMMIT_HISTORY}${qs}`,
-  );
+  })
+  return apiClient.get<AuditLogListResponse>(`${API_ENDPOINTS.SCHEDULE_COMMIT_HISTORY}${qs}`)
 }
 
 // =============================================================================
@@ -792,127 +740,127 @@ export async function getCommitHistory(params?: {
 // =============================================================================
 
 export interface InboxOrder {
-  order: Order;
-  score: number;
-  score_breakdown: Record<string, number>;
+  order: Order
+  score: number
+  score_breakdown: Record<string, number>
 }
 
 export interface InboxListResponse {
-  success: boolean;
-  orders: InboxOrder[];
-  total: number;
-  policy_id: string;
+  success: boolean
+  orders: InboxOrder[]
+  total: number
+  policy_id: string
 }
 
 export interface BatchPolicy {
-  id: string;
-  name: string;
-  description: string;
+  id: string
+  name: string
+  description: string
   weights: {
-    priority_weight: number;
-    deadline_weight: number;
-    age_weight: number;
-    quality_weight: number;
-  };
+    priority_weight: number
+    deadline_weight: number
+    age_weight: number
+    quality_weight: number
+  }
   selection_rules: {
-    max_orders_per_batch: number;
-    horizon_hours: number;
-    min_priority: number;
-  };
-  repair_preset: string;
-  planning_mode: string;
+    max_orders_per_batch: number
+    horizon_hours: number
+    min_priority: number
+  }
+  repair_preset: string
+  planning_mode: string
 }
 
 export interface PolicyListResponse {
-  success: boolean;
-  policies: BatchPolicy[];
-  default_policy: string;
+  success: boolean
+  policies: BatchPolicy[]
+  default_policy: string
 }
 
 export interface BatchOrder {
-  id: string;
-  target_id: string;
-  priority: number;
-  status: string;
-  due_time?: string;
-  role: string;
-  score?: number;
+  id: string
+  target_id: string
+  priority: number
+  status: string
+  due_time?: string
+  role: string
+  score?: number
 }
 
 export interface Batch {
-  id: string;
-  workspace_id: string;
-  created_at: string;
-  updated_at: string;
-  policy_id: string;
-  horizon_from: string;
-  horizon_to: string;
-  status: string;
-  plan_id?: string;
-  notes?: string;
+  id: string
+  workspace_id: string
+  created_at: string
+  updated_at: string
+  policy_id: string
+  horizon_from: string
+  horizon_to: string
+  status: string
+  plan_id?: string
+  notes?: string
   metrics?: {
-    orders_satisfied?: number;
-    orders_unsatisfied?: number;
-    unsatisfied_reasons?: Record<string, number>;
-    acquisitions_planned?: number;
-  };
-  orders?: BatchOrder[];
+    orders_satisfied?: number
+    orders_unsatisfied?: number
+    unsatisfied_reasons?: Record<string, number>
+    acquisitions_planned?: number
+  }
+  orders?: BatchOrder[]
 }
 
 export interface BatchListResponse {
-  success: boolean;
-  batches: Batch[];
-  total: number;
+  success: boolean
+  batches: Batch[]
+  total: number
 }
 
 export interface CreateBatchResponse {
-  success: boolean;
-  batch: Batch;
-  selected_orders: number;
+  success: boolean
+  batch: Batch
+  selected_orders: number
 }
 
 export interface PlanMetrics {
-  orders_satisfied: number;
-  orders_unsatisfied: number;
-  unsatisfied_reasons: Record<string, number>;
-  acquisitions_planned: number;
-  acquisitions_dropped: number;
-  conflicts_predicted: number;
-  compute_time_ms: number;
+  orders_satisfied: number
+  orders_unsatisfied: number
+  unsatisfied_reasons: Record<string, number>
+  acquisitions_planned: number
+  acquisitions_dropped: number
+  conflicts_predicted: number
+  compute_time_ms: number
 }
 
 export interface PlanBatchResponse {
-  success: boolean;
-  batch_id: string;
-  plan_id: string;
-  status: string;
-  metrics: PlanMetrics;
-  satisfied_order_ids: string[];
-  unsatisfied_orders: Array<{ order_id: string; reason: string }>;
+  success: boolean
+  batch_id: string
+  plan_id: string
+  status: string
+  metrics: PlanMetrics
+  satisfied_order_ids: string[]
+  unsatisfied_orders: Array<{ order_id: string; reason: string }>
 }
 
 export interface CommitBatchResponse {
-  success: boolean;
-  batch_id: string;
-  plan_id: string;
-  acquisitions_created: number;
-  acquisitions_dropped: number;
-  orders_updated: number;
-  audit_id?: string;
+  success: boolean
+  batch_id: string
+  plan_id: string
+  acquisitions_created: number
+  acquisitions_dropped: number
+  orders_updated: number
+  audit_id?: string
 }
 
 /**
  * Get orders inbox with scoring.
  */
 export async function getOrdersInbox(params: {
-  workspace_id: string;
-  priority_min?: number;
-  due_within_hours?: number;
-  order_type?: string;
-  tags?: string;
-  policy_id?: string;
-  limit?: number;
-  offset?: number;
+  workspace_id: string
+  priority_min?: number
+  due_within_hours?: number
+  order_type?: string
+  tags?: string
+  policy_id?: string
+  limit?: number
+  offset?: number
 }): Promise<InboxListResponse> {
   const qs = buildQuery({
     workspace_id: params.workspace_id,
@@ -923,29 +871,29 @@ export async function getOrdersInbox(params: {
     policy_id: params.policy_id,
     limit: params.limit,
     offset: params.offset,
-  });
-  return apiClient.get<InboxListResponse>(`${API_ENDPOINTS.ORDERS_INBOX}${qs}`);
+  })
+  return apiClient.get<InboxListResponse>(`${API_ENDPOINTS.ORDERS_INBOX}${qs}`)
 }
 
 /**
  * Import orders in bulk.
  */
 export async function importOrders(params: {
-  workspace_id: string;
+  workspace_id: string
   orders: Array<{
-    target_id: string;
-    priority?: number;
-    constraints?: Record<string, unknown>;
-    due_time?: string;
-    tags?: string[];
-    order_type?: string;
-  }>;
+    target_id: string
+    priority?: number
+    constraints?: Record<string, unknown>
+    due_time?: string
+    tags?: string[]
+    order_type?: string
+  }>
 }): Promise<{ success: boolean; imported_count: number; orders: Order[] }> {
   return apiClient.post<{
-    success: boolean;
-    imported_count: number;
-    orders: Order[];
-  }>(API_ENDPOINTS.ORDERS_IMPORT, params);
+    success: boolean
+    imported_count: number
+    orders: Order[]
+  }>(API_ENDPOINTS.ORDERS_IMPORT, params)
 }
 
 /**
@@ -958,7 +906,7 @@ export async function rejectOrder(
   return apiClient.post<{ success: boolean; message: string; order?: Order }>(
     API_ENDPOINTS.ORDER_REJECT(orderId),
     { reason },
-  );
+  )
 }
 
 /**
@@ -971,58 +919,55 @@ export async function deferOrder(
   return apiClient.post<{ success: boolean; message: string; order?: Order }>(
     API_ENDPOINTS.ORDER_DEFER(orderId),
     params,
-  );
+  )
 }
 
 /**
  * List available batch policies.
  */
 export async function listPolicies(): Promise<PolicyListResponse> {
-  return apiClient.get<PolicyListResponse>(API_ENDPOINTS.BATCHES_POLICIES);
+  return apiClient.get<PolicyListResponse>(API_ENDPOINTS.BATCHES_POLICIES)
 }
 
 /**
  * Create a new batch.
  */
 export async function createBatch(params: {
-  workspace_id: string;
-  policy_id: string;
-  horizon_hours?: number;
-  order_ids?: string[];
-  priority_min?: number;
-  due_before?: string;
-  max_orders?: number;
-  notes?: string;
+  workspace_id: string
+  policy_id: string
+  horizon_hours?: number
+  order_ids?: string[]
+  priority_min?: number
+  due_before?: string
+  max_orders?: number
+  notes?: string
 }): Promise<CreateBatchResponse> {
-  return apiClient.post<CreateBatchResponse>(
-    API_ENDPOINTS.BATCHES_CREATE,
-    params,
-  );
+  return apiClient.post<CreateBatchResponse>(API_ENDPOINTS.BATCHES_CREATE, params)
 }
 
 /**
  * List batches.
  */
 export async function listBatches(params?: {
-  workspace_id?: string;
-  status?: string;
-  limit?: number;
-  offset?: number;
+  workspace_id?: string
+  status?: string
+  limit?: number
+  offset?: number
 }): Promise<BatchListResponse> {
   const qs = buildQuery({
     workspace_id: params?.workspace_id,
     status: params?.status,
     limit: params?.limit,
     offset: params?.offset,
-  });
-  return apiClient.get<BatchListResponse>(`${API_ENDPOINTS.BATCHES}${qs}`);
+  })
+  return apiClient.get<BatchListResponse>(`${API_ENDPOINTS.BATCHES}${qs}`)
 }
 
 /**
  * Get batch details.
  */
 export async function getBatch(batchId: string): Promise<CreateBatchResponse> {
-  return apiClient.get<CreateBatchResponse>(API_ENDPOINTS.BATCH_BY_ID(batchId));
+  return apiClient.get<CreateBatchResponse>(API_ENDPOINTS.BATCH_BY_ID(batchId))
 }
 
 /**
@@ -1032,10 +977,7 @@ export async function planBatch(
   batchId: string,
   params?: { use_repair_mode?: boolean },
 ): Promise<PlanBatchResponse> {
-  return apiClient.post<PlanBatchResponse>(
-    API_ENDPOINTS.BATCH_PLAN(batchId),
-    params || {},
-  );
+  return apiClient.post<PlanBatchResponse>(API_ENDPOINTS.BATCH_PLAN(batchId), params || {})
 }
 
 /**
@@ -1045,10 +987,7 @@ export async function commitBatch(
   batchId: string,
   params?: { lock_level?: string; notes?: string },
 ): Promise<CommitBatchResponse> {
-  return apiClient.post<CommitBatchResponse>(
-    API_ENDPOINTS.BATCH_COMMIT(batchId),
-    params || {},
-  );
+  return apiClient.post<CommitBatchResponse>(API_ENDPOINTS.BATCH_COMMIT(batchId), params || {})
 }
 
 /**
@@ -1058,8 +997,8 @@ export async function cancelBatch(
   batchId: string,
 ): Promise<{ success: boolean; batch_id: string; orders_returned: number }> {
   return apiClient.delete<{
-    success: boolean;
-    batch_id: string;
-    orders_returned: number;
-  }>(API_ENDPOINTS.BATCH_BY_ID(batchId));
+    success: boolean
+    batch_id: string
+    orders_returned: number
+  }>(API_ENDPOINTS.BATCH_BY_ID(batchId))
 }

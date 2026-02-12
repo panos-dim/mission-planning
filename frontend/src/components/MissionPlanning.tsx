@@ -22,13 +22,7 @@ import {
 } from 'lucide-react'
 import debug from '../utils/debug'
 import { ApiError, NetworkError, TimeoutError } from '../api/errors'
-import {
-  createRepairPlan,
-  type PlanningMode,
-  type LockPolicy,
-  type RepairObjective,
-  type RepairPlanResponse,
-} from '../api/scheduleApi'
+import { createRepairPlan, type PlanningMode, type RepairPlanResponse } from '../api/scheduleApi'
 import { useOpportunities, useSatelliteConfigSummary, useScheduleContext } from '../hooks/queries'
 import { planningApi } from '../api'
 import { ConflictWarningModal, type CommitPreview } from './ConflictWarningModal'
@@ -76,12 +70,9 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
   // State for planning mode (incremental planning)
   // PR-OPS-REPAIR-DEFAULT-01: Default to repair mode for ops-grade workflow
   const [planningMode, setPlanningMode] = useState<PlanningMode>('repair')
-  const [lockPolicy, setLockPolicy] = useState<LockPolicy>('respect_hard_only')
   const [includeTentative, setIncludeTentative] = useState(false)
 
   // State for repair mode
-  const [repairObjective, setRepairObjective] = useState<RepairObjective>('maximize_score')
-  const [maxChanges, setMaxChanges] = useState(100)
   const [repairResult, setRepairResult] = useState<RepairPlanResponse | null>(null)
 
   // State for conflict warning modal
@@ -256,8 +247,6 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
           planning_mode: 'repair' as const,
           workspace_id: workspaceId,
           include_tentative: includeTentative,
-          max_changes: maxChanges,
-          objective: repairObjective,
           imaging_time_s: config.imaging_time_s,
           max_roll_rate_dps: config.max_roll_rate_dps,
           max_roll_accel_dps2: config.max_roll_accel_dps2,
@@ -686,7 +675,7 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
                   ? 'Plan ignores existing schedule - useful for exploring alternatives'
                   : planningMode === 'incremental'
                     ? 'Plan avoids conflicts with committed acquisitions'
-                    : 'Repair existing schedule: keep hard locks, optionally modify soft items'}
+                    : 'Repair existing schedule: locked items stay, unlocked items can be adjusted'}
               </p>
 
               {/* Schedule Context Box (shown in incremental mode) */}
@@ -747,17 +736,12 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
                         </div>
                       )}
 
-                      {/* Lock Policy */}
+                      {/* Lock Policy — fixed to hard-only (2-level locks: Locked/Unlocked) */}
                       <div className="pt-2 border-t border-gray-700/50">
-                        <label className="block text-[10px] text-gray-400 mb-1">Lock Policy</label>
-                        <select
-                          value={lockPolicy}
-                          onChange={(e) => setLockPolicy(e.target.value as LockPolicy)}
-                          className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs"
-                        >
-                          <option value="respect_hard_only">Hard locks only</option>
-                          <option value="respect_hard_and_soft">Hard + soft locks</option>
-                        </select>
+                        <div className="flex items-center gap-1.5 text-[10px] text-gray-400">
+                          <Shield size={10} className="text-red-400" />
+                          <span>Hard locks respected</span>
+                        </div>
                       </div>
 
                       {/* Include Tentative Toggle */}
@@ -804,44 +788,8 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
                     </div>
                   )}
 
-                  {/* Max Changes Slider */}
-                  <div className="space-y-2 mb-3">
-                    <div className="flex justify-between">
-                      <label className="text-[10px] text-gray-400">Max Changes</label>
-                      <span className="text-[10px] text-orange-300 font-medium">{maxChanges}</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="1"
-                      max="200"
-                      value={maxChanges}
-                      onChange={(e) => setMaxChanges(parseInt(e.target.value))}
-                      className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
-                    />
-                    <div className="flex justify-between text-[9px] text-gray-500">
-                      <span>Conservative</span>
-                      <span>Aggressive</span>
-                    </div>
-                  </div>
-
-                  {/* Objective */}
-                  <div className="space-y-2">
-                    <label className="block text-[10px] text-gray-400">
-                      Optimization Objective
-                    </label>
-                    <select
-                      value={repairObjective}
-                      onChange={(e) => setRepairObjective(e.target.value as RepairObjective)}
-                      className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs"
-                    >
-                      <option value="maximize_score">Maximize Score</option>
-                      <option value="maximize_priority">Maximize Priority</option>
-                      <option value="minimize_changes">Minimize Changes</option>
-                    </select>
-                  </div>
-
                   {/* Include Tentative Toggle */}
-                  <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mt-3 pt-2 border-t border-orange-700/30">
+                  <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
                     <input
                       type="checkbox"
                       checked={includeTentative}
