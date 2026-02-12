@@ -75,7 +75,7 @@ export interface TargetData {
   latitude: number
   longitude: number
   description?: string
-  priority?: number // 1-5, default 1
+  priority?: number // 1-5, 1=best, 5=lowest, default 5
   color?: string // Color code for map marker (e.g., '#FF0000' for red, '#00FF00' for green)
 }
 

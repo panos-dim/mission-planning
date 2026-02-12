@@ -10,7 +10,7 @@ class TargetData(BaseModel):
     latitude: float
     longitude: float
     description: Optional[str] = ""
-    priority: Optional[int] = 1  # Target priority (1-5)
+    priority: Optional[int] = 5  # Target priority (1=best, 5=lowest)
     color: Optional[str] = "#EF4444"  # Marker color (hex format)
 
     @field_validator("latitude")

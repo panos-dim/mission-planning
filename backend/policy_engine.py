@@ -176,9 +176,9 @@ def calculate_order_score(
     weights = policy.weights
     order_id = order.get("id", "unknown")
 
-    # Priority score (1-5 normalized to 0-1)
-    priority = order.get("priority", 3)
-    priority_score = (priority - 1) / 4  # Normalize to 0-1
+    # Priority score (1=best→1.0, 5=lowest→0.0)
+    priority = order.get("priority", 5)
+    priority_score = (5 - priority) / 4  # Normalize to 0-1
 
     # Deadline score (urgency based on time to deadline)
     deadline_score = 0.0

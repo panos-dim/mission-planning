@@ -587,7 +587,7 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
                 sensor_fov_half_angle_deg=sensor_fov,  # Sensor FOV (for visualization)
                 max_spacecraft_roll=max_spacecraft_roll,  # Spacecraft agility limit (for visibility)
                 priority=(
-                    target_data.priority if target_data.priority is not None else 1
+                    target_data.priority if target_data.priority is not None else 5
                 ),
                 color=(
                     target_data.color if target_data.color else "#EF4444"
@@ -2154,7 +2154,7 @@ async def schedule_mission(request: PlanningRequest) -> PlanningResponse:
             target.name: (target.latitude, target.longitude) for target in targets
         }
         target_priorities = {
-            target.name: getattr(target, "priority", 1) for target in targets
+            target.name: getattr(target, "priority", 5) for target in targets
         }
         logger.info(f"Target priorities: {target_priorities}")
 
@@ -2379,12 +2379,12 @@ async def schedule_mission(request: PlanningRequest) -> PlanningResponse:
 
                 # Get base priority/value
                 if request.value_source == "custom" and request.custom_values:
-                    base_priority = request.custom_values.get(opp_id, 1.0)
+                    base_priority = request.custom_values.get(opp_id, 5.0)
                 elif request.value_source == "target_priority":
                     # Use target priority from target data (1-5)
-                    base_priority = float(target_priorities.get(target_name, 1))
+                    base_priority = float(target_priorities.get(target_name, 5))
                 else:
-                    base_priority = 1.0  # Uniform
+                    base_priority = 5.0  # Uniform (default=5, lowest priority)
 
                 # Compute quality score from incidence angle (using ACTUAL angle at imaging time)
                 quality_score = compute_quality_score(
@@ -2960,15 +2960,15 @@ async def test_baseline_performance() -> Dict[str, Any]:
                 name="Athens",
                 latitude=37.9838,
                 longitude=23.7275,
-                description="Greek Capital - High Priority",
-                priority=5,
+                description="Greek Capital - Highest Priority",
+                priority=1,
             ),
             TargetData(
                 name="Istanbul",
                 latitude=41.0082,
                 longitude=28.9784,
                 description="Turkey - Major City (~500km from Athens)",
-                priority=4,
+                priority=2,
             ),
             TargetData(
                 name="Thessaloniki",
@@ -2996,35 +2996,35 @@ async def test_baseline_performance() -> Dict[str, Any]:
                 latitude=42.6977,
                 longitude=23.3219,
                 description="Bulgaria - Capital (~550km from Athens)",
-                priority=2,
+                priority=4,
             ),
             TargetData(
                 name="Rhodes",
                 latitude=36.4341,
                 longitude=28.2176,
                 description="Greek Island (~430km from Athens)",
-                priority=2,
+                priority=4,
             ),
             TargetData(
                 name="Antalya",
                 latitude=36.8969,
                 longitude=30.7133,
                 description="Southern Turkey (~480km from Athens)",
-                priority=2,
+                priority=4,
             ),
             TargetData(
                 name="Heraklion",
                 latitude=35.3387,
                 longitude=25.1442,
                 description="Crete, Greece (~380km from Athens)",
-                priority=1,
+                priority=5,
             ),
             TargetData(
                 name="Patras",
                 latitude=38.2466,
                 longitude=21.7346,
                 description="Western Greece (~210km from Athens)",
-                priority=1,
+                priority=5,
             ),
         ]
 
@@ -3486,7 +3486,7 @@ async def run_benchmark(request: BenchmarkRequest) -> Dict[str, Any]:
                         name=t.name,
                         latitude=t.latitude,
                         longitude=t.longitude,
-                        priority=getattr(t, "priority", 1),
+                        priority=getattr(t, "priority", 5),
                     )
                     for t in scenario.targets
                 ],
