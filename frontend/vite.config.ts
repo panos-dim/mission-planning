@@ -12,38 +12,39 @@ export default defineConfig({
       targets: [
         {
           src: 'node_modules/cesium/Build/Cesium/Workers',
-          dest: 'cesium'
+          dest: 'cesium',
         },
         {
           src: 'node_modules/cesium/Build/Cesium/ThirdParty',
-          dest: 'cesium'
+          dest: 'cesium',
         },
         {
           src: 'node_modules/cesium/Build/Cesium/Assets',
-          dest: 'cesium'
+          dest: 'cesium',
         },
         {
           src: 'node_modules/cesium/Build/Cesium/Widgets',
-          dest: 'cesium'
-        }
-      ]
-    })
+          dest: 'cesium',
+        },
+      ],
+    }),
   ],
   server: {
     port: 3000,
+    open: true,
     proxy: {
       '/api': {
         target: 'http://localhost:8000',
-        changeOrigin: true
-      }
-    }
+        changeOrigin: true,
+      },
+    },
   },
   define: {
-    CESIUM_BASE_URL: JSON.stringify('/cesium/')
+    CESIUM_BASE_URL: JSON.stringify('/cesium/'),
   },
   resolve: {
     alias: {
-      '@': '/src'
-    }
-  }
+      '@': '/src',
+    },
+  },
 })

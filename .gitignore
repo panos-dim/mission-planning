@@ -65,7 +65,8 @@ coverage/
 output/benchmarks/
 output/results/
 output/images/
-*.png
+output/**/*.png
+scripts/**/*.png
 htmlcov/
 .coverage
 

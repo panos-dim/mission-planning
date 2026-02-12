@@ -25,6 +25,7 @@ help:
 	@echo "Frontend only:"
 	@echo "  make frontend    Start frontend server only"
 	@echo "  make test-fe     Run frontend tests"
+	@echo "  make format-fe   Format frontend code (Prettier)"
 	@echo "  make lint-fe     Lint TypeScript code"
 	@echo ""
 
@@ -44,7 +45,7 @@ test: test-py test-fe
 lint: lint-py lint-fe
 	@echo "✅ All linting passed"
 
-format: format-py
+format: format-py format-fe
 	@echo "✅ Code formatted"
 
 typecheck: typecheck-py typecheck-fe
@@ -65,34 +66,33 @@ build: build-fe
 # ============================================
 
 install-py:
-	@echo "📦 Installing Python dependencies..."
-	@python -m venv .venv 2>/dev/null || true
-	@.venv/bin/pip install -e ".[dev]" -q
+	@echo "📦 Installing Python dependencies (via PDM)..."
+	@pdm install --dev -q
 
 backend:
 	@echo "🚀 Starting backend server..."
-	@.venv/bin/python -m uvicorn backend.main:app --reload --port 8000
+	@pdm run uvicorn backend.main:app --reload --port 8000
 
 test-py:
 	@echo "🧪 Running Python tests..."
-	@.venv/bin/pytest tests/ -v
+	@pdm run pytest tests/ -v
 
 test-py-cov:
 	@echo "🧪 Running Python tests with coverage..."
-	@.venv/bin/pytest tests/ --cov=src/mission_planner --cov-report=html
+	@pdm run pytest tests/ --cov=src/mission_planner --cov-report=html
 
 lint-py:
 	@echo "🔍 Linting Python code..."
-	@.venv/bin/flake8 src/ backend/ --max-line-length=88 --extend-ignore=E203,W503
+	@pdm run flake8 src/ backend/ --max-line-length=88 --extend-ignore=E203,W503
 
 format-py:
 	@echo "🎨 Formatting Python code..."
-	@.venv/bin/black src/ backend/ tests/
-	@.venv/bin/isort src/ backend/ tests/
+	@pdm run black src/ backend/ tests/
+	@pdm run isort src/ backend/ tests/
 
 typecheck-py:
 	@echo "📝 Type checking Python..."
-	@.venv/bin/mypy src/ --ignore-missing-imports
+	@pdm run mypy src/ --ignore-missing-imports
 
 # ============================================
 # Frontend (TypeScript) Commands
@@ -114,6 +114,10 @@ test-fe-watch:
 	@echo "🧪 Running frontend tests (watch mode)..."
 	@cd frontend && npm run test
 
+format-fe:
+	@echo "🎨 Formatting frontend code..."
+	@cd frontend && npm run format
+
 lint-fe:
 	@echo "🔍 Linting TypeScript code..."
 	@cd frontend && npm run lint
@@ -132,11 +136,11 @@ build-fe:
 
 benchmark:
 	@echo "📊 Running benchmarks..."
-	@.venv/bin/python scripts/benchmark_adaptive.py
+	@pdm run python scripts/benchmark_adaptive.py
 
 validate:
 	@echo "✅ Running validation..."
-	@.venv/bin/python scripts/validate_adaptive_stepping.py
+	@pdm run python scripts/validate_adaptive_stepping.py
 
 # Quick checks before commit
 precommit: format lint typecheck test

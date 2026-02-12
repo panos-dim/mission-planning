@@ -41,14 +41,41 @@ description: Developer experience and workflow optimization rules
 
 ## Git & Pre-commit
 
-- Pre-commit hooks: trailing-whitespace, end-of-file-fixer, Black, isort, flake8, ESLint.
+- Pre-commit hooks: trailing-whitespace, end-of-file-fixer, Black, isort, flake8, Prettier, ESLint.
 - Run `make precommit` before pushing to verify everything passes.
 - Large files (>1000KB) are blocked by pre-commit. Keep assets out of git.
 
+## Formatting
+
+- Python: Black + isort (via `make format-py`).
+- Frontend: Prettier (via `make format-fe`). Config in `frontend/.prettierrc.json`.
+- `make format` runs both Python and frontend formatters.
+- ESLint uses flat config (`frontend/eslint.config.js`) with `eslint-config-prettier` to avoid conflicts.
+
+## Dependency Management
+
+- Python: PDM with lockfile (`pdm.lock`). Use `pdm add <pkg>` / `pdm install --dev`.
+- Frontend: npm with `package-lock.json`. Use `npm install` / `npm ci`.
+- All Makefile targets use `pdm run` instead of `.venv/bin/...`.
+
+## API Types
+
+- `run_dev.sh` auto-generates TypeScript types from the backend OpenAPI schema on startup.
+- Manual: `cd frontend && npm run generate:api-types` (backend must be running).
+- Generated types land in `frontend/src/api/generated/api-types.ts`.
+
+## CI
+
+- GitHub Actions in `.github/workflows/ci.yml`.
+- PR: lint + typecheck + unit tests (Python parallel via xdist, frontend via vitest).
+- Push to main: also runs integration tests.
+
 ## Helpful Shortcuts
 
-- `make dev` — Start everything (kills existing port users, starts backend + frontend).
+- `make dev` — Start everything (kills existing port users, auto-generates API types, starts backend + frontend).
 - `./run_dev.sh --monitor` — Start with CPU/memory monitoring.
 - `make backend` — Backend only with hot reload.
 - `make frontend` — Frontend only.
+- `make format` — Format all code (Python + frontend).
 - Node 22 required (Vite 7). Use `nvm use 22`.
+- Python 3.11 pinned via `.python-version`.

@@ -120,9 +120,12 @@ addopts = [
     "--timeout_method=thread",
     "-x",  # Stop on first failure
     "--instafail",  # Show failures immediately
+    "-n", "auto",  # Parallel execution via pytest-xdist
+    "--dist", "loadscope",  # Group tests by module to avoid shared-state issues
     "--cov=src/mission_planner",
     "--cov-report=term-missing",
     "--cov-report=html",
+    "--cov-fail-under=60",  # Enforce minimum coverage threshold
 ]
 timeout = 30  # Default timeout per test in seconds
 markers = [
