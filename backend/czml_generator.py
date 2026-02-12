@@ -170,6 +170,17 @@ class CZMLGenerator:
         for i, target in enumerate(self.targets):
             czml.append(self._create_target_packet(target, i))
 
+        # Optical pass packets (per-pass pickable entities for lock mode)
+        # SAR missions use sar_czml.py swath polygons instead
+        if (
+            self.mission_type == "imaging"
+            and self.imaging_type != "sar"
+            and self.passes
+        ):
+            optical_packets = self._create_optical_pass_packets()
+            czml.extend(optical_packets)
+            logger.info(f"📸 Added {len(optical_packets)} optical pass CZML packets")
+
         # Log the complete CZML for debugging
         logger.info(f"Generated CZML with {len(czml)} packets")
         for i, packet in enumerate(czml):
@@ -672,6 +683,134 @@ class CZMLGenerator:
                 "numberOfVerticalLines": 0,
             },
         }
+
+    def _optical_pass_description(
+        self,
+        target_name: str,
+        sat_name: str,
+        max_elevation: float,
+        start_time: Any,
+        max_elev_time: Any,
+        end_time: Any,
+    ) -> str:
+        """Build HTML description for an optical pass CZML entity."""
+        td = '<td style="color:#aaa">'
+        start_s = self._format_czml_date(start_time)
+        peak_s = self._format_czml_date(max_elev_time)
+        end_s = self._format_czml_date(end_time)
+        return (
+            '<div style="background:rgba(17,24,39,.95);'
+            'padding:12px;border-radius:8px;color:#fff">'
+            '<h3 style="color:#00C8FF;margin:0 0 8px">'
+            f"Optical Pass - {target_name}</h3>"
+            '<table style="width:100%;font-size:13px">'
+            f"<tr>{td}Satellite:</td><td>{sat_name}</td></tr>"
+            f"<tr>{td}Max Elev:</td><td>{max_elevation:.1f}°</td></tr>"
+            f"<tr>{td}Start:</td><td>{start_s}</td></tr>"
+            f"<tr>{td}Peak:</td><td>{peak_s}</td></tr>"
+            f"<tr>{td}End:</td><td>{end_s}</td></tr>"
+            "</table></div>"
+        )
+
+    def _create_optical_pass_packets(self) -> List[Dict[str, Any]]:
+        """
+        Create CZML packets for optical pass visualization (one per pass).
+
+        Each packet is a small highlighted circle at the target location,
+        visible only during the pass window, with custom properties for
+        deterministic picking and lock-mode integration.
+
+        The opportunity_id follows the same format as the scheduler:
+        {satellite_name}_{target_name}_{pass_index}_max
+        """
+        packets: List[Dict[str, Any]] = []
+
+        # Build target lookup by name
+        target_map = {t.name: t for t in self.targets}
+
+        for idx, pass_detail in enumerate(self.passes):
+            try:
+                # Extract pass data (handles both object and dict forms)
+                if isinstance(pass_detail, dict):
+                    sat_name = pass_detail.get("satellite_name", "")
+                    target_name = pass_detail.get("target_name", "")
+                    start_time = pass_detail.get("start_time")
+                    end_time = pass_detail.get("end_time")
+                    max_elev_time = pass_detail.get("max_elevation_time")
+                    max_elevation = pass_detail.get("max_elevation", 0)
+                else:
+                    sat_name = getattr(pass_detail, "satellite_name", "")
+                    target_name = getattr(pass_detail, "target_name", "")
+                    start_time = getattr(pass_detail, "start_time", None)
+                    end_time = getattr(pass_detail, "end_time", None)
+                    max_elev_time = getattr(pass_detail, "max_elevation_time", None)
+                    max_elevation = getattr(pass_detail, "max_elevation", 0)
+
+                target = target_map.get(target_name)
+                if not target or not start_time or not end_time:
+                    continue
+
+                # Generate opportunity_id matching scheduler format
+                opportunity_id = f"{sat_name}_{target_name}_{idx}_max"
+                packet_id = f"optical_pass_{opportunity_id}"
+
+                # Cyan/teal color for optical passes
+                fill_rgba = [0, 200, 255, 50]
+                outline_rgba = [0, 200, 255, 160]
+
+                packet: Dict[str, Any] = {
+                    "id": packet_id,
+                    "name": f"Optical Pass - {target_name} ({sat_name})",
+                    "description": self._optical_pass_description(
+                        target_name,
+                        sat_name,
+                        max_elevation,
+                        start_time,
+                        max_elev_time,
+                        end_time,
+                    ),
+                    "availability": (
+                        f"{self._format_czml_date(start_time)}"
+                        f"/{self._format_czml_date(end_time)}"
+                    ),
+                    "position": {
+                        "cartographicDegrees": [
+                            target.longitude,
+                            target.latitude,
+                            0,
+                        ]
+                    },
+                    "ellipse": {
+                        "semiMajorAxis": 15000,  # 15 km radius highlight
+                        "semiMinorAxis": 15000,
+                        "height": 0,
+                        "material": {"solidColor": {"color": {"rgba": fill_rgba}}},
+                        "outline": True,
+                        "outlineColor": {"rgba": outline_rgba},
+                        "outlineWidth": 2,
+                    },
+                    # Custom properties for deterministic picking
+                    "properties": {
+                        "opportunity_id": {"string": opportunity_id},
+                        "target_id": {"string": target_name},
+                        "satellite_id": {"string": sat_name},
+                        "pass_index": {"number": idx},
+                        "entity_type": {"string": "optical_pass"},
+                        "imaging_time": {
+                            "string": self._format_czml_date(
+                                max_elev_time or start_time
+                            )
+                        },
+                    },
+                }
+
+                packets.append(packet)
+
+            except Exception as e:
+                logger.error(f"Error creating optical pass packet {idx}: {e}")
+                continue
+
+        return packets
 
     def _calculate_sensor_footprint(
         self,
