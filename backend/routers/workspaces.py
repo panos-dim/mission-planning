@@ -577,9 +577,9 @@ async def save_current_mission(request: SaveCurrentRequest) -> Dict[str, Any]:
                         t.longitude if hasattr(t, "longitude") else t.get("longitude")
                     ),
                     "priority": (
-                        getattr(t, "priority", 1)
+                        getattr(t, "priority", 5)
                         if hasattr(t, "priority")
-                        else t.get("priority", 1)
+                        else t.get("priority", 5)
                     ),
                 }
                 for t in targets
@@ -630,9 +630,9 @@ async def save_current_mission(request: SaveCurrentRequest) -> Dict[str, Any]:
                             else t.get("longitude")
                         ),
                         "priority": (
-                            getattr(t, "priority", 1)
+                            getattr(t, "priority", 5)
                             if hasattr(t, "priority")
-                            else t.get("priority", 1)
+                            else t.get("priority", 5)
                         ),
                         "color": (
                             getattr(t, "color", None)

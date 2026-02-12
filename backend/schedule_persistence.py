@@ -24,7 +24,7 @@ from typing import Any, Dict, Generator, List, Optional
 logger = logging.getLogger(__name__)
 
 # Schema version for this module
-SCHEMA_VERSION = "2.2"
+SCHEMA_VERSION = "2.3"
 
 # Default database path (same as workspace_persistence.py)
 DEFAULT_DB_PATH = Path(__file__).parent.parent / "data" / "workspaces.db"
@@ -476,6 +476,9 @@ class ScheduleDB:
             if current_version < "2.2":
                 self._migrate_to_v2_2(conn)
 
+            if current_version < "2.3":
+                self._migrate_to_v2_3(conn)
+
             conn.commit()
 
     def _migrate_to_v2(self, conn: sqlite3.Connection) -> None:
@@ -494,7 +497,7 @@ class ScheduleDB:
                 updated_at TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'new',
                 target_id TEXT NOT NULL,
-                priority INTEGER NOT NULL DEFAULT 3,
+                priority INTEGER NOT NULL DEFAULT 5,
                 constraints_json TEXT,
                 requested_window_start TEXT,
                 requested_window_end TEXT,
@@ -850,6 +853,50 @@ class ScheduleDB:
 
         logger.info("Migration to schema v2.2 complete")
 
+    def _migrate_to_v2_3(self, conn: sqlite3.Connection) -> None:
+        """Migrate database schema to v2.3 - Priority semantics inversion.
+
+        PR: chore/priority-semantics-1-best-5-lowest-default-5
+        Old semantics: 5 = best (highest importance), 1 = lowest
+        New semantics: 1 = best (highest importance), 5 = lowest
+        Formula: new_priority = 6 - old_priority  (1<->5, 2<->4, 3 stays 3)
+        """
+        cursor = conn.cursor()
+        now = datetime.utcnow().isoformat() + "Z"
+
+        logger.info(
+            "Running migration to schema v2.3 (priority semantics inversion)..."
+        )
+
+        # Invert order priorities: 6 - priority maps 1<->5, 2<->4, 3 stays 3
+        cursor.execute(
+            "UPDATE orders SET priority = 6 - priority WHERE priority BETWEEN 1 AND 5"
+        )
+        migrated_count = cursor.rowcount
+        if migrated_count > 0:
+            logger.info(
+                f"Inverted priorities for {migrated_count} orders (old: 5=best -> new: 1=best)"
+            )
+        else:
+            logger.info(
+                "No orders to migrate (table empty or no rows with priority 1-5)"
+            )
+
+        # Record migration
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO schema_migrations (version, applied_at, description)
+            VALUES (?, ?, ?)
+        """,
+            (
+                "2.3",
+                now,
+                "Priority semantics inversion: 1=best, 5=lowest, default=5",
+            ),
+        )
+
+        logger.info("Migration to schema v2.3 complete")
+
     # =========================================================================
     # Order Operations
     # =========================================================================
@@ -857,7 +904,7 @@ class ScheduleDB:
     def create_order(
         self,
         target_id: str,
-        priority: int = 3,
+        priority: int = 5,
         constraints: Optional[Dict[str, Any]] = None,
         requested_window_start: Optional[str] = None,
         requested_window_end: Optional[str] = None,
@@ -878,7 +925,7 @@ class ScheduleDB:
 
         Args:
             target_id: Target to image
-            priority: Priority 1-5 (default 3)
+            priority: Priority 1=best, 5=lowest (default 5)
             constraints: Optional constraints dict
             requested_window_start: Optional start of requested window
             requested_window_end: Optional end of requested window
@@ -2902,7 +2949,7 @@ class ScheduleDB:
                 SELECT o.* FROM orders o
                 JOIN batch_members bm ON o.id = bm.order_id
                 WHERE bm.batch_id = ?
-                ORDER BY o.priority DESC, o.due_time ASC
+                ORDER BY o.priority ASC, o.due_time ASC
             """,
                 (batch_id,),
             )
@@ -2983,7 +3030,7 @@ class ScheduleDB:
                     params.append(f'%"{tag}"%')
                 query += f" AND ({' OR '.join(tag_conditions)})"
 
-            query += " ORDER BY priority DESC, due_time ASC NULLS LAST, created_at ASC"
+            query += " ORDER BY priority ASC, due_time ASC NULLS LAST, created_at ASC"
             query += " LIMIT ? OFFSET ?"
             params.extend([limit, offset])
 
@@ -3095,7 +3142,7 @@ class ScheduleDB:
                         now,
                         "new",
                         data.get("target_id", ""),
-                        data.get("priority", 3),
+                        data.get("priority", 5),
                         constraints_json,
                         data.get("requested_window_start"),
                         data.get("requested_window_end"),
@@ -3120,7 +3167,7 @@ class ScheduleDB:
                         updated_at=now,
                         status="new",
                         target_id=data.get("target_id", ""),
-                        priority=data.get("priority", 3),
+                        priority=data.get("priority", 5),
                         constraints_json=constraints_json,
                         requested_window_start=data.get("requested_window_start"),
                         requested_window_end=data.get("requested_window_end"),

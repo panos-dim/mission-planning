@@ -3,6 +3,7 @@ Tests for targets module.
 """
 
 import pytest
+
 from mission_planner.targets import GroundTarget
 
 
@@ -18,11 +19,13 @@ class TestGroundTarget:
     def test_default_values(self) -> None:
         target = GroundTarget(name="Test", latitude=0.0, longitude=0.0)
         assert target.elevation_mask == 10.0
-        assert target.priority == 1
+        assert target.priority == 5
         assert target.mission_type == "imaging"
 
     def test_custom_elevation_mask(self) -> None:
-        target = GroundTarget(name="Test", latitude=0.0, longitude=0.0, elevation_mask=15.0)
+        target = GroundTarget(
+            name="Test", latitude=0.0, longitude=0.0, elevation_mask=15.0
+        )
         assert target.elevation_mask == 15.0
 
     def test_custom_priority(self) -> None:
@@ -42,47 +45,54 @@ class TestGroundTarget:
         assert target_south.latitude == -90.0
 
     def test_imaging_mission(self) -> None:
-        target = GroundTarget(name="Test", latitude=25.0, longitude=55.0, mission_type="imaging")
+        target = GroundTarget(
+            name="Test", latitude=25.0, longitude=55.0, mission_type="imaging"
+        )
         assert target.mission_type == "imaging"
         assert target.sensor_fov_half_angle_deg == 1.0
         assert target.max_spacecraft_roll == 45.0
 
     def test_communication_mission(self) -> None:
-        target = GroundTarget(name="Test", latitude=25.0, longitude=55.0, mission_type="communication")
+        target = GroundTarget(
+            name="Test", latitude=25.0, longitude=55.0, mission_type="communication"
+        )
         assert target.mission_type == "communication"
 
     def test_custom_sensor_fov(self) -> None:
         target = GroundTarget(
-            name="Test", latitude=25.0, longitude=55.0,
-            mission_type="imaging", sensor_fov_half_angle_deg=30.0
+            name="Test",
+            latitude=25.0,
+            longitude=55.0,
+            mission_type="imaging",
+            sensor_fov_half_angle_deg=30.0,
         )
         assert target.sensor_fov_half_angle_deg == 30.0
 
     def test_custom_max_roll(self) -> None:
         target = GroundTarget(
-            name="Test", latitude=25.0, longitude=55.0,
-            mission_type="imaging", max_spacecraft_roll=30.0
+            name="Test",
+            latitude=25.0,
+            longitude=55.0,
+            mission_type="imaging",
+            max_spacecraft_roll=30.0,
         )
         assert target.max_spacecraft_roll == 30.0
 
     def test_with_description(self) -> None:
         target = GroundTarget(
-            name="Test", latitude=25.0, longitude=55.0,
-            description="Test target"
+            name="Test", latitude=25.0, longitude=55.0, description="Test target"
         )
         assert target.description == "Test target"
 
     def test_with_color(self) -> None:
         target = GroundTarget(
-            name="Test", latitude=25.0, longitude=55.0,
-            color="#EF4444"
+            name="Test", latitude=25.0, longitude=55.0, color="#EF4444"
         )
         assert target.color == "#EF4444"
 
     def test_with_altitude(self) -> None:
         target = GroundTarget(
-            name="Mountain", latitude=25.0, longitude=55.0,
-            altitude=1000.0
+            name="Mountain", latitude=25.0, longitude=55.0, altitude=1000.0
         )
         assert target.altitude == 1000.0
 

@@ -82,7 +82,7 @@ class Opportunity:
 
     # Priority/value for optimization (default: uniform)
     value: float = 1.0
-    priority: int = 1
+    priority: int = 5
 
     # SAR-specific fields (threaded from SAROpportunityData)
     mission_mode: Optional[str] = None  # "SAR" | "OPTICAL"

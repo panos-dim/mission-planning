@@ -414,7 +414,7 @@ class TestMissionSchedulerExtended:
                 end_time=base_time + timedelta(seconds=60),
                 incidence_angle=10.0,
                 value=0.5,
-                priority=1,
+                priority=5,
             ),
             Opportunity(
                 id="opp_high",
@@ -424,7 +424,7 @@ class TestMissionSchedulerExtended:
                 end_time=base_time + timedelta(minutes=6),
                 incidence_angle=15.0,
                 value=1.0,
-                priority=5,
+                priority=1,
             ),
         ]
 

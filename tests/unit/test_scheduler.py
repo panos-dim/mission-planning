@@ -9,16 +9,18 @@ Tests cover:
 - MissionScheduler algorithms
 """
 
-import pytest
 from datetime import datetime, timedelta
+
+import pytest
+
 from mission_planner.scheduler import (
+    EARTH_RADIUS_KM,
+    MIN_GAP_SECONDS,
     AlgorithmType,
+    MissionScheduler,
     Opportunity,
     ScheduledOpportunity,
     SchedulerConfig,
-    MissionScheduler,
-    EARTH_RADIUS_KM,
-    MIN_GAP_SECONDS,
 )
 
 
@@ -102,7 +104,7 @@ class TestOpportunity:
         )
 
         assert opp.value == 1.0
-        assert opp.priority == 1
+        assert opp.priority == 5
         assert opp.incidence_angle is None
         assert opp.pitch_angle is None
 
@@ -233,38 +235,40 @@ class TestMissionScheduler:
         assert scheduler.config.max_spacecraft_roll_deg == 45.0
 
     def test_empty_opportunities(self, scheduler, target_positions) -> None:
-        schedule, metrics = scheduler.schedule([], target_positions, AlgorithmType.FIRST_FIT)
+        schedule, metrics = scheduler.schedule(
+            [], target_positions, AlgorithmType.FIRST_FIT
+        )
         assert len(schedule) == 0
 
-    def test_first_fit_basic(self, scheduler, sample_opportunities, target_positions) -> None:
+    def test_first_fit_basic(
+        self, scheduler, sample_opportunities, target_positions
+    ) -> None:
         schedule, metrics = scheduler.schedule(
-            sample_opportunities,
-            target_positions,
-            AlgorithmType.FIRST_FIT
+            sample_opportunities, target_positions, AlgorithmType.FIRST_FIT
         )
         assert len(schedule) > 0
 
-    def test_best_fit_basic(self, scheduler, sample_opportunities, target_positions) -> None:
+    def test_best_fit_basic(
+        self, scheduler, sample_opportunities, target_positions
+    ) -> None:
         schedule, metrics = scheduler.schedule(
-            sample_opportunities,
-            target_positions,
-            AlgorithmType.BEST_FIT
+            sample_opportunities, target_positions, AlgorithmType.BEST_FIT
         )
         assert len(schedule) > 0
 
-    def test_roll_pitch_first_fit(self, scheduler, sample_opportunities, target_positions) -> None:
+    def test_roll_pitch_first_fit(
+        self, scheduler, sample_opportunities, target_positions
+    ) -> None:
         schedule, metrics = scheduler.schedule(
-            sample_opportunities,
-            target_positions,
-            AlgorithmType.ROLL_PITCH_FIRST_FIT
+            sample_opportunities, target_positions, AlgorithmType.ROLL_PITCH_FIRST_FIT
         )
         assert len(schedule) > 0
 
-    def test_roll_pitch_best_fit(self, scheduler, sample_opportunities, target_positions) -> None:
+    def test_roll_pitch_best_fit(
+        self, scheduler, sample_opportunities, target_positions
+    ) -> None:
         schedule, metrics = scheduler.schedule(
-            sample_opportunities,
-            target_positions,
-            AlgorithmType.ROLL_PITCH_BEST_FIT
+            sample_opportunities, target_positions, AlgorithmType.ROLL_PITCH_BEST_FIT
         )
         assert len(schedule) > 0
 
@@ -284,26 +288,28 @@ class TestMissionScheduler:
             ),
         ]
 
-        schedule, metrics = scheduler.schedule(opps, target_positions, AlgorithmType.FIRST_FIT)
+        schedule, metrics = scheduler.schedule(
+            opps, target_positions, AlgorithmType.FIRST_FIT
+        )
         # May or may not be scheduled depending on implementation
         assert isinstance(schedule, list)
 
-    def test_chronological_order(self, scheduler, sample_opportunities, target_positions) -> None:
+    def test_chronological_order(
+        self, scheduler, sample_opportunities, target_positions
+    ) -> None:
         schedule, metrics = scheduler.schedule(
-            sample_opportunities,
-            target_positions,
-            AlgorithmType.FIRST_FIT
+            sample_opportunities, target_positions, AlgorithmType.FIRST_FIT
         )
 
         # Check schedule is in chronological order
         for i in range(len(schedule) - 1):
             assert schedule[i].start_time <= schedule[i + 1].start_time
 
-    def test_metrics_returned(self, scheduler, sample_opportunities, target_positions) -> None:
+    def test_metrics_returned(
+        self, scheduler, sample_opportunities, target_positions
+    ) -> None:
         schedule, metrics = scheduler.schedule(
-            sample_opportunities,
-            target_positions,
-            AlgorithmType.FIRST_FIT
+            sample_opportunities, target_positions, AlgorithmType.FIRST_FIT
         )
 
         assert metrics is not None

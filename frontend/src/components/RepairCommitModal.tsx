@@ -10,69 +10,69 @@ import {
   Minus,
   Move,
   Lock,
-} from "lucide-react";
-import { useState, useMemo } from "react";
+} from 'lucide-react'
+import { useState, useMemo } from 'react'
 import type {
   RepairDiff,
   MetricsComparison,
   CommitPreview,
   RepairPlanResponse,
-} from "../api/scheduleApi";
-import type { TargetData } from "../types";
+} from '../api/scheduleApi'
+import type { TargetData } from '../types'
 
 // =============================================================================
 // Risk Rules (PR-COMMIT-PREVIEW-01)
 // =============================================================================
 
-const LARGE_CHANGE_THRESHOLD = 20;
+const LARGE_CHANGE_THRESHOLD = 20
 
 export interface RiskAssessment {
-  hasConflicts: boolean;
-  conflictCount: number;
+  hasConflicts: boolean
+  conflictCount: number
   droppedHighPriority: Array<{
-    id: string;
-    targetId: string;
-    priority: number;
-  }>;
-  hardLockViolations: string[];
-  isLargeChange: boolean;
-  totalChangeCount: number;
-  requiresAcknowledgement: boolean;
-  warnings: string[];
+    id: string
+    targetId: string
+    priority: number
+  }>
+  hardLockViolations: string[]
+  isLargeChange: boolean
+  totalChangeCount: number
+  requiresAcknowledgement: boolean
+  warnings: string[]
 }
 
 export function computeRiskAssessment(
   repairDiff: RepairDiff,
   _metricsComparison: MetricsComparison,
   commitPreview: CommitPreview,
-  conflictsIfCommitted: RepairPlanResponse["conflicts_if_committed"],
+  conflictsIfCommitted: RepairPlanResponse['conflicts_if_committed'],
   targets: TargetData[],
 ): RiskAssessment {
   const conflictCount =
     commitPreview.will_conflict_with > 0
       ? commitPreview.will_conflict_with
-      : conflictsIfCommitted.length;
+      : conflictsIfCommitted.length
 
-  const hasConflicts = conflictCount > 0;
+  const hasConflicts = conflictCount > 0
 
   // Build target priority lookup
-  const targetPriorityMap = new Map<string, number>();
+  const targetPriorityMap = new Map<string, number>()
   for (const t of targets) {
-    targetPriorityMap.set(t.name, t.priority ?? 1);
+    targetPriorityMap.set(t.name, t.priority ?? 5)
   }
 
-  // Find dropped items with high priority (P4/P5)
-  const droppedHighPriority: RiskAssessment["droppedHighPriority"] = [];
-  const changeLog = repairDiff.change_log;
+  // Find dropped items with high priority (P1/P2 — 1=best)
+  const droppedHighPriority: RiskAssessment['droppedHighPriority'] = []
+  const changeLog = repairDiff.change_log
   if (changeLog) {
     for (const entry of changeLog.dropped) {
-      const prio = targetPriorityMap.get(entry.target_id) ?? 1;
-      if (prio >= 4) {
+      const prio = targetPriorityMap.get(entry.target_id) ?? 5
+      if (prio <= 2) {
         droppedHighPriority.push({
           id: entry.acquisition_id,
           targetId: entry.target_id,
           priority: prio,
-        });
+        })
       }
     }
   } else {
@@ -82,41 +82,39 @@ export function computeRiskAssessment(
     }
   }
 
-  const hardLockViolations = repairDiff.hard_lock_warnings ?? [];
+  const hardLockViolations = repairDiff.hard_lock_warnings ?? []
 
   const totalChangeCount =
-    repairDiff.dropped.length +
-    repairDiff.added.length +
-    repairDiff.moved.length;
-  const isLargeChange = totalChangeCount > LARGE_CHANGE_THRESHOLD;
+    repairDiff.dropped.length + repairDiff.added.length + repairDiff.moved.length
+  const isLargeChange = totalChangeCount > LARGE_CHANGE_THRESHOLD
 
   // Build warnings list
-  const warnings: string[] = [];
+  const warnings: string[] = []
   if (hasConflicts) {
     warnings.push(
-      `${conflictCount} conflict${conflictCount !== 1 ? "s" : ""} predicted after commit`,
-    );
+      `${conflictCount} conflict${conflictCount !== 1 ? 's' : ''} predicted after commit`,
+    )
   }
   if (droppedHighPriority.length > 0) {
-    const p5 = droppedHighPriority.filter((d) => d.priority === 5).length;
-    const p4 = droppedHighPriority.filter((d) => d.priority === 4).length;
-    const parts: string[] = [];
-    if (p5 > 0) parts.push(`${p5} P5`);
-    if (p4 > 0) parts.push(`${p4} P4`);
-    warnings.push(`Dropping high-priority: ${parts.join(", ")}`);
+    const p1 = droppedHighPriority.filter((d) => d.priority === 1).length
+    const p2 = droppedHighPriority.filter((d) => d.priority === 2).length
+    const parts: string[] = []
+    if (p1 > 0) parts.push(`${p1} P1`)
+    if (p2 > 0) parts.push(`${p2} P2`)
+    warnings.push(`Dropping high-priority: ${parts.join(', ')}`)
   }
   if (hardLockViolations.length > 0) {
     warnings.push(
-      `${hardLockViolations.length} hard-lock violation${hardLockViolations.length !== 1 ? "s" : ""}`,
-    );
+      `${hardLockViolations.length} hard-lock violation${hardLockViolations.length !== 1 ? 's' : ''}`,
+    )
   }
   if (isLargeChange) {
     warnings.push(
       `Large change set: ${totalChangeCount} items affected (threshold: ${LARGE_CHANGE_THRESHOLD})`,
-    );
+    )
   }
 
-  const requiresAcknowledgement = hasConflicts;
+  const requiresAcknowledgement = hasConflicts
 
   return {
     hasConflicts,
@@ -127,7 +125,7 @@ export function computeRiskAssessment(
     totalChangeCount,
     requiresAcknowledgement,
     warnings,
-  };
+  }
 }
 
 // =============================================================================
@@ -135,50 +133,42 @@ export function computeRiskAssessment(
 // =============================================================================
 
 interface PriorityBucket {
-  priority: number;
-  dropped: number;
-  added: number;
-  kept: number;
+  priority: number
+  dropped: number
+  added: number
+  kept: number
 }
 
-function computePriorityImpact(
-  repairDiff: RepairDiff,
-  targets: TargetData[],
-): PriorityBucket[] {
-  const targetPriorityMap = new Map<string, number>();
+function computePriorityImpact(repairDiff: RepairDiff, targets: TargetData[]): PriorityBucket[] {
+  const targetPriorityMap = new Map<string, number>()
   for (const t of targets) {
-    targetPriorityMap.set(t.name, t.priority ?? 1);
+    targetPriorityMap.set(t.name, t.priority ?? 5)
   }
 
-  const buckets = new Map<
-    number,
-    { dropped: number; added: number; kept: number }
-  >();
+  const buckets = new Map<number, { dropped: number; added: number; kept: number }>()
 
-  const changeLog = repairDiff.change_log;
+  const changeLog = repairDiff.change_log
   if (changeLog) {
     for (const entry of changeLog.dropped) {
-      const p = targetPriorityMap.get(entry.target_id) ?? 1;
-      const b = buckets.get(p) ?? { dropped: 0, added: 0, kept: 0 };
-      b.dropped++;
-      buckets.set(p, b);
+      const p = targetPriorityMap.get(entry.target_id) ?? 5
+      const b = buckets.get(p) ?? { dropped: 0, added: 0, kept: 0 }
+      b.dropped++
+      buckets.set(p, b)
     }
     for (const entry of changeLog.added) {
-      const p = targetPriorityMap.get(entry.target_id) ?? 1;
-      const b = buckets.get(p) ?? { dropped: 0, added: 0, kept: 0 };
-      b.added++;
-      buckets.set(p, b);
+      const p = targetPriorityMap.get(entry.target_id) ?? 5
+      const b = buckets.get(p) ?? { dropped: 0, added: 0, kept: 0 }
+      b.added++
+      buckets.set(p, b)
     }
   }
 
-  // Ensure all present priorities are represented
-  const result: PriorityBucket[] = [];
-  for (const [priority, counts] of [...buckets.entries()].sort(
-    (a, b) => b[0] - a[0],
-  )) {
-    result.push({ priority, ...counts });
+  // Ensure all present priorities are represented (1=best first)
+  const result: PriorityBucket[] = []
+  for (const [priority, counts] of [...buckets.entries()].sort((a, b) => a[0] - b[0])) {
+    result.push({ priority, ...counts })
   }
-  return result;
+  return result
 }
 
 // =============================================================================
@@ -186,15 +176,15 @@ function computePriorityImpact(
 // =============================================================================
 
 interface RepairCommitModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onCommit: (force: boolean, notes?: string) => Promise<void>;
-  onReviewChanges: () => void;
-  planId: string;
-  repairResult: RepairPlanResponse;
-  targets: TargetData[];
-  hardLockedCount: number;
-  isCommitting?: boolean;
+  isOpen: boolean
+  onClose: () => void
+  onCommit: (force: boolean, notes?: string) => Promise<void>
+  onReviewChanges: () => void
+  planId: string
+  repairResult: RepairPlanResponse
+  targets: TargetData[]
+  hardLockedCount: number
+  isCommitting?: boolean
 }
 
 // =============================================================================
@@ -212,16 +202,11 @@ export default function RepairCommitModal({
   hardLockedCount,
   isCommitting = false,
 }: RepairCommitModalProps): JSX.Element | null {
-  const [acknowledgeConflicts, setAcknowledgeConflicts] = useState(false);
-  const [notes, setNotes] = useState("");
-  const [showDropReasons, setShowDropReasons] = useState(false);
+  const [acknowledgeConflicts, setAcknowledgeConflicts] = useState(false)
+  const [notes, setNotes] = useState('')
+  const [showDropReasons, setShowDropReasons] = useState(false)
 
-  const {
-    repair_diff,
-    metrics_comparison,
-    commit_preview,
-    conflicts_if_committed,
-  } = repairResult;
+  const { repair_diff, metrics_comparison, commit_preview, conflicts_if_committed } = repairResult
 
   const risk = useMemo(
     () =>
@@ -232,42 +217,32 @@ export default function RepairCommitModal({
         conflicts_if_committed,
         targets,
       ),
-    [
-      repair_diff,
-      metrics_comparison,
-      commit_preview,
-      conflicts_if_committed,
-      targets,
-    ],
-  );
+    [repair_diff, metrics_comparison, commit_preview, conflicts_if_committed, targets],
+  )
 
   const priorityImpact = useMemo(
     () => computePriorityImpact(repair_diff, targets),
     [repair_diff, targets],
-  );
+  )
 
-  if (!isOpen) return null;
+  if (!isOpen) return null
 
-  const scoreDelta = metrics_comparison.score_delta;
-  const isPositiveChange = scoreDelta >= 0;
-  const hasRisk = risk.warnings.length > 0;
-  const canCommit =
-    !isCommitting && (!risk.requiresAcknowledgement || acknowledgeConflicts);
+  const scoreDelta = metrics_comparison.score_delta
+  const isPositiveChange = scoreDelta >= 0
+  const hasRisk = risk.warnings.length > 0
+  const canCommit = !isCommitting && (!risk.requiresAcknowledgement || acknowledgeConflicts)
 
   const handleCommit = async () => {
-    await onCommit(
-      risk.hasConflicts && acknowledgeConflicts,
-      notes || undefined,
-    );
-  };
+    await onCommit(risk.hasConflicts && acknowledgeConflicts, notes || undefined)
+  }
 
   const handleReviewChanges = () => {
-    onClose();
-    onReviewChanges();
-  };
+    onClose()
+    onReviewChanges()
+  }
 
   // Top 3 conflicts for preview
-  const topConflicts = conflicts_if_committed.slice(0, 3);
+  const topConflicts = conflicts_if_committed.slice(0, 3)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
@@ -317,9 +292,7 @@ export default function RepairCommitModal({
               <div className="text-[10px] text-gray-400 mt-0.5">Moved</div>
             </div>
             <div className="bg-gray-800 rounded-lg p-2.5 text-center">
-              <div className="text-xl font-bold text-green-400">
-                {repair_diff.kept.length}
-              </div>
+              <div className="text-xl font-bold text-green-400">{repair_diff.kept.length}</div>
               <div className="text-[10px] text-gray-400 mt-0.5">Kept</div>
             </div>
           </div>
@@ -329,10 +302,8 @@ export default function RepairCommitModal({
             <div className="flex items-center gap-2 px-3 py-2 bg-gray-800 rounded-lg text-sm">
               <Lock className="w-4 h-4 text-red-400 shrink-0" />
               <span className="text-gray-300">
-                Hard-locked preserved:{" "}
-                <span className="text-white font-medium">
-                  {hardLockedCount}
-                </span>
+                Hard-locked preserved:{' '}
+                <span className="text-white font-medium">{hardLockedCount}</span>
               </span>
             </div>
           )}
@@ -342,17 +313,15 @@ export default function RepairCommitModal({
             <div className="flex items-center justify-between text-sm">
               <span className="text-gray-400">Score</span>
               <div className="flex items-center gap-2">
-                <span className="text-gray-500">
-                  {metrics_comparison.score_before.toFixed(1)}
-                </span>
+                <span className="text-gray-500">{metrics_comparison.score_before.toFixed(1)}</span>
                 <ArrowRight className="w-3.5 h-3.5 text-gray-500" />
                 <span className="text-white font-medium">
                   {metrics_comparison.score_after.toFixed(1)}
                 </span>
                 <span
-                  className={`text-xs font-bold ${isPositiveChange ? "text-green-400" : "text-red-400"}`}
+                  className={`text-xs font-bold ${isPositiveChange ? 'text-green-400' : 'text-red-400'}`}
                 >
-                  ({isPositiveChange ? "+" : ""}
+                  ({isPositiveChange ? '+' : ''}
                   {scoreDelta.toFixed(1)})
                 </span>
               </div>
@@ -360,7 +329,7 @@ export default function RepairCommitModal({
             <div className="flex items-center justify-between text-sm">
               <span className="text-gray-400">Conflicts after commit</span>
               <span
-                className={`font-medium ${risk.conflictCount > 0 ? "text-red-400" : "text-green-400"}`}
+                className={`font-medium ${risk.conflictCount > 0 ? 'text-red-400' : 'text-green-400'}`}
               >
                 {risk.conflictCount}
               </span>
@@ -370,30 +339,21 @@ export default function RepairCommitModal({
           {/* Priority Impact */}
           {priorityImpact.length > 0 && (
             <div className="bg-gray-800 rounded-lg p-3">
-              <h4 className="text-xs font-medium text-gray-400 mb-2">
-                Priority Impact
-              </h4>
+              <h4 className="text-xs font-medium text-gray-400 mb-2">Priority Impact</h4>
               <div className="space-y-1">
                 {priorityImpact.map((bucket) => (
-                  <div
-                    key={bucket.priority}
-                    className="flex items-center justify-between text-xs"
-                  >
+                  <div key={bucket.priority} className="flex items-center justify-between text-xs">
                     <span
-                      className={`font-medium ${bucket.priority >= 4 ? "text-yellow-400" : "text-gray-300"}`}
+                      className={`font-medium ${bucket.priority >= 4 ? 'text-yellow-400' : 'text-gray-300'}`}
                     >
                       P{bucket.priority}
                     </span>
                     <div className="flex items-center gap-3">
                       {bucket.dropped > 0 && (
-                        <span className="text-red-400">
-                          -{bucket.dropped} dropped
-                        </span>
+                        <span className="text-red-400">-{bucket.dropped} dropped</span>
                       )}
                       {bucket.added > 0 && (
-                        <span className="text-blue-400">
-                          +{bucket.added} added
-                        </span>
+                        <span className="text-blue-400">+{bucket.added} added</span>
                       )}
                     </div>
                   </div>
@@ -407,16 +367,11 @@ export default function RepairCommitModal({
             <div className="bg-yellow-900/20 border border-yellow-700/50 rounded-lg p-3 space-y-2">
               <div className="flex items-center gap-2">
                 <AlertTriangle className="w-4 h-4 text-yellow-400 shrink-0" />
-                <span className="text-sm font-medium text-yellow-400">
-                  Risk Detected
-                </span>
+                <span className="text-sm font-medium text-yellow-400">Risk Detected</span>
               </div>
               <ul className="space-y-1 pl-6">
                 {risk.warnings.map((w, idx) => (
-                  <li
-                    key={idx}
-                    className="text-xs text-yellow-300/80 list-disc"
-                  >
+                  <li key={idx} className="text-xs text-yellow-300/80 list-disc">
                     {w}
                   </li>
                 ))}
@@ -433,12 +388,9 @@ export default function RepairCommitModal({
               </h4>
               <div className="space-y-1.5 max-h-28 overflow-y-auto">
                 {topConflicts.map((c, idx) => (
-                  <div
-                    key={idx}
-                    className="text-xs text-red-300/80 flex items-start gap-1.5"
-                  >
+                  <div key={idx} className="text-xs text-red-300/80 flex items-start gap-1.5">
                     <span className="text-red-500 shrink-0 mt-0.5">
-                      {c.severity === "error" ? "●" : "○"}
+                      {c.severity === 'error' ? '●' : '○'}
                     </span>
                     <span>{c.description}</span>
                   </div>
@@ -477,19 +429,15 @@ export default function RepairCommitModal({
                 className="text-xs text-gray-500 hover:text-gray-400 flex items-center gap-1 transition"
               >
                 <Info className="w-3 h-3" />
-                {showDropReasons ? "Hide" : "Show"} drop reasons
+                {showDropReasons ? 'Hide' : 'Show'} drop reasons
               </button>
               {showDropReasons && repair_diff.reason_summary?.dropped && (
                 <div className="mt-2 bg-gray-800 rounded-lg p-3 max-h-32 overflow-y-auto">
                   <div className="space-y-1">
                     {repair_diff.reason_summary.dropped.map((item, idx) => (
                       <div key={idx} className="text-xs">
-                        <span className="text-gray-500 font-mono">
-                          {item.id.slice(0, 12)}
-                        </span>
-                        <span className="text-gray-400 ml-2">
-                          {item.reason}
-                        </span>
+                        <span className="text-gray-500 font-mono">{item.id.slice(0, 12)}</span>
+                        <span className="text-gray-400 ml-2">{item.reason}</span>
                       </div>
                     ))}
                   </div>
@@ -508,17 +456,13 @@ export default function RepairCommitModal({
                 onChange={(e) => setAcknowledgeConflicts(e.target.checked)}
                 className="w-4 h-4 mt-0.5 rounded border-gray-600 bg-gray-700 text-red-500 cursor-pointer"
               />
-              <label
-                htmlFor="acknowledge-conflicts"
-                className="text-sm cursor-pointer select-none"
-              >
+              <label htmlFor="acknowledge-conflicts" className="text-sm cursor-pointer select-none">
                 <span className="text-red-300 font-medium">
                   I understand this will create conflicts
                 </span>
                 <span className="text-red-400/60 text-xs block mt-0.5">
                   {risk.conflictCount} conflict
-                  {risk.conflictCount !== 1 ? "s" : ""} will need resolution
-                  after commit
+                  {risk.conflictCount !== 1 ? 's' : ''} will need resolution after commit
                 </span>
               </label>
             </div>
@@ -542,10 +486,7 @@ export default function RepairCommitModal({
         {/* Footer */}
         <div className="flex items-center justify-between px-5 py-4 border-t border-gray-700 bg-gray-800/50">
           <div className="text-xs text-gray-500">
-            Plan:{" "}
-            <span className="font-mono">
-              {planId ? planId.slice(0, 12) + "..." : "—"}
-            </span>
+            Plan: <span className="font-mono">{planId ? planId.slice(0, 12) + '...' : '—'}</span>
           </div>
           <div className="flex gap-2">
             <button
@@ -570,8 +511,8 @@ export default function RepairCommitModal({
                 px-4 py-2 text-sm rounded-lg transition flex items-center gap-2
                 ${
                   canCommit
-                    ? "bg-green-600 hover:bg-green-500 text-white"
-                    : "bg-gray-600 text-gray-400 cursor-not-allowed"
+                    ? 'bg-green-600 hover:bg-green-500 text-white'
+                    : 'bg-gray-600 text-gray-400 cursor-not-allowed'
                 }
                 disabled:opacity-50
               `}
@@ -592,5 +533,5 @@ export default function RepairCommitModal({
         </div>
       </div>
     </div>
-  );
+  )
 }

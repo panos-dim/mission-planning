@@ -9,9 +9,10 @@ Tests cover:
 - Distance calculations
 """
 
-import pytest
-from unittest.mock import patch
 import math
+from unittest.mock import patch
+
+import pytest
 
 from mission_planner.targets import GroundTarget
 
@@ -39,8 +40,8 @@ class TestGroundTargetBasic:
 
         assert target.elevation_mask == 10.0
         assert target.altitude == 0.0
-        assert target.mission_type == 'imaging'
-        assert target.priority == 1
+        assert target.mission_type == "imaging"
+        assert target.priority == 5
 
     def test_custom_values(self) -> None:
         target = GroundTarget(
@@ -49,14 +50,14 @@ class TestGroundTargetBasic:
             longitude=20.0,
             elevation_mask=15.0,
             altitude=100.0,
-            mission_type='communication',
+            mission_type="communication",
             priority=5,
             description="A custom target",
         )
 
         assert target.elevation_mask == 15.0
         assert target.altitude == 100.0
-        assert target.mission_type == 'communication'
+        assert target.mission_type == "communication"
         assert target.priority == 5
         assert target.description == "A custom target"
 
@@ -110,34 +111,44 @@ class TestGroundTargetValidation:
             GroundTarget(name="Invalid", latitude=0.0, longitude=-181.0)
 
     def test_valid_elevation_mask(self) -> None:
-        target_low = GroundTarget(name="Low", latitude=0.0, longitude=0.0, elevation_mask=0.0)
-        target_high = GroundTarget(name="High", latitude=0.0, longitude=0.0, elevation_mask=90.0)
+        target_low = GroundTarget(
+            name="Low", latitude=0.0, longitude=0.0, elevation_mask=0.0
+        )
+        target_high = GroundTarget(
+            name="High", latitude=0.0, longitude=0.0, elevation_mask=90.0
+        )
 
         assert target_low.elevation_mask == 0.0
         assert target_high.elevation_mask == 90.0
 
     def test_invalid_elevation_mask_negative(self) -> None:
         with pytest.raises(ValueError, match="Invalid elevation mask"):
-            GroundTarget(name="Invalid", latitude=0.0, longitude=0.0, elevation_mask=-1.0)
+            GroundTarget(
+                name="Invalid", latitude=0.0, longitude=0.0, elevation_mask=-1.0
+            )
 
     def test_invalid_elevation_mask_too_high(self) -> None:
         with pytest.raises(ValueError, match="Invalid elevation mask"):
-            GroundTarget(name="Invalid", latitude=0.0, longitude=0.0, elevation_mask=91.0)
+            GroundTarget(
+                name="Invalid", latitude=0.0, longitude=0.0, elevation_mask=91.0
+            )
 
     def test_valid_mission_types(self) -> None:
         target_imaging = GroundTarget(
-            name="Imaging", latitude=0.0, longitude=0.0, mission_type='imaging'
+            name="Imaging", latitude=0.0, longitude=0.0, mission_type="imaging"
         )
         target_comm = GroundTarget(
-            name="Comm", latitude=0.0, longitude=0.0, mission_type='communication'
+            name="Comm", latitude=0.0, longitude=0.0, mission_type="communication"
         )
 
-        assert target_imaging.mission_type == 'imaging'
-        assert target_comm.mission_type == 'communication'
+        assert target_imaging.mission_type == "imaging"
+        assert target_comm.mission_type == "communication"
 
     def test_invalid_mission_type(self) -> None:
         with pytest.raises(ValueError, match="Invalid mission type"):
-            GroundTarget(name="Invalid", latitude=0.0, longitude=0.0, mission_type='invalid')
+            GroundTarget(
+                name="Invalid", latitude=0.0, longitude=0.0, mission_type="invalid"
+            )
 
 
 class TestGroundTargetSensorFOV:
@@ -148,7 +159,7 @@ class TestGroundTargetSensorFOV:
             name="Imaging",
             latitude=45.0,
             longitude=10.0,
-            mission_type='imaging',
+            mission_type="imaging",
         )
 
         # Should have default sensor FOV set
@@ -187,7 +198,7 @@ class TestGroundTargetSensorFOV:
             name="Roll",
             latitude=45.0,
             longitude=10.0,
-            mission_type='imaging',
+            mission_type="imaging",
         )
 
         # Should have default max_spacecraft_roll set for imaging
@@ -219,7 +230,7 @@ class TestGroundTargetToDict:
             longitude=20.0,
             elevation_mask=15.0,
             altitude=500.0,
-            mission_type='communication',
+            mission_type="communication",
             sensor_fov_half_angle_deg=30.0,
             description="Full description",
         )
@@ -268,7 +279,7 @@ class TestGroundTargetFromDict:
             latitude=55.0,
             longitude=-5.0,
             elevation_mask=20.0,
-            mission_type='imaging',
+            mission_type="imaging",
         )
 
         data = original.to_dict()

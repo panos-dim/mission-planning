@@ -9,18 +9,20 @@ Tests cover:
 - Edge cases and boundary conditions
 """
 
-import pytest
 import math
+
+import pytest
+
 from mission_planner.quality_scoring import (
+    WEIGHT_PRESETS,
     MultiCriteriaWeights,
     QualityModel,
-    WEIGHT_PRESETS,
-    compute_quality_score,
+    _band_quality,
+    _monotonic_quality,
     compute_composite_value,
+    compute_quality_score,
     compute_timing_score,
     select_default_model,
-    _monotonic_quality,
-    _band_quality,
 )
 
 
@@ -53,6 +55,7 @@ class TestMultiCriteriaWeights:
         """Test that normalized weights always sum to 1.0."""
         for _ in range(10):
             import random
+
             p = random.uniform(0, 100)
             g = random.uniform(0, 100)
             t = random.uniform(0, 100)
@@ -64,27 +67,27 @@ class TestMultiCriteriaWeights:
         """Test handling of all-zero weights."""
         weights = MultiCriteriaWeights(priority=0, geometry=0, timing=0)
         # Should default to equal weights
-        assert abs(weights.norm_priority - 1/3) < 0.001
-        assert abs(weights.norm_geometry - 1/3) < 0.001
-        assert abs(weights.norm_timing - 1/3) < 0.001
+        assert abs(weights.norm_priority - 1 / 3) < 0.001
+        assert abs(weights.norm_geometry - 1 / 3) < 0.001
+        assert abs(weights.norm_timing - 1 / 3) < 0.001
 
     def test_to_dict(self) -> None:
         """Test to_dict method."""
         weights = MultiCriteriaWeights(priority=10, geometry=20, timing=30)
         d = weights.to_dict()
-        assert d == {'priority': 10, 'geometry': 20, 'timing': 30}
+        assert d == {"priority": 10, "geometry": 20, "timing": 30}
 
     def test_normalized_dict(self) -> None:
         """Test normalized_dict method."""
         weights = MultiCriteriaWeights(priority=25, geometry=25, timing=50)
         d = weights.normalized_dict()
-        assert abs(d['priority'] - 0.25) < 0.001
-        assert abs(d['geometry'] - 0.25) < 0.001
-        assert abs(d['timing'] - 0.50) < 0.001
+        assert abs(d["priority"] - 0.25) < 0.001
+        assert abs(d["geometry"] - 0.25) < 0.001
+        assert abs(d["timing"] - 0.50) < 0.001
 
     def test_from_dict(self) -> None:
         """Test from_dict class method."""
-        d = {'priority': 50, 'geometry': 30, 'timing': 20}
+        d = {"priority": 50, "geometry": 30, "timing": 20}
         weights = MultiCriteriaWeights.from_dict(d)
         assert weights.priority == 50
         assert weights.geometry == 30
@@ -92,7 +95,7 @@ class TestMultiCriteriaWeights:
 
     def test_from_dict_missing_keys(self) -> None:
         """Test from_dict with missing keys uses defaults."""
-        d = {'priority': 50}
+        d = {"priority": 50}
         weights = MultiCriteriaWeights.from_dict(d)
         assert weights.priority == 50
         assert weights.geometry == 40.0  # default
@@ -104,26 +107,26 @@ class TestWeightPresets:
 
     def test_balanced_preset(self) -> None:
         """Test balanced preset."""
-        w = WEIGHT_PRESETS['balanced']
+        w = WEIGHT_PRESETS["balanced"]
         assert w.priority == 40
         assert w.geometry == 40
         assert w.timing == 20
 
     def test_priority_first_preset(self) -> None:
         """Test priority_first preset."""
-        w = WEIGHT_PRESETS['priority_first']
+        w = WEIGHT_PRESETS["priority_first"]
         assert w.priority > w.geometry
         assert w.priority > w.timing
 
     def test_quality_first_preset(self) -> None:
         """Test quality_first preset."""
-        w = WEIGHT_PRESETS['quality_first']
+        w = WEIGHT_PRESETS["quality_first"]
         assert w.geometry > w.priority
         assert w.geometry > w.timing
 
     def test_all_presets_exist(self) -> None:
         """Test all expected presets exist."""
-        expected = ['balanced', 'priority_first', 'quality_first', 'urgent', 'archival']
+        expected = ["balanced", "priority_first", "quality_first", "urgent", "archival"]
         for name in expected:
             assert name in WEIGHT_PRESETS
 
@@ -213,8 +216,9 @@ class TestComputeQualityScore:
 
     def test_band_model(self) -> None:
         """Test BAND model."""
-        q = compute_quality_score(35.0, "SAR", QualityModel.BAND,
-                                   ideal_incidence_deg=35.0, band_width_deg=7.5)
+        q = compute_quality_score(
+            35.0, "SAR", QualityModel.BAND, ideal_incidence_deg=35.0, band_width_deg=7.5
+        )
         assert abs(q - 1.0) < 0.001  # At ideal angle
 
     def test_none_incidence(self) -> None:
@@ -230,24 +234,37 @@ class TestComputeCompositeValue:
         """Test with balanced weights."""
         weights = MultiCriteriaWeights(priority=33.33, geometry=33.33, timing=33.34)
 
-        # Max values: priority=5 (→1.0), quality=1.0, timing=1.0
-        value = compute_composite_value(5, 1.0, 1.0, weights)
+        # Max values: priority=1 (→1.0, best), quality=1.0, timing=1.0
+        value = compute_composite_value(1, 1.0, 1.0, weights)
         assert abs(value - 1.0) < 0.01
 
     def test_min_values(self) -> None:
-        """Test with minimum values."""
+        """Test with minimum values (priority=5 is lowest → 0.0)."""
         weights = MultiCriteriaWeights()
-        value = compute_composite_value(1, 0.0, 0.0, weights)
+        value = compute_composite_value(5, 0.0, 0.0, weights)
         assert value >= 0.0
+        assert value < 0.01  # All components at minimum
 
     def test_priority_dominance(self) -> None:
-        """Test priority-dominant weights."""
+        """Test priority-dominant weights (1=best scores higher than 5=lowest)."""
         weights = MultiCriteriaWeights(priority=100, geometry=0, timing=0)
 
-        high_priority = compute_composite_value(5, 0.0, 0.0, weights)
-        low_priority = compute_composite_value(1, 0.0, 0.0, weights)
+        high_priority = compute_composite_value(1, 0.0, 0.0, weights)  # 1=best
+        low_priority = compute_composite_value(5, 0.0, 0.0, weights)  # 5=lowest
 
         assert high_priority > low_priority
+
+    def test_priority_normalization_mapping(self) -> None:
+        """Test exact normalization: 1→1.0, 3→0.5, 5→0.0."""
+        weights = MultiCriteriaWeights(priority=100, geometry=0, timing=0)
+
+        val_p1 = compute_composite_value(1, 0.0, 0.0, weights)
+        val_p3 = compute_composite_value(3, 0.0, 0.0, weights)
+        val_p5 = compute_composite_value(5, 0.0, 0.0, weights)
+
+        assert abs(val_p1 - 1.0) < 0.01  # 1 → 1.0
+        assert abs(val_p3 - 0.5) < 0.01  # 3 → 0.5
+        assert abs(val_p5 - 0.0) < 0.01  # 5 → 0.0
 
     def test_geometry_dominance(self) -> None:
         """Test geometry-dominant weights."""

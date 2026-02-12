@@ -7,7 +7,7 @@
  * - Schedule tab: View committed schedule
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from 'react'
 import {
   InboxOrder,
   Batch,
@@ -22,149 +22,147 @@ import {
   rejectOrder,
   deferOrder,
   PlanBatchResponse,
-} from "../api/scheduleApi";
+} from '../api/scheduleApi'
 
-type TabType = "inbox" | "batches" | "schedule";
+type TabType = 'inbox' | 'batches' | 'schedule'
 
 interface OrdersAreaProps {
-  workspaceId: string;
+  workspaceId: string
 }
 
-export default function OrdersArea({
-  workspaceId,
-}: OrdersAreaProps): JSX.Element {
-  const [activeTab, setActiveTab] = useState<TabType>("inbox");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+export default function OrdersArea({ workspaceId }: OrdersAreaProps): JSX.Element {
+  const [activeTab, setActiveTab] = useState<TabType>('inbox')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   // Inbox state
-  const [inboxOrders, setInboxOrders] = useState<InboxOrder[]>([]);
-  const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
-  const [inboxPolicy, setInboxPolicy] = useState<string>("");
+  const [inboxOrders, setInboxOrders] = useState<InboxOrder[]>([])
+  const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set())
+  const [inboxPolicy, setInboxPolicy] = useState<string>('')
 
   // Batches state
-  const [batches, setBatches] = useState<Batch[]>([]);
-  const [selectedBatch, setSelectedBatch] = useState<Batch | null>(null);
-  const [planResult, setPlanResult] = useState<PlanBatchResponse | null>(null);
+  const [batches, setBatches] = useState<Batch[]>([])
+  const [selectedBatch, setSelectedBatch] = useState<Batch | null>(null)
+  const [planResult, setPlanResult] = useState<PlanBatchResponse | null>(null)
 
   // Policies state
-  const [policies, setPolicies] = useState<BatchPolicy[]>([]);
-  const [defaultPolicy, setDefaultPolicy] = useState<string>("");
+  const [policies, setPolicies] = useState<BatchPolicy[]>([])
+  const [defaultPolicy, setDefaultPolicy] = useState<string>('')
 
   // Filters
-  const [priorityFilter, setPriorityFilter] = useState<number | null>(null);
-  const [dueWithinHours, setDueWithinHours] = useState<number | null>(null);
+  const [priorityFilter, setPriorityFilter] = useState<number | null>(null)
+  const [dueWithinHours, setDueWithinHours] = useState<number | null>(null)
 
   const loadPolicies = useCallback(async () => {
     try {
-      const result = await listPolicies();
-      setPolicies(result.policies);
-      setDefaultPolicy(result.default_policy);
-      setInboxPolicy(result.default_policy);
+      const result = await listPolicies()
+      setPolicies(result.policies)
+      setDefaultPolicy(result.default_policy)
+      setInboxPolicy(result.default_policy)
     } catch (err) {
-      console.error("Failed to load policies:", err);
+      console.error('Failed to load policies:', err)
     }
-  }, []);
+  }, [])
 
   const loadInbox = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+    setLoading(true)
+    setError(null)
     try {
       const result = await getOrdersInbox({
         workspace_id: workspaceId,
         priority_min: priorityFilter ?? undefined,
         due_within_hours: dueWithinHours ?? undefined,
         policy_id: inboxPolicy || undefined,
-      });
-      setInboxOrders(result.orders);
+      })
+      setInboxOrders(result.orders)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load inbox");
+      setError(err instanceof Error ? err.message : 'Failed to load inbox')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  }, [workspaceId, priorityFilter, dueWithinHours, inboxPolicy]);
+  }, [workspaceId, priorityFilter, dueWithinHours, inboxPolicy])
 
   const loadBatches = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+    setLoading(true)
+    setError(null)
     try {
-      const result = await listBatches({ workspace_id: workspaceId });
-      setBatches(result.batches);
+      const result = await listBatches({ workspace_id: workspaceId })
+      setBatches(result.batches)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load batches");
+      setError(err instanceof Error ? err.message : 'Failed to load batches')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  }, [workspaceId]);
+  }, [workspaceId])
 
   // Load policies on mount
   useEffect(() => {
-    loadPolicies();
-  }, [loadPolicies]);
+    loadPolicies()
+  }, [loadPolicies])
 
   // Load data when tab changes
   useEffect(() => {
-    if (activeTab === "inbox") {
-      loadInbox();
-    } else if (activeTab === "batches") {
-      loadBatches();
+    if (activeTab === 'inbox') {
+      loadInbox()
+    } else if (activeTab === 'batches') {
+      loadBatches()
     }
-  }, [activeTab, loadInbox, loadBatches]);
+  }, [activeTab, loadInbox, loadBatches])
 
   const handleSelectOrder = (orderId: string) => {
     setSelectedOrders((prev) => {
-      const next = new Set(prev);
+      const next = new Set(prev)
       if (next.has(orderId)) {
-        next.delete(orderId);
+        next.delete(orderId)
       } else {
-        next.add(orderId);
+        next.add(orderId)
       }
-      return next;
-    });
-  };
+      return next
+    })
+  }
 
   const handleSelectAll = () => {
     if (selectedOrders.size === inboxOrders.length) {
-      setSelectedOrders(new Set());
+      setSelectedOrders(new Set())
     } else {
-      setSelectedOrders(new Set(inboxOrders.map((o) => o.order.id)));
+      setSelectedOrders(new Set(inboxOrders.map((o) => o.order.id)))
     }
-  };
+  }
 
   const handleRejectOrder = async (orderId: string) => {
-    const reason = prompt("Enter rejection reason:");
-    if (!reason) return;
+    const reason = prompt('Enter rejection reason:')
+    if (!reason) return
 
     try {
-      await rejectOrder(orderId, reason);
-      loadInbox();
+      await rejectOrder(orderId, reason)
+      loadInbox()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to reject order");
+      setError(err instanceof Error ? err.message : 'Failed to reject order')
     }
-  };
+  }
 
   const handleDeferOrder = async (orderId: string) => {
-    const hours = prompt("Defer by how many hours?", "24");
-    if (!hours) return;
+    const hours = prompt('Defer by how many hours?', '24')
+    if (!hours) return
 
     try {
-      await deferOrder(orderId, { defer_hours: parseInt(hours, 10) });
-      loadInbox();
+      await deferOrder(orderId, { defer_hours: parseInt(hours, 10) })
+      loadInbox()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to defer order");
+      setError(err instanceof Error ? err.message : 'Failed to defer order')
     }
-  };
+  }
 
   const handleCreateBatch = async () => {
     if (selectedOrders.size === 0) {
-      setError("Select orders to create a batch");
-      return;
+      setError('Select orders to create a batch')
+      return
     }
 
-    const policyId = inboxPolicy || defaultPolicy;
+    const policyId = inboxPolicy || defaultPolicy
     if (!policyId) {
-      setError("No policy selected");
-      return;
+      setError('No policy selected')
+      return
     }
 
     try {
@@ -172,94 +170,90 @@ export default function OrdersArea({
         workspace_id: workspaceId,
         policy_id: policyId,
         order_ids: Array.from(selectedOrders),
-      });
-      setSelectedOrders(new Set());
-      setActiveTab("batches");
-      setSelectedBatch(result.batch);
-      loadBatches();
+      })
+      setSelectedOrders(new Set())
+      setActiveTab('batches')
+      setSelectedBatch(result.batch)
+      loadBatches()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create batch");
+      setError(err instanceof Error ? err.message : 'Failed to create batch')
     }
-  };
+  }
 
   const handlePlanBatch = async (batchId: string) => {
-    setLoading(true);
-    setPlanResult(null);
+    setLoading(true)
+    setPlanResult(null)
     try {
-      const result = await planBatch(batchId);
-      setPlanResult(result);
-      loadBatches();
+      const result = await planBatch(batchId)
+      setPlanResult(result)
+      loadBatches()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to plan batch");
+      setError(err instanceof Error ? err.message : 'Failed to plan batch')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   const handleCommitBatch = async (batchId: string) => {
-    if (
-      !confirm(
-        "Commit this batch? This will create acquisitions in the schedule.",
-      )
-    ) {
-      return;
+    if (!confirm('Commit this batch? This will create acquisitions in the schedule.')) {
+      return
     }
 
-    setLoading(true);
+    setLoading(true)
     try {
-      await commitBatch(batchId, { lock_level: "none" });
-      setPlanResult(null);
-      setSelectedBatch(null);
-      loadBatches();
+      await commitBatch(batchId, { lock_level: 'none' })
+      setPlanResult(null)
+      setSelectedBatch(null)
+      loadBatches()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to commit batch");
+      setError(err instanceof Error ? err.message : 'Failed to commit batch')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   const handleCancelBatch = async (batchId: string) => {
-    if (!confirm("Cancel this batch? Orders will be returned to the inbox.")) {
-      return;
+    if (!confirm('Cancel this batch? Orders will be returned to the inbox.')) {
+      return
     }
 
     try {
-      await cancelBatch(batchId);
-      setSelectedBatch(null);
-      setPlanResult(null);
-      loadBatches();
+      await cancelBatch(batchId)
+      setSelectedBatch(null)
+      setPlanResult(null)
+      loadBatches()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to cancel batch");
+      setError(err instanceof Error ? err.message : 'Failed to cancel batch')
     }
-  };
+  }
 
   const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleString();
-  };
+    return new Date(dateStr).toLocaleString()
+  }
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case "new":
-      case "queued":
-        return "bg-yellow-500/20 text-yellow-300";
-      case "planned":
-        return "bg-blue-500/20 text-blue-300";
-      case "committed":
-        return "bg-green-500/20 text-green-300";
-      case "rejected":
-        return "bg-red-500/20 text-red-300";
-      case "draft":
-        return "bg-gray-500/20 text-gray-300";
+      case 'new':
+      case 'queued':
+        return 'bg-yellow-500/20 text-yellow-300'
+      case 'planned':
+        return 'bg-blue-500/20 text-blue-300'
+      case 'committed':
+        return 'bg-green-500/20 text-green-300'
+      case 'rejected':
+        return 'bg-red-500/20 text-red-300'
+      case 'draft':
+        return 'bg-gray-500/20 text-gray-300'
       default:
-        return "bg-gray-500/20 text-gray-300";
+        return 'bg-gray-500/20 text-gray-300'
     }
-  };
+  }
 
   const getPriorityColor = (priority: number) => {
-    if (priority >= 4) return "text-red-400";
-    if (priority >= 3) return "text-yellow-400";
-    return "text-gray-400";
-  };
+    if (priority <= 2) return 'text-red-400'
+    if (priority === 3) return 'text-yellow-400'
+    return 'text-gray-400'
+  }
 
   return (
     <div className="h-full flex flex-col bg-gray-900 text-white">
@@ -268,14 +262,14 @@ export default function OrdersArea({
         <div className="flex items-center justify-between py-3">
           <h2 className="text-lg font-semibold">Order Management</h2>
           <div className="flex gap-2">
-            {(["inbox", "batches", "schedule"] as TabType[]).map((tab) => (
+            {(['inbox', 'batches', 'schedule'] as TabType[]).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   activeTab === tab
-                    ? "bg-blue-600 text-white"
-                    : "bg-gray-800 text-gray-300 hover:bg-gray-700"
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
                 }`}
               >
                 {tab.charAt(0).toUpperCase() + tab.slice(1)}
@@ -289,10 +283,7 @@ export default function OrdersArea({
       {error && (
         <div className="bg-red-900/50 border border-red-700 text-red-200 px-4 py-2 flex justify-between items-center">
           <span>{error}</span>
-          <button
-            onClick={() => setError(null)}
-            className="text-red-300 hover:text-white"
-          >
+          <button onClick={() => setError(null)} className="text-red-300 hover:text-white">
             ×
           </button>
         </div>
@@ -300,7 +291,7 @@ export default function OrdersArea({
 
       {/* Tab Content */}
       <div className="flex-1 overflow-auto p-4">
-        {activeTab === "inbox" && (
+        {activeTab === 'inbox' && (
           <InboxTab
             orders={inboxOrders}
             selectedOrders={selectedOrders}
@@ -324,7 +315,7 @@ export default function OrdersArea({
           />
         )}
 
-        {activeTab === "batches" && (
+        {activeTab === 'batches' && (
           <BatchesTab
             batches={batches}
             selectedBatch={selectedBatch}
@@ -340,12 +331,12 @@ export default function OrdersArea({
           />
         )}
 
-        {activeTab === "schedule" && (
+        {activeTab === 'schedule' && (
           <ScheduleTab workspaceId={workspaceId} formatDate={formatDate} />
         )}
       </div>
     </div>
-  );
+  )
 }
 
 // =============================================================================
@@ -353,25 +344,25 @@ export default function OrdersArea({
 // =============================================================================
 
 interface InboxTabProps {
-  orders: InboxOrder[];
-  selectedOrders: Set<string>;
-  policies: BatchPolicy[];
-  currentPolicy: string;
-  loading: boolean;
-  priorityFilter: number | null;
-  dueWithinHours: number | null;
-  onSelectOrder: (id: string) => void;
-  onSelectAll: () => void;
-  onReject: (id: string) => void;
-  onDefer: (id: string) => void;
-  onCreateBatch: () => void;
-  onPolicyChange: (id: string) => void;
-  onPriorityFilterChange: (val: number | null) => void;
-  onDueWithinHoursChange: (val: number | null) => void;
-  onRefresh: () => void;
-  formatDate: (s: string) => string;
-  getStatusColor: (s: string) => string;
-  getPriorityColor: (p: number) => string;
+  orders: InboxOrder[]
+  selectedOrders: Set<string>
+  policies: BatchPolicy[]
+  currentPolicy: string
+  loading: boolean
+  priorityFilter: number | null
+  dueWithinHours: number | null
+  onSelectOrder: (id: string) => void
+  onSelectAll: () => void
+  onReject: (id: string) => void
+  onDefer: (id: string) => void
+  onCreateBatch: () => void
+  onPolicyChange: (id: string) => void
+  onPriorityFilterChange: (val: number | null) => void
+  onDueWithinHoursChange: (val: number | null) => void
+  onRefresh: () => void
+  formatDate: (s: string) => string
+  getStatusColor: (s: string) => string
+  getPriorityColor: (p: number) => string
 }
 
 function InboxTab({
@@ -417,11 +408,9 @@ function InboxTab({
         <div className="flex items-center gap-2">
           <label className="text-sm text-gray-400">Min Priority:</label>
           <select
-            value={priorityFilter ?? ""}
+            value={priorityFilter ?? ''}
             onChange={(e) =>
-              onPriorityFilterChange(
-                e.target.value ? parseInt(e.target.value) : null,
-              )
+              onPriorityFilterChange(e.target.value ? parseInt(e.target.value) : null)
             }
             className="bg-gray-700 text-white rounded px-2 py-1 text-sm"
           >
@@ -437,11 +426,9 @@ function InboxTab({
         <div className="flex items-center gap-2">
           <label className="text-sm text-gray-400">Due within:</label>
           <select
-            value={dueWithinHours ?? ""}
+            value={dueWithinHours ?? ''}
             onChange={(e) =>
-              onDueWithinHoursChange(
-                e.target.value ? parseInt(e.target.value) : null,
-              )
+              onDueWithinHoursChange(e.target.value ? parseInt(e.target.value) : null)
             }
             className="bg-gray-700 text-white rounded px-2 py-1 text-sm"
           >
@@ -460,7 +447,7 @@ function InboxTab({
           disabled={loading}
           className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm"
         >
-          {loading ? "Loading..." : "Refresh"}
+          {loading ? 'Loading...' : 'Refresh'}
         </button>
 
         <button
@@ -480,9 +467,7 @@ function InboxTab({
               <th className="px-3 py-2 text-left">
                 <input
                   type="checkbox"
-                  checked={
-                    selectedOrders.size === orders.length && orders.length > 0
-                  }
+                  checked={selectedOrders.size === orders.length && orders.length > 0}
                   onChange={onSelectAll}
                   className="rounded"
                 />
@@ -505,10 +490,7 @@ function InboxTab({
               </tr>
             ) : (
               orders.map(({ order, score }) => (
-                <tr
-                  key={order.id}
-                  className="border-t border-gray-700 hover:bg-gray-750"
-                >
+                <tr key={order.id} className="border-t border-gray-700 hover:bg-gray-750">
                   <td className="px-3 py-2">
                     <input
                       type="checkbox"
@@ -518,29 +500,21 @@ function InboxTab({
                     />
                   </td>
                   <td className="px-3 py-2">
-                    <span className="font-mono text-blue-400">
-                      {(score * 100).toFixed(0)}
-                    </span>
+                    <span className="font-mono text-blue-400">{(score * 100).toFixed(0)}</span>
                   </td>
                   <td className="px-3 py-2 font-medium">{order.target_id}</td>
-                  <td
-                    className={`px-3 py-2 font-bold ${getPriorityColor(order.priority)}`}
-                  >
+                  <td className={`px-3 py-2 font-bold ${getPriorityColor(order.priority)}`}>
                     P{order.priority}
                   </td>
                   <td className="px-3 py-2 text-gray-400">
-                    {order.due_time ? formatDate(order.due_time) : "-"}
+                    {order.due_time ? formatDate(order.due_time) : '-'}
                   </td>
                   <td className="px-3 py-2">
-                    <span
-                      className={`px-2 py-0.5 rounded text-xs ${getStatusColor(order.status)}`}
-                    >
+                    <span className={`px-2 py-0.5 rounded text-xs ${getStatusColor(order.status)}`}>
                       {order.status}
                     </span>
                   </td>
-                  <td className="px-3 py-2 text-gray-400">
-                    {formatDate(order.created_at)}
-                  </td>
+                  <td className="px-3 py-2 text-gray-400">{formatDate(order.created_at)}</td>
                   <td className="px-3 py-2 text-right space-x-2">
                     <button
                       onClick={() => onDefer(order.id)}
@@ -562,7 +536,7 @@ function InboxTab({
         </table>
       </div>
     </div>
-  );
+  )
 }
 
 // =============================================================================
@@ -570,17 +544,17 @@ function InboxTab({
 // =============================================================================
 
 interface BatchesTabProps {
-  batches: Batch[];
-  selectedBatch: Batch | null;
-  planResult: PlanBatchResponse | null;
-  loading: boolean;
-  onSelectBatch: (batch: Batch | null) => void;
-  onPlan: (batchId: string) => void;
-  onCommit: (batchId: string) => void;
-  onCancel: (batchId: string) => void;
-  onRefresh: () => void;
-  formatDate: (s: string) => string;
-  getStatusColor: (s: string) => string;
+  batches: Batch[]
+  selectedBatch: Batch | null
+  planResult: PlanBatchResponse | null
+  loading: boolean
+  onSelectBatch: (batch: Batch | null) => void
+  onPlan: (batchId: string) => void
+  onCommit: (batchId: string) => void
+  onCancel: (batchId: string) => void
+  onRefresh: () => void
+  formatDate: (s: string) => string
+  getStatusColor: (s: string) => string
 }
 
 function BatchesTab({
@@ -621,27 +595,20 @@ function BatchesTab({
                 onClick={() => onSelectBatch(batch)}
                 className={`p-3 rounded-lg cursor-pointer transition-colors ${
                   selectedBatch?.id === batch.id
-                    ? "bg-blue-900/50 border border-blue-600"
-                    : "bg-gray-800 hover:bg-gray-750 border border-transparent"
+                    ? 'bg-blue-900/50 border border-blue-600'
+                    : 'bg-gray-800 hover:bg-gray-750 border border-transparent'
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="font-mono text-xs text-gray-400">
-                    {batch.id}
-                  </span>
-                  <span
-                    className={`px-2 py-0.5 rounded text-xs ${getStatusColor(batch.status)}`}
-                  >
+                  <span className="font-mono text-xs text-gray-400">{batch.id}</span>
+                  <span className={`px-2 py-0.5 rounded text-xs ${getStatusColor(batch.status)}`}>
                     {batch.status}
                   </span>
                 </div>
                 <div className="mt-1 text-sm">
-                  <span className="text-gray-400">Policy:</span>{" "}
-                  {batch.policy_id}
+                  <span className="text-gray-400">Policy:</span> {batch.policy_id}
                 </div>
-                <div className="text-xs text-gray-500 mt-1">
-                  {formatDate(batch.created_at)}
-                </div>
+                <div className="text-xs text-gray-500 mt-1">{formatDate(batch.created_at)}</div>
               </div>
             ))
           )}
@@ -655,16 +622,16 @@ function BatchesTab({
             <div className="flex items-center justify-between">
               <h3 className="font-semibold">Batch Details</h3>
               <div className="space-x-2">
-                {selectedBatch.status === "draft" && (
+                {selectedBatch.status === 'draft' && (
                   <button
                     onClick={() => onPlan(selectedBatch.id)}
                     disabled={loading}
                     className="px-3 py-1 bg-blue-600 hover:bg-blue-500 rounded text-sm"
                   >
-                    {loading ? "Planning..." : "Plan"}
+                    {loading ? 'Planning...' : 'Plan'}
                   </button>
                 )}
-                {selectedBatch.status === "planned" && (
+                {selectedBatch.status === 'planned' && (
                   <button
                     onClick={() => onCommit(selectedBatch.id)}
                     disabled={loading}
@@ -673,7 +640,7 @@ function BatchesTab({
                     Commit
                   </button>
                 )}
-                {selectedBatch.status !== "committed" && (
+                {selectedBatch.status !== 'committed' && (
                   <button
                     onClick={() => onCancel(selectedBatch.id)}
                     className="px-3 py-1 bg-red-600 hover:bg-red-500 rounded text-sm"
@@ -686,29 +653,25 @@ function BatchesTab({
 
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
-                <span className="text-gray-400">ID:</span>{" "}
+                <span className="text-gray-400">ID:</span>{' '}
                 <span className="font-mono">{selectedBatch.id}</span>
               </div>
               <div>
-                <span className="text-gray-400">Status:</span>{" "}
-                <span
-                  className={`px-2 py-0.5 rounded ${getStatusColor(selectedBatch.status)}`}
-                >
+                <span className="text-gray-400">Status:</span>{' '}
+                <span className={`px-2 py-0.5 rounded ${getStatusColor(selectedBatch.status)}`}>
                   {selectedBatch.status}
                 </span>
               </div>
               <div>
-                <span className="text-gray-400">Policy:</span>{" "}
-                {selectedBatch.policy_id}
+                <span className="text-gray-400">Policy:</span> {selectedBatch.policy_id}
               </div>
               <div>
-                <span className="text-gray-400">Created:</span>{" "}
+                <span className="text-gray-400">Created:</span>{' '}
                 {formatDate(selectedBatch.created_at)}
               </div>
               <div>
-                <span className="text-gray-400">Horizon:</span>{" "}
-                {formatDate(selectedBatch.horizon_from)} -{" "}
-                {formatDate(selectedBatch.horizon_to)}
+                <span className="text-gray-400">Horizon:</span>{' '}
+                {formatDate(selectedBatch.horizon_from)} - {formatDate(selectedBatch.horizon_to)}
               </div>
             </div>
 
@@ -739,15 +702,10 @@ function BatchesTab({
 
                 {planResult.unsatisfied_orders.length > 0 && (
                   <div className="mt-3">
-                    <h5 className="text-sm font-medium mb-1">
-                      Unsatisfied Orders:
-                    </h5>
+                    <h5 className="text-sm font-medium mb-1">Unsatisfied Orders:</h5>
                     <div className="text-xs space-y-1">
                       {planResult.unsatisfied_orders.map((item) => (
-                        <div
-                          key={item.order_id}
-                          className="flex justify-between text-gray-400"
-                        >
+                        <div key={item.order_id} className="flex justify-between text-gray-400">
                           <span className="font-mono">{item.order_id}</span>
                           <span className="text-red-400">{item.reason}</span>
                         </div>
@@ -765,9 +723,7 @@ function BatchesTab({
             {/* Orders in Batch */}
             {selectedBatch.orders && selectedBatch.orders.length > 0 && (
               <div className="mt-4">
-                <h4 className="font-semibold mb-2">
-                  Orders ({selectedBatch.orders.length})
-                </h4>
+                <h4 className="font-semibold mb-2">Orders ({selectedBatch.orders.length})</h4>
                 <div className="space-y-1 max-h-48 overflow-auto">
                   {selectedBatch.orders.map((order) => (
                     <div
@@ -789,7 +745,7 @@ function BatchesTab({
         )}
       </div>
     </div>
-  );
+  )
 }
 
 // =============================================================================
@@ -797,21 +753,17 @@ function BatchesTab({
 // =============================================================================
 
 interface ScheduleTabProps {
-  workspaceId: string;
-  formatDate: (s: string) => string;
+  workspaceId: string
+  formatDate: (s: string) => string
 }
 
-function ScheduleTab({
-  workspaceId: _workspaceId,
-  formatDate: _formatDate,
-}: ScheduleTabProps) {
+function ScheduleTab({ workspaceId: _workspaceId, formatDate: _formatDate }: ScheduleTabProps) {
   return (
     <div className="text-center py-8 text-gray-500">
       <p>Schedule view - Shows committed acquisitions from batches</p>
       <p className="text-sm mt-2">
-        Use the existing Schedule panel or integrate with the planning timeline
-        view.
+        Use the existing Schedule panel or integrate with the planning timeline view.
       </p>
     </div>
-  );
+  )
 }

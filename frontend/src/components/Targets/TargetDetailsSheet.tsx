@@ -26,12 +26,13 @@ interface TargetDetailsSheetProps {
 }
 
 export const TargetDetailsSheet: React.FC<TargetDetailsSheetProps> = ({ onSave, onCancel }) => {
-  const { isDetailsSheetOpen, pendingTarget, closeDetailsSheet, clearPendingTarget, isAddMode } = useTargetAddStore()
-  
+  const { isDetailsSheetOpen, pendingTarget, closeDetailsSheet, clearPendingTarget, isAddMode } =
+    useTargetAddStore()
+
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [color, setColor] = useState('#EF4444')
-  const [priority, setPriority] = useState(1)
+  const [priority, setPriority] = useState(5)
 
   // Update local state when pending target changes
   useEffect(() => {
@@ -39,7 +40,7 @@ export const TargetDetailsSheet: React.FC<TargetDetailsSheetProps> = ({ onSave, 
       setName(pendingTarget.name || '')
       setDescription(pendingTarget.description || '')
       setColor('#EF4444') // Default red for new targets
-      setPriority(1)
+      setPriority(5)
     }
   }, [pendingTarget])
 
@@ -56,14 +57,14 @@ export const TargetDetailsSheet: React.FC<TargetDetailsSheetProps> = ({ onSave, 
       longitude: formatted.lon,
       description: description.trim(),
       priority,
-      color
+      color,
     }
-    
+
     onSave(target)
-    
+
     // Clear pending target and close sheet
     clearPendingTarget()
-    
+
     // Stay in add mode if enabled for multi-add
     if (!isAddMode) {
       closeDetailsSheet()
@@ -84,11 +85,8 @@ export const TargetDetailsSheet: React.FC<TargetDetailsSheetProps> = ({ onSave, 
   return (
     <>
       {/* Backdrop */}
-      <div 
-        className="fixed inset-0 bg-black/50 z-40"
-        onClick={handleCancel}
-      />
-      
+      <div className="fixed inset-0 bg-black/50 z-40" onClick={handleCancel} />
+
       {/* Side sheet */}
       <div className="fixed right-0 top-0 h-full w-96 bg-slate-900 shadow-2xl z-50 flex flex-col">
         {/* Header */}
@@ -110,14 +108,10 @@ export const TargetDetailsSheet: React.FC<TargetDetailsSheetProps> = ({ onSave, 
           {/* Coordinate Display */}
           <div className="glass-panel rounded-lg p-3 space-y-2">
             <h3 className="text-xs font-medium text-gray-400 uppercase">Coordinates</h3>
-            
+
             <div className="space-y-1">
-              <div className="text-sm text-white font-mono">
-                {formatted.decimal}
-              </div>
-              <div className="text-xs text-gray-400 font-mono">
-                {formatted.dms}
-              </div>
+              <div className="text-sm text-white font-mono">{formatted.decimal}</div>
+              <div className="text-xs text-gray-400 font-mono">{formatted.dms}</div>
             </div>
 
             <div className="grid grid-cols-2 gap-2 mt-2 text-xs">
@@ -175,7 +169,9 @@ export const TargetDetailsSheet: React.FC<TargetDetailsSheetProps> = ({ onSave, 
                     key={c.value}
                     onClick={() => setColor(c.value)}
                     className={`w-7 h-7 rounded-full border-2 transition-all ${
-                      color === c.value ? 'border-white scale-110' : 'border-transparent hover:border-gray-500'
+                      color === c.value
+                        ? 'border-white scale-110'
+                        : 'border-transparent hover:border-gray-500'
                     }`}
                     style={{ backgroundColor: c.value }}
                     title={c.label}
@@ -188,17 +184,18 @@ export const TargetDetailsSheet: React.FC<TargetDetailsSheetProps> = ({ onSave, 
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-2">
                 Priority
+                <span className="text-[10px] text-gray-500 ml-1">1 best → 5 lowest</span>
               </label>
               <select
                 value={priority}
                 onChange={(e) => setPriority(parseInt(e.target.value))}
                 className="input-field w-full"
               >
-                <option value="1">1 (Low)</option>
+                <option value="1">1 (Best)</option>
                 <option value="2">2</option>
                 <option value="3">3 (Medium)</option>
                 <option value="4">4</option>
-                <option value="5">5 (High)</option>
+                <option value="5">5 (Lowest)</option>
               </select>
             </div>
           </div>
@@ -207,8 +204,8 @@ export const TargetDetailsSheet: React.FC<TargetDetailsSheetProps> = ({ onSave, 
           {isAddMode && (
             <div className="glass-panel rounded-lg p-3 text-xs text-gray-400">
               <p>
-                💡 After saving, you can add more targets by clicking on the map again.
-                Press <kbd className="px-1 py-0.5 bg-white/10 rounded">Esc</kbd> to exit Add Mode.
+                💡 After saving, you can add more targets by clicking on the map again. Press{' '}
+                <kbd className="px-1 py-0.5 bg-white/10 rounded">Esc</kbd> to exit Add Mode.
               </p>
             </div>
           )}
@@ -216,26 +213,17 @@ export const TargetDetailsSheet: React.FC<TargetDetailsSheetProps> = ({ onSave, 
 
         {/* Footer Actions */}
         <div className="p-4 border-t border-white/10 space-y-2">
-          <button
-            onClick={handleSave}
-            className="btn-primary w-full"
-          >
+          <button onClick={handleSave} className="btn-primary w-full">
             <Save className="w-4 h-4" />
             <span>Save Target</span>
           </button>
-          
+
           <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={handleRemovePin}
-              className="btn-secondary text-xs"
-            >
+            <button onClick={handleRemovePin} className="btn-secondary text-xs">
               <Trash2 className="w-3 h-3" />
               <span>Clear Pin</span>
             </button>
-            <button
-              onClick={handleCancel}
-              className="btn-secondary text-xs"
-            >
+            <button onClick={handleCancel} className="btn-secondary text-xs">
               <X className="w-3 h-3" />
               <span>Cancel</span>
             </button>

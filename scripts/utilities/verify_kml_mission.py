@@ -242,7 +242,7 @@ def verify_value_calculation(opportunities, target_priorities):
     # Check that priorities correlate with values
     priority_value_pairs = []
     for target_id, values in by_target.items():
-        priority = target_priorities.get(target_id, 1)
+        priority = target_priorities.get(target_id, 5)
         avg_value = sum(values) / len(values)
         priority_value_pairs.append((target_id, priority, avg_value))
 
@@ -336,12 +336,12 @@ def verify_response_time(schedule, target_priorities, duration_hours):
     if not schedule:
         return issues
 
-    # Find first scheduling time for high-priority targets (4-5)
+    # Find first scheduling time for high-priority targets (1-2, where 1=best)
     high_priority_response_times = {}
 
     for s in schedule:
-        priority = target_priorities.get(s.target_id, 1)
-        if priority >= 4:
+        priority = target_priorities.get(s.target_id, 5)
+        if priority <= 2:
             if s.target_id not in high_priority_response_times:
                 response_time_hours = (
                     s.start_time - schedule[0].start_time
@@ -554,16 +554,16 @@ def create_schedule_visualization(results, all_targets, output_dir):
     # Get priority information for better color coding
     priority_targets = {}
     for t in all_targets:
-        priority_targets[t.name] = getattr(t, "priority", 1)
+        priority_targets[t.name] = getattr(t, "priority", 5)
 
     # Create target color map with priority-based intensity
     target_names = sorted(set(t.name for t in all_targets))
     target_colors = {}
     for i, name in enumerate(target_names):
         base_color = colors[i % len(colors)]
-        priority = priority_targets.get(name, 1)
-        # Higher priority = more saturated color
-        alpha = 0.3 + (priority / 5) * 0.7  # Scale from 0.3 to 1.0
+        priority = priority_targets.get(name, 5)
+        # Higher priority (lower number) = more saturated color
+        alpha = 0.3 + ((6 - priority) / 5) * 0.7  # Scale from 0.3 to 1.0
         target_colors[name] = base_color
 
     for idx, (algo, algo_name) in enumerate(zip(algorithms, algo_names)):
@@ -585,7 +585,7 @@ def create_schedule_visualization(results, all_targets, output_dir):
 
         for target_id in sorted(target_schedule.keys()):
             opps = target_schedule[target_id]
-            priority = priority_targets.get(target_id, 1)
+            priority = priority_targets.get(target_id, 5)
             color = target_colors[target_id]
 
             for opp in opps:
@@ -593,8 +593,8 @@ def create_schedule_visualization(results, all_targets, output_dir):
                 end = opp.end_time
                 duration = (end - start).total_seconds() / 3600
 
-                # Color intensity based on priority
-                alpha = 0.4 + (priority / 5) * 0.6
+                # Color intensity based on priority (1=best → most intense)
+                alpha = 0.4 + ((6 - priority) / 5) * 0.6
 
                 ax.barh(
                     y_pos,
@@ -676,7 +676,7 @@ def create_schedule_visualization(results, all_targets, output_dir):
 
         # Calculate statistics
         priorities_scheduled = [
-            priority_targets.get(tid, 1) for tid in target_schedule.keys()
+            priority_targets.get(tid, 5) for tid in target_schedule.keys()
         ]
         pri_counts = {p: priorities_scheduled.count(p) for p in range(1, 6)}
 
@@ -840,18 +840,18 @@ def main():
         targets.append(target)
         priorities[target.name] = priority
 
-    # Set T3 and T4 to high priority for easy verification
+    # Set T3 and T4 to high priority for easy verification (1=best)
     for target in targets:
         if target.name == "T3":
-            target.priority = 5
-            priorities["T3"] = 5
+            target.priority = 1
+            priorities["T3"] = 1
         elif target.name == "T4":
-            target.priority = 5
-            priorities["T4"] = 5
+            target.priority = 1
+            priorities["T4"] = 1
 
     print(f"  ✅ Created {len(targets)} GroundTarget objects")
     print(f"  📍 Sample targets: {', '.join(t.name for t in targets[:5])}...")
-    print(f"  ⭐ High priority: T3, T4 (priority=5)")
+    print(f"  ⭐ High priority: T3, T4 (priority=1)")
 
     # Load satellite
     print(f"\n🛰️ Loading satellite orbit...")
@@ -917,7 +917,7 @@ def main():
     opportunities = []
     for idx, pass_detail in enumerate(all_passes):
         target = next((t for t in targets if t.name == pass_detail.target_name), None)
-        base_priority = target.priority if target else 1
+        base_priority = target.priority if target else 5
 
         # Extract incidence angle
         incidence_angle_deg = getattr(pass_detail, "incidence_angle_deg", None)
@@ -1044,13 +1044,13 @@ def main():
         ]  # Lower priority for comparison
 
         print(f"\n  {algo}:")
-        print(f"    T3 (priority=5): {len(t3_opps)} scheduled")
+        print(f"    T3 (priority=1): {len(t3_opps)} scheduled")
         if t3_opps:
             print(f"      Values: {[f'{o.value:.2f}' for o in t3_opps[:3]]}")
-        print(f"    T4 (priority=5): {len(t4_opps)} scheduled")
+        print(f"    T4 (priority=1): {len(t4_opps)} scheduled")
         if t4_opps:
             print(f"      Values: {[f'{o.value:.2f}' for o in t4_opps[:3]]}")
-        print(f"    T1 (priority=1): {len(t1_opps)} scheduled")
+        print(f"    T1 (priority=5): {len(t1_opps)} scheduled")
         if t1_opps:
             print(f"      Values: {[f'{o.value:.2f}' for o in t1_opps[:3]]}")
 
@@ -1061,7 +1061,7 @@ def main():
 
             if t3_avg <= t1_avg:
                 print(
-                    f"    ❌ T3 (priority=5) has LOWER average value ({t3_avg:.2f}) than T1 (priority=1, {t1_avg:.2f})!"
+                    f"    ❌ T3 (priority=1) has LOWER average value ({t3_avg:.2f}) than T1 (priority=5, {t1_avg:.2f})!"
                 )
             else:
                 ratio = t3_avg / t1_avg

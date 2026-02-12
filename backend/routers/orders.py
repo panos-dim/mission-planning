@@ -45,7 +45,9 @@ class CreateOrderRequest(BaseModel):
     """Request to create a new order."""
 
     target_id: str = Field(..., description="Target to image")
-    priority: int = Field(default=3, ge=1, le=5, description="Priority 1-5")
+    priority: int = Field(
+        default=5, ge=1, le=5, description="Priority 1=best, 5=lowest"
+    )
     constraints: Optional[OrderConstraints] = None
     requested_window_start: Optional[str] = Field(
         default=None, description="Start of requested window (ISO datetime)"
@@ -128,7 +130,9 @@ class ExtendedCreateOrderRequest(BaseModel):
     """Extended request to create a new order with PS2.5 fields."""
 
     target_id: str = Field(..., description="Target to image")
-    priority: int = Field(default=3, ge=1, le=5, description="Priority 1-5")
+    priority: int = Field(
+        default=5, ge=1, le=5, description="Priority 1=best, 5=lowest"
+    )
     constraints: Optional[OrderConstraints] = None
     requested_window_start: Optional[str] = Field(
         default=None, description="Start of requested window (ISO datetime)"
@@ -165,7 +169,7 @@ class ImportOrderItem(BaseModel):
     """Single order item for bulk import."""
 
     target_id: str
-    priority: int = Field(default=3, ge=1, le=5)
+    priority: int = Field(default=5, ge=1, le=5)
     constraints: Optional[Dict[str, Any]] = None
     requested_window_start: Optional[str] = None
     requested_window_end: Optional[str] = None
@@ -243,7 +247,7 @@ async def create_order(request: CreateOrderRequest) -> OrderCreateResponse:
 
     An order represents the user's intent to acquire imagery of a target.
     Orders can have:
-    - Priority (1-5, where 5 is highest)
+    - Priority (1-5, where 1 is best/highest importance)
     - Constraints (max incidence, preferred satellite, etc.)
     - Requested time window
 
