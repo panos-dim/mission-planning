@@ -1,14 +1,17 @@
-import React, { useState, useEffect, useRef } from "react";
-import { ChevronRight, RotateCcw, Shield, Info } from "lucide-react";
-import { useMission } from "../context/MissionContext";
-import TargetInput from "./TargetInput.tsx";
-import MissionParameters from "./MissionParameters.tsx";
-import { FormData, TLEData, TargetData } from "../types";
-import debug from "../utils/debug";
+import React, { useState, useEffect, useMemo, useRef } from 'react'
+import { ChevronRight, RotateCcw, Shield, Info } from 'lucide-react'
+import { useMission } from '../context/MissionContext'
+import TargetInput from './TargetInput.tsx'
+import MissionParameters from './MissionParameters.tsx'
+import { FormData, TargetData } from '../types'
+import debug from '../utils/debug'
+import { LABELS } from '../constants/labels'
+import { useManagedSatellites } from '../hooks/queries'
+import { useSatelliteSelectionStore, toTLEDataArray } from '../store/satelliteSelectionStore'
 
 // Governance indicator component
 const GovernanceIndicator: React.FC = () => {
-  const [showTooltip, setShowTooltip] = useState(false);
+  const [showTooltip, setShowTooltip] = useState(false)
 
   return (
     <div className="relative">
@@ -25,12 +28,12 @@ const GovernanceIndicator: React.FC = () => {
       {showTooltip && (
         <div className="absolute bottom-full left-0 mb-2 w-64 p-3 bg-gray-800 rounded-lg border border-gray-700 shadow-lg z-50">
           <p className="text-xs text-gray-300 mb-2">
-            <strong className="text-white">Mission inputs</strong> are per-run
-            decisions you control.
+            <strong className="text-white">Mission inputs</strong> are per-run decisions you
+            control.
           </p>
           <p className="text-xs text-gray-400 mb-2">
-            <strong className="text-gray-300">Platform truth</strong> (satellite
-            specs, rates, FOV) is managed in Admin Panel.
+            <strong className="text-gray-300">Platform truth</strong> (satellite specs, rates, FOV)
+            is managed in Admin Panel.
           </p>
           <p className="text-[10px] text-gray-500">
             Bus limits and sensor specs cannot be changed per-mission.
@@ -38,301 +41,120 @@ const GovernanceIndicator: React.FC = () => {
         </div>
       )}
     </div>
-  );
-};
+  )
+}
 
 const MissionControls: React.FC = () => {
-  const { state, analyzeMission, clearMission } = useMission();
-  const hasInitializedRef = useRef<boolean>(false);
+  const { state, analyzeMission, clearMission } = useMission()
+
+  // Server state: managed satellites list (React Query — cached, deduped, StrictMode-safe)
+  const { data: satellitesData } = useManagedSatellites()
+  const allSatellites = useMemo(() => satellitesData?.satellites ?? [], [satellitesData])
+  const hasAutoSelected = useRef(false)
+
+  // Client state: selected satellite IDs + TLE data (Zustand + persist → localStorage)
+  const { selectedSatellites, setSelection } = useSatelliteSelectionStore()
 
   // Check if mission has been analyzed (CZML data loaded)
-  const isAnalyzed = state.czmlData && state.czmlData.length > 0;
+  const isAnalyzed = state.czmlData && state.czmlData.length > 0
 
   // Calculate default end time (24 hours from now)
   const getDefaultEndTime = () => {
-    const now = new Date();
-    const endTime = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-    return endTime.toISOString().slice(0, 16);
-  };
+    const now = new Date()
+    const endTime = new Date(now.getTime() + 24 * 60 * 60 * 1000)
+    return endTime.toISOString().slice(0, 16)
+  }
 
   const [formData, setFormData] = useState<FormData>({
-    tle: { name: "", line1: "", line2: "" },
+    tle: { name: '', line1: '', line2: '' },
     satellites: [],
     targets: [],
     startTime: new Date().toISOString().slice(0, 16),
     endTime: getDefaultEndTime(),
-    missionType: "imaging", // Always imaging
+    missionType: 'imaging', // Always imaging
     elevationMask: 45, // Default for imaging
     pointingAngle: 45,
-    imagingType: "optical",
-    sarMode: "stripmap",
-  });
+    imagingType: 'optical',
+    sarMode: 'stripmap',
+  })
 
+  // Sync selection store → formData whenever selection changes
   useEffect(() => {
-    let isMounted = true;
-
-    const initializeData = async () => {
-      // Prevent double execution in React StrictMode using persistent ref
-      if (!isMounted || hasInitializedRef.current) return;
-      hasInitializedRef.current = true;
-
-      // Load satellites
-      await fetchSatellites();
-
-      if (!isMounted) return;
-
-      // After satellites are loaded, check for selected constellation from Admin Panel
-      applySelectedSatellites();
-    };
-
-    initializeData();
-
-    // Cleanup function - don't reset hasInitializedRef to persist across StrictMode
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  // Function to apply selected satellites (constellation) from localStorage
-  const applySelectedSatellites = () => {
-    // First try constellation (multiple satellites)
-    const savedSatellites = localStorage.getItem("selectedSatellites");
-    if (savedSatellites) {
-      try {
-        const satellites = JSON.parse(savedSatellites);
-        if (satellites.length > 0) {
-          setFormData((prev) => ({
-            ...prev,
-            tle: satellites[0], // Primary satellite
-            satellites: satellites, // Full constellation
-          }));
-          debug.info(
-            `Using constellation: ${satellites
-              .map((s: TLEData) => s.name)
-              .join(", ")}`,
-          );
-          return;
-        }
-      } catch (e) {
-        debug.error("Failed to parse constellation", e);
-      }
+    if (selectedSatellites.length > 0) {
+      const tleArray = toTLEDataArray(selectedSatellites)
+      setFormData((prev) => ({
+        ...prev,
+        tle: tleArray[0],
+        satellites: tleArray,
+      }))
     }
+  }, [selectedSatellites])
 
-    // Fallback to legacy single satellite
-    const savedSatellite = localStorage.getItem("selectedSatellite");
-    if (savedSatellite) {
-      try {
-        const tle = JSON.parse(savedSatellite);
-        setFormData((prev) => ({
-          ...prev,
-          tle,
-          satellites: [tle],
-        }));
-        debug.info(`Using single satellite: ${tle.name}`);
-      } catch (e) {
-        debug.error("Failed to parse selected satellite", e);
-      }
-    }
-  };
-
-  // Listen for constellation selection changes from Admin Panel (same window)
+  // Auto-select first active satellite if nothing is selected (runs once when data arrives)
   useEffect(() => {
-    // Handle new constellation event
-    const handleConstellationChange = (e: CustomEvent) => {
-      const { satellites } = e.detail;
-      if (satellites && satellites.length > 0) {
-        setFormData((prev) => ({
-          ...prev,
-          tle: satellites[0],
-          satellites: satellites,
-        }));
-        debug.info(
-          `Constellation updated: ${satellites
-            .map((s: TLEData) => s.name)
-            .join(", ")}`,
-        );
-      } else {
-        // Clear selection when all satellites are deselected
-        setFormData((prev) => ({
-          ...prev,
-          tle: { name: "", line1: "", line2: "" },
-          satellites: [],
-        }));
-        debug.info("Constellation cleared - no satellites selected");
-      }
-    };
+    if (hasAutoSelected.current) return
+    if (selectedSatellites.length > 0 || allSatellites.length === 0) return
 
-    // Legacy single satellite event
-    const handleSatelliteChange = (e: CustomEvent) => {
-      const tle = e.detail;
-      if (tle) {
-        setFormData((prev) => ({
-          ...prev,
-          tle,
-          satellites: [tle],
-        }));
-        debug.info(`Satellite changed to: ${tle.name}`);
-      }
-    };
-
-    // Listen for events
-    window.addEventListener(
-      "constellationSelectionChanged",
-      handleConstellationChange as EventListener,
-    );
-    window.addEventListener(
-      "satelliteSelectionChanged",
-      handleSatelliteChange as EventListener,
-    );
-    window.addEventListener("storage", (e: StorageEvent) => {
-      if (e.key === "selectedSatellites" && e.newValue) {
-        applySelectedSatellites();
-      }
-    });
-
-    return () => {
-      window.removeEventListener(
-        "constellationSelectionChanged",
-        handleConstellationChange as EventListener,
-      );
-      window.removeEventListener(
-        "satelliteSelectionChanged",
-        handleSatelliteChange as EventListener,
-      );
-    };
-  }, []);
-
-  const fetchSatellites = async () => {
-    try {
-      const response = await fetch("/api/v1/satellites");
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-
-      if (data.success && data.satellites && data.satellites.length > 0) {
-        // Convert satellites to TLE format
-        const tleData: TLEData[] = data.satellites
-          .filter((sat: { active: boolean }) => sat.active) // Only include active satellites
-          .map((sat: { name: string; line1: string; line2: string }) => ({
-            name: sat.name,
-            line1: sat.line1,
-            line2: sat.line2,
-          }));
-
-        if (tleData.length > 0) {
-          // Priority 1: Check for constellation (multiple satellites) - NEW!
-          const savedConstellation = localStorage.getItem("selectedSatellites");
-          if (savedConstellation) {
-            try {
-              const constellation = JSON.parse(savedConstellation);
-              if (constellation && constellation.length > 0) {
-                setFormData((prev) => ({
-                  ...prev,
-                  satellites: constellation,
-                  tle: constellation[0],
-                }));
-                debug.info(
-                  `Using constellation: ${constellation
-                    .map((s: TLEData) => s.name)
-                    .join(", ")}`,
-                );
-                return; // Don't continue to legacy single satellite logic
-              }
-            } catch (e) {
-              debug.error("Failed to parse constellation", e);
-            }
-          }
-
-          // Priority 2: Fallback to legacy single satellite
-          const savedSatellite = localStorage.getItem("selectedSatellite");
-          let selectedTle: TLEData | null = null;
-          if (savedSatellite) {
-            try {
-              selectedTle = JSON.parse(savedSatellite);
-            } catch (e) {
-              debug.error("Failed to parse selected satellite", e);
-            }
-          }
-
-          // If no saved satellite, auto-select the first one and save it
-          if (!selectedTle && tleData.length > 0) {
-            selectedTle = tleData[0];
-            const firstSat = data.satellites.find(
-              (s: { active: boolean }) => s.active,
-            );
-            if (firstSat) {
-              localStorage.setItem("selectedSatelliteId", firstSat.id);
-              localStorage.setItem(
-                "selectedSatellite",
-                JSON.stringify(selectedTle),
-              );
-              debug.info(`Auto-selected first satellite: ${selectedTle.name}`);
-            }
-          }
-
-          setFormData((prev) => ({
-            ...prev,
-            satellites: selectedTle ? [selectedTle] : tleData,
-            tle: selectedTle || tleData[0],
-          }));
-          debug.info(
-            `Loaded satellites, using: ${selectedTle?.name || tleData[0].name}`,
-          );
-        }
-      } else {
-        debug.verbose("No satellites found in config");
-      }
-    } catch (error) {
-      debug.error("Failed to fetch satellites", error);
+    const firstActive = allSatellites.find((s) => s.active)
+    if (firstActive) {
+      hasAutoSelected.current = true
+      setSelection(
+        [firstActive.id],
+        [
+          {
+            name: firstActive.name,
+            line1: firstActive.line1,
+            line2: firstActive.line2,
+            sensor_fov_half_angle_deg: firstActive.sensor_fov_half_angle_deg,
+            imaging_type: firstActive.imaging_type,
+          },
+        ],
+      )
+      debug.info(`Auto-selected first satellite: ${firstActive.name}`)
     }
-  };
+  }, [allSatellites, selectedSatellites, setSelection])
 
   const handleAnalyzeMission = async () => {
     if (formData.satellites.length === 0) {
-      alert("Please add at least one satellite");
-      return;
+      alert('Please add at least one satellite')
+      return
     }
 
     if (formData.targets.length === 0) {
-      alert("Please add at least one target");
-      return;
+      alert('Please add at least one target')
+      return
     }
 
     // Use the first satellite for now (can be enhanced later for multi-satellite analysis)
     const missionData = {
       ...formData,
       tle: formData.satellites[0],
-    };
+    }
 
-    await analyzeMission(missionData);
-  };
+    await analyzeMission(missionData)
+  }
 
   const handleClearMission = () => {
-    clearMission();
-    // Reset to defaults and refetch satellites
+    clearMission()
+    // Reset form to defaults — satellite selection persists in store,
+    // useEffect will re-sync satellites into formData automatically
     setFormData({
-      tle: { name: "", line1: "", line2: "" },
+      tle: { name: '', line1: '', line2: '' },
       satellites: [],
       targets: [],
       startTime: new Date().toISOString().slice(0, 16),
       endTime: getDefaultEndTime(),
-      missionType: "imaging",
+      missionType: 'imaging',
       elevationMask: 45,
       pointingAngle: 45,
-      imagingType: "optical",
-      sarMode: "stripmap",
-    });
-    // Refetch satellites after reset
-    hasInitializedRef.current = false;
-    fetchSatellites();
-  };
+      imagingType: 'optical',
+      sarMode: 'stripmap',
+    })
+  }
 
   const updateFormData = (updates: Partial<FormData>) => {
-    setFormData((prev) => ({ ...prev, ...updates }));
-  };
+    setFormData((prev) => ({ ...prev, ...updates }))
+  }
 
   return (
     <div className="h-full flex flex-col">
@@ -346,7 +168,7 @@ const MissionControls: React.FC = () => {
                 <span className="text-xs text-gray-400">
                   {formData.satellites.length > 1
                     ? `Constellation (${formData.satellites.length})`
-                    : "Selected Satellite"}
+                    : 'Selected Satellite'}
                 </span>
                 <div className="flex flex-wrap gap-1 mt-1">
                   {formData.satellites.length > 0 ? (
@@ -359,15 +181,11 @@ const MissionControls: React.FC = () => {
                       </span>
                     ))
                   ) : (
-                    <p className="text-sm font-medium text-gray-500">
-                      None selected
-                    </p>
+                    <p className="text-sm font-medium text-gray-500">None selected</p>
                   )}
                 </div>
               </div>
-              <span className="text-xs text-gray-500">
-                Change in Admin Panel
-              </span>
+              <span className="text-xs text-gray-500">Change in Admin Panel</span>
             </div>
           </div>
 
@@ -377,9 +195,7 @@ const MissionControls: React.FC = () => {
               <div className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold">
                 1
               </div>
-              <h3 className="text-sm font-semibold text-white">
-                Define Targets
-              </h3>
+              <h3 className="text-sm font-semibold text-white">Define Targets</h3>
             </div>
             <TargetInput
               targets={formData.targets}
@@ -398,9 +214,7 @@ const MissionControls: React.FC = () => {
                 <div className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold">
                   2
                 </div>
-                <h3 className="text-sm font-semibold text-white">
-                  Mission Parameters
-                </h3>
+                <h3 className="text-sm font-semibold text-white">Mission Parameters</h3>
               </div>
               <GovernanceIndicator />
             </div>
@@ -425,10 +239,7 @@ const MissionControls: React.FC = () => {
       {/* Action Buttons */}
       <div className="border-t border-gray-700 p-4 flex space-x-3 flex-shrink-0">
         {isAnalyzed ? (
-          <button
-            onClick={handleClearMission}
-            className="btn-secondary flex-1 min-w-0"
-          >
+          <button onClick={handleClearMission} className="btn-secondary flex-1 min-w-0">
             <div className="flex items-center justify-center space-x-2">
               <RotateCcw className="w-4 h-4 flex-shrink-0" />
               <span className="truncate">Reset & New Analysis</span>
@@ -438,20 +249,16 @@ const MissionControls: React.FC = () => {
           <>
             <button
               onClick={handleAnalyzeMission}
-              disabled={
-                state.isLoading ||
-                formData.satellites.length === 0 ||
-                !formData.tle.name
-              }
+              disabled={state.isLoading || formData.satellites.length === 0 || !formData.tle.name}
               className={`btn-primary flex-1 min-w-0 ${
                 formData.satellites.length === 0 || !formData.tle.name
-                  ? "opacity-50 cursor-not-allowed"
-                  : ""
+                  ? 'opacity-50 cursor-not-allowed'
+                  : ''
               }`}
               title={
                 formData.satellites.length === 0 || !formData.tle.name
-                  ? "Select at least one satellite in Admin Panel"
-                  : "Run mission analysis"
+                  ? 'Select at least one satellite in Admin Panel'
+                  : 'Run feasibility analysis'
               }
             >
               {state.isLoading ? (
@@ -466,7 +273,7 @@ const MissionControls: React.FC = () => {
               ) : (
                 <div className="flex items-center justify-center space-x-2">
                   <ChevronRight className="w-4 h-4 flex-shrink-0" />
-                  <span className="truncate">Analyze Mission</span>
+                  <span className="truncate">Run {LABELS.FEASIBILITY_ANALYSIS}</span>
                 </div>
               )}
             </button>
@@ -482,7 +289,7 @@ const MissionControls: React.FC = () => {
         )}
       </div>
     </div>
-  );
-};
+  )
+}
 
-export default MissionControls;
+export default MissionControls
