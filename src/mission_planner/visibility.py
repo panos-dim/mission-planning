@@ -213,6 +213,16 @@ class PassDetails:
         if self.maneuver:
             result["maneuver"] = self.maneuver.to_dict()
 
+        # Explicit off-nadir angle for frontend display
+        # For imaging passes: max_elevation = 90 - off_nadir, so off_nadir = 90 - max_elevation
+        # For communication passes: off_nadir ≈ 90 - elevation (zenith angle approximation)
+        if self.geometry_tca and hasattr(self.geometry_tca, "incidence_angle_deg"):
+            result["off_nadir_deg"] = round(
+                abs(self.geometry_tca.incidence_angle_deg), 2
+            )
+        else:
+            result["off_nadir_deg"] = round(90.0 - self.max_elevation, 2)
+
         # Legacy fields
         if self.incidence_angle_deg is not None:
             result["incidence_angle_deg"] = round(self.incidence_angle_deg, 2)
