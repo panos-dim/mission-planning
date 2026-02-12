@@ -17,7 +17,7 @@ export const PlanningHeader: React.FC<PlanningHeaderProps> = ({
   onToggleSlewVis,
   hasOpportunities,
   uniqueTargets,
-  opportunitiesCount
+  opportunitiesCount,
 }) => {
   return (
     <div className="bg-gray-800 border-b border-gray-700 p-4">
@@ -35,9 +35,9 @@ export const PlanningHeader: React.FC<PlanningHeaderProps> = ({
         )}
       </div>
       <p className="text-xs text-gray-400">
-        {hasOpportunities 
-          ? `Select and run scheduling algorithms: ${uniqueTargets} targets with ${opportunitiesCount} opportunities from Mission Analysis`
-          : 'Run Mission Analysis first to generate opportunities'}
+        {hasOpportunities
+          ? `Select and run scheduling algorithms: ${uniqueTargets} targets with ${opportunitiesCount} opportunities from Feasibility Analysis`
+          : 'Run Feasibility Analysis first to generate opportunities'}
       </p>
     </div>
   )

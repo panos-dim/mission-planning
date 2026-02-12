@@ -1,44 +1,44 @@
-import { useState } from "react";
-import { Download, Copy, Trash2, Edit2, Check, X } from "lucide-react";
-import { AcceptedOrder } from "../types";
+import { useState } from 'react'
+import { Download, Copy, Trash2, Edit2, Check, X } from 'lucide-react'
+import { AcceptedOrder } from '../types'
 
 interface AcceptedOrdersProps {
-  orders: AcceptedOrder[];
-  onOrdersChange: (orders: AcceptedOrder[]) => void;
+  orders: AcceptedOrder[]
+  onOrdersChange: (orders: AcceptedOrder[]) => void
 }
 
 const algorithmNames: Record<string, string> = {
-  first_fit: "First-Fit",
-  best_fit: "Best-Fit",
-  optimal: "Optimal",
-  roll_pitch_best_fit: "Optimized",
-  roll_pitch_first_fit: "Standard",
-};
+  first_fit: 'First-Fit',
+  best_fit: 'Best-Fit',
+  optimal: 'Optimal',
+  roll_pitch_best_fit: 'Optimized',
+  roll_pitch_first_fit: 'Standard',
+}
 
 export default function AcceptedOrders({
   orders,
   onOrdersChange,
 }: AcceptedOrdersProps): JSX.Element {
-  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
-  const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
-  const [editedName, setEditedName] = useState<string>("");
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
+  const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
+  const [editedName, setEditedName] = useState<string>('')
 
-  const selectedOrder = orders.find((o) => o.order_id === selectedOrderId);
+  const selectedOrder = orders.find((o) => o.order_id === selectedOrderId)
 
   const handleExportCSV = (order: AcceptedOrder) => {
     const csv = [
       [
-        "#",
-        "Satellite",
-        "Target",
-        "Start",
-        "End",
-        "Δroll (°)",
-        "t_slew (s)",
-        "Slack (s)",
-        "Value",
-        "Density",
-      ].join(","),
+        '#',
+        'Satellite',
+        'Target',
+        'Start',
+        'End',
+        'Δroll (°)',
+        't_slew (s)',
+        'Slack (s)',
+        'Value',
+        'Density',
+      ].join(','),
       ...order.schedule.map((item, idx) =>
         [
           idx + 1,
@@ -50,30 +50,30 @@ export default function AcceptedOrders({
           item.t_slew_s.toFixed(3),
           item.slack_s.toFixed(3),
           item.value.toFixed(2),
-          item.density === "inf" ? "inf" : item.density.toFixed(3),
-        ].join(","),
+          item.density === 'inf' ? 'inf' : item.density.toFixed(3),
+        ].join(','),
       ),
-    ].join("\n");
+    ].join('\n')
 
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${order.name}_schedule.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${order.name}_schedule.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
 
   const handleExportJSON = (order: AcceptedOrder) => {
-    const json = JSON.stringify(order, null, 2);
-    const blob = new Blob([json], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${order.name}_order.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+    const json = JSON.stringify(order, null, 2)
+    const blob = new Blob([json], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${order.name}_order.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
 
   const handleDuplicate = (order: AcceptedOrder) => {
     const copy: AcceptedOrder = {
@@ -81,64 +81,60 @@ export default function AcceptedOrders({
       order_id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       name: `${order.name}-copy`,
       created_at: new Date().toISOString(),
-    };
-    onOrdersChange([...orders, copy]);
-  };
+    }
+    onOrdersChange([...orders, copy])
+  }
 
   const handleClear = (orderId: string) => {
-    if (confirm("Are you sure you want to remove this order?")) {
-      onOrdersChange(orders.filter((o) => o.order_id !== orderId));
+    if (confirm('Are you sure you want to remove this order?')) {
+      onOrdersChange(orders.filter((o) => o.order_id !== orderId))
       if (selectedOrderId === orderId) {
-        setSelectedOrderId(null);
+        setSelectedOrderId(null)
       }
     }
-  };
+  }
 
   const handleStartEdit = (order: AcceptedOrder) => {
-    setEditingOrderId(order.order_id);
-    setEditedName(order.name);
-  };
+    setEditingOrderId(order.order_id)
+    setEditedName(order.name)
+  }
 
   const handleSaveEdit = () => {
     if (editingOrderId && editedName.trim()) {
       onOrdersChange(
-        orders.map((o) =>
-          o.order_id === editingOrderId ? { ...o, name: editedName.trim() } : o,
-        ),
-      );
-      setEditingOrderId(null);
+        orders.map((o) => (o.order_id === editingOrderId ? { ...o, name: editedName.trim() } : o)),
+      )
+      setEditingOrderId(null)
     }
-  };
+  }
 
   const handleCancelEdit = () => {
-    setEditingOrderId(null);
-    setEditedName("");
-  };
+    setEditingOrderId(null)
+    setEditedName('')
+  }
 
   const formatDateTime = (isoString: string) => {
-    const date = new Date(isoString);
-    return date.toLocaleString("en-US", {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
+    const date = new Date(isoString)
+    return date.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  }
 
   const formatDuration = (seconds: number) => {
-    if (seconds < 60) return `${seconds.toFixed(0)}s`;
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.round(seconds % 60);
-    return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
-  };
+    if (seconds < 60) return `${seconds.toFixed(0)}s`
+    const mins = Math.floor(seconds / 60)
+    const secs = Math.round(seconds % 60)
+    return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`
+  }
 
   return (
     <div className="h-full flex flex-col bg-gray-900 text-white">
       {/* Header */}
       <div className="bg-gray-800 border-b border-gray-700 p-4">
-        <h2 className="text-sm font-semibold text-white mb-1">
-          Committed Schedule
-        </h2>
+        <h2 className="text-sm font-semibold text-white mb-1">Committed Schedule</h2>
         <p className="text-xs text-gray-400">
           Review and export committed acquisitions ({orders.length} total)
         </p>
@@ -150,13 +146,10 @@ export default function AcceptedOrders({
           <div className="flex items-center justify-center h-full">
             <div className="text-center p-8">
               <div className="text-gray-500 text-5xl mb-4">📋</div>
-              <h3 className="text-lg font-semibold text-gray-300 mb-2">
-                No Orders Yet
-              </h3>
+              <h3 className="text-lg font-semibold text-gray-300 mb-2">No Orders Yet</h3>
               <p className="text-sm text-gray-400 max-w-md">
-                Run algorithms in <strong>Mission Planning</strong>, then click{" "}
-                <strong>&quot;Commit to Schedule&quot;</strong> to add
-                acquisitions here.
+                Run algorithms in <strong>Mission Planning</strong>, then click{' '}
+                <strong>&quot;Apply&quot;</strong> to add acquisitions here.
               </p>
             </div>
           </div>
@@ -167,8 +160,8 @@ export default function AcceptedOrders({
                 key={order.order_id}
                 className={`bg-gray-800 rounded-lg border transition-all cursor-pointer ${
                   selectedOrderId === order.order_id
-                    ? "border-blue-500 shadow-lg"
-                    : "border-gray-700 hover:border-gray-600"
+                    ? 'border-blue-500 shadow-lg'
+                    : 'border-gray-700 hover:border-gray-600'
                 }`}
                 onClick={() => setSelectedOrderId(order.order_id)}
               >
@@ -188,8 +181,8 @@ export default function AcceptedOrders({
                           />
                           <button
                             onClick={(e) => {
-                              e.stopPropagation();
-                              handleSaveEdit();
+                              e.stopPropagation()
+                              handleSaveEdit()
                             }}
                             className="p-1 text-green-400 hover:text-green-300"
                           >
@@ -197,8 +190,8 @@ export default function AcceptedOrders({
                           </button>
                           <button
                             onClick={(e) => {
-                              e.stopPropagation();
-                              handleCancelEdit();
+                              e.stopPropagation()
+                              handleCancelEdit()
                             }}
                             className="p-1 text-red-400 hover:text-red-300"
                           >
@@ -207,13 +200,11 @@ export default function AcceptedOrders({
                         </div>
                       ) : (
                         <div className="flex items-center gap-2">
-                          <h3 className="text-base font-semibold text-white">
-                            {order.name}
-                          </h3>
+                          <h3 className="text-base font-semibold text-white">{order.name}</h3>
                           <button
                             onClick={(e) => {
-                              e.stopPropagation();
-                              handleStartEdit(order);
+                              e.stopPropagation()
+                              handleStartEdit(order)
                             }}
                             className="p-1 text-gray-400 hover:text-white"
                           >
@@ -233,8 +224,8 @@ export default function AcceptedOrders({
                     <div className="flex gap-1">
                       <button
                         onClick={(e) => {
-                          e.stopPropagation();
-                          handleExportCSV(order);
+                          e.stopPropagation()
+                          handleExportCSV(order)
                         }}
                         className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded"
                         title="Export CSV"
@@ -243,8 +234,8 @@ export default function AcceptedOrders({
                       </button>
                       <button
                         onClick={(e) => {
-                          e.stopPropagation();
-                          handleDuplicate(order);
+                          e.stopPropagation()
+                          handleDuplicate(order)
                         }}
                         className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded"
                         title="Duplicate"
@@ -253,8 +244,8 @@ export default function AcceptedOrders({
                       </button>
                       <button
                         onClick={(e) => {
-                          e.stopPropagation();
-                          handleClear(order.order_id);
+                          e.stopPropagation()
+                          handleClear(order.order_id)
                         }}
                         className="p-2 text-red-400 hover:text-red-300 hover:bg-gray-700 rounded"
                         title="Clear"
@@ -288,13 +279,8 @@ export default function AcceptedOrders({
 
                   {/* Imaging Summary */}
                   <div className="mt-3 pt-3 border-t border-gray-700 flex items-center justify-between text-xs text-gray-400">
-                    <span>
-                      Total imaging:{" "}
-                      {formatDuration(order.metrics.imaging_time_s)}
-                    </span>
-                    <span>
-                      Value: {order.metrics.total_value.toFixed(1)} pts
-                    </span>
+                    <span>Total imaging: {formatDuration(order.metrics.imaging_time_s)}</span>
+                    <span>Value: {order.metrics.total_value.toFixed(1)} pts</span>
                   </div>
                 </div>
               </div>
@@ -307,9 +293,7 @@ export default function AcceptedOrders({
       {selectedOrder && (
         <div className="border-t border-gray-700 bg-gray-800 p-4 max-h-96 overflow-auto">
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-semibold text-white">
-              Schedule Details
-            </h3>
+            <h3 className="text-sm font-semibold text-white">Schedule Details</h3>
             <div className="flex gap-2">
               <button
                 onClick={() => handleExportJSON(selectedOrder)}
@@ -336,15 +320,11 @@ export default function AcceptedOrders({
             </div>
             <div>
               <div className="text-gray-400">Rejected</div>
-              <div className="text-white font-semibold">
-                {selectedOrder.metrics.rejected}
-              </div>
+              <div className="text-white font-semibold">{selectedOrder.metrics.rejected}</div>
             </div>
             <div>
               <div className="text-gray-400">Order ID</div>
-              <div className="text-white font-mono text-xs truncate">
-                {selectedOrder.order_id}
-              </div>
+              <div className="text-white font-mono text-xs truncate">{selectedOrder.order_id}</div>
             </div>
           </div>
 
@@ -367,33 +347,18 @@ export default function AcceptedOrders({
               </thead>
               <tbody className="text-gray-300">
                 {selectedOrder.schedule.map((item, idx) => (
-                  <tr
-                    key={idx}
-                    className="border-b border-gray-600 hover:bg-gray-650"
-                  >
+                  <tr key={idx} className="border-b border-gray-600 hover:bg-gray-650">
                     <td className="py-2 px-2">{idx + 1}</td>
                     <td className="py-2 px-2">{item.satellite_id}</td>
                     <td className="py-2 px-2">{item.target_id}</td>
-                    <td className="py-2 px-2">
-                      {new Date(item.start_time).toLocaleString()}
-                    </td>
-                    <td className="py-2 px-2">
-                      {new Date(item.end_time).toLocaleString()}
-                    </td>
+                    <td className="py-2 px-2">{new Date(item.start_time).toLocaleString()}</td>
+                    <td className="py-2 px-2">{new Date(item.end_time).toLocaleString()}</td>
+                    <td className="text-right py-2 px-2">{item.droll_deg.toFixed(2)}</td>
+                    <td className="text-right py-2 px-2">{item.t_slew_s.toFixed(3)}</td>
+                    <td className="text-right py-2 px-2">{item.slack_s.toFixed(3)}</td>
+                    <td className="text-right py-2 px-2">{item.value.toFixed(2)}</td>
                     <td className="text-right py-2 px-2">
-                      {item.droll_deg.toFixed(2)}
-                    </td>
-                    <td className="text-right py-2 px-2">
-                      {item.t_slew_s.toFixed(3)}
-                    </td>
-                    <td className="text-right py-2 px-2">
-                      {item.slack_s.toFixed(3)}
-                    </td>
-                    <td className="text-right py-2 px-2">
-                      {item.value.toFixed(2)}
-                    </td>
-                    <td className="text-right py-2 px-2">
-                      {item.density === "inf" ? "∞" : item.density.toFixed(3)}
+                      {item.density === 'inf' ? '∞' : item.density.toFixed(3)}
                     </td>
                   </tr>
                 ))}
@@ -403,5 +368,5 @@ export default function AcceptedOrders({
         </div>
       )}
     </div>
-  );
+  )
 }
