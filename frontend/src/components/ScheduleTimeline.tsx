@@ -382,6 +382,7 @@ const TimelineCard: React.FC<TimelineCardProps> = memo(
         onClick={onClick}
         className={`
           w-full text-left px-3 py-2.5 rounded-lg border transition-colors group
+          ${acquisition.mode === 'SAR' ? 'border-l-2 border-l-purple-500/60' : 'border-l-2 border-l-cyan-500/60'}
           ${isLocked ? 'ring-1 ring-red-800/30' : ''}
           ${
             isSelected
@@ -475,8 +476,14 @@ const TimelineCard: React.FC<TimelineCardProps> = memo(
               </span>
             )}
             {acquisition.mode && (
-              <span className="px-1.5 py-0.5 rounded text-[9px] uppercase bg-gray-700/60 text-gray-400">
-                {acquisition.mode}
+              <span
+                className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider ${
+                  acquisition.mode === 'SAR'
+                    ? 'bg-purple-900/40 text-purple-300 border border-purple-800/30'
+                    : 'bg-cyan-900/40 text-cyan-300 border border-cyan-800/30'
+                }`}
+              >
+                {acquisition.mode === 'SAR' ? '📡 SAR' : '📸 Optical'}
               </span>
             )}
           </div>

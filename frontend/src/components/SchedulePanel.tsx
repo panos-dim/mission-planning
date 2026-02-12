@@ -12,6 +12,7 @@ import { useLockStore } from '../store/lockStore'
 import { AcceptedOrder } from '../types'
 import { SCHEDULE_TABS, SIMPLE_MODE_SCHEDULE_TABS } from '../constants/simpleMode'
 import type { ScheduledAcquisition } from './ScheduleTimeline'
+import { useMission } from '../context/MissionContext'
 
 interface SchedulePanelProps {
   orders: AcceptedOrder[]
@@ -38,6 +39,9 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
   // PR-LOCK-OPS-01: Lock store for merging lock levels into timeline acquisitions
   const lockLevels = useLockStore((s) => s.levels)
   const toggleLock = useLockStore((s) => s.toggleLock)
+  // PR-UI-003: Get imaging_type from mission context for optical/SAR badge
+  const { state: missionState } = useMission()
+  const imagingType = missionState.missionData?.imaging_type ?? 'optical'
 
   // PR-LOCK-OPS-01: Handle lock toggle from timeline
   const handleLockToggle = useCallback(
@@ -65,14 +69,14 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
           end_time: item.end_time,
           lock_level: lockLevels.get(acqId) ?? 'none',
           state: 'committed',
-          mode: undefined,
+          mode: imagingType === 'sar' ? 'SAR' : 'Optical',
           has_conflict: false,
           order_id: order.order_id,
         })
       }
     }
     return acquisitions
-  }, [orders, lockLevels])
+  }, [orders, lockLevels, imagingType])
 
   const tabs: Tab[] = [
     {
