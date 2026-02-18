@@ -54,6 +54,8 @@ export const RIGHT_SIDEBAR_PANELS = {
   LAYERS: 'layers',
   MISSION_RESULTS: 'mission',
   AI_ASSISTANT: 'ai_assistant',
+  // Contextual panels (auto-opened by actions)
+  CONFIRM_TARGET: 'confirm_target',
 } as const
 
 export const SIMPLE_MODE_RIGHT_PANELS = [
@@ -61,6 +63,7 @@ export const SIMPLE_MODE_RIGHT_PANELS = [
   RIGHT_SIDEBAR_PANELS.INSPECTOR,
   RIGHT_SIDEBAR_PANELS.LAYERS,
   RIGHT_SIDEBAR_PANELS.AI_ASSISTANT,
+  RIGHT_SIDEBAR_PANELS.CONFIRM_TARGET,
 ] as const
 
 /**

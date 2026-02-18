@@ -2,31 +2,36 @@
  * Zustand store for managing target add mode state
  */
 
-import { create } from "zustand";
-import { devtools } from "zustand/middleware";
+import { create } from 'zustand'
+import { devtools } from 'zustand/middleware'
 
 interface PendingTarget {
-  id: string;
-  latitude: number;
-  longitude: number;
-  name?: string;
-  description?: string;
+  id: string
+  latitude: number
+  longitude: number
+  name?: string
+  description?: string
 }
 
 interface TargetAddState {
   // Target add mode
-  isAddMode: boolean;
-  pendingTarget: PendingTarget | null;
-  isDetailsSheetOpen: boolean;
+  isAddMode: boolean
+  pendingTarget: PendingTarget | null
+  isDetailsSheetOpen: boolean
+
+  // Live preview state — synced from form for real-time globe updates
+  pendingLabel: string
+  pendingColor: string
 
   // Actions
-  enableAddMode: () => void;
-  disableAddMode: () => void;
-  toggleAddMode: () => void;
-  setPendingTarget: (target: PendingTarget | null) => void;
-  openDetailsSheet: () => void;
-  closeDetailsSheet: () => void;
-  clearPendingTarget: () => void;
+  enableAddMode: () => void
+  disableAddMode: () => void
+  toggleAddMode: () => void
+  setPendingTarget: (target: PendingTarget | null) => void
+  setPendingPreview: (label: string, color: string) => void
+  openDetailsSheet: () => void
+  closeDetailsSheet: () => void
+  clearPendingTarget: () => void
 }
 
 export const useTargetAddStore = create<TargetAddState>()(
@@ -36,10 +41,12 @@ export const useTargetAddStore = create<TargetAddState>()(
       isAddMode: false,
       pendingTarget: null,
       isDetailsSheetOpen: false,
+      pendingLabel: '',
+      pendingColor: '#06B6D4',
 
       // Actions
       enableAddMode: () => {
-        set({ isAddMode: true });
+        set({ isAddMode: true })
       },
 
       disableAddMode: () => {
@@ -48,37 +55,45 @@ export const useTargetAddStore = create<TargetAddState>()(
           isAddMode: false,
           pendingTarget: null,
           isDetailsSheetOpen: false,
-        });
+          pendingLabel: '',
+          pendingColor: '#06B6D4',
+        })
       },
 
       toggleAddMode: () => {
-        const { isAddMode, disableAddMode, enableAddMode } = get();
+        const { isAddMode, disableAddMode, enableAddMode } = get()
         if (isAddMode) {
-          disableAddMode();
+          disableAddMode()
         } else {
-          enableAddMode();
+          enableAddMode()
         }
       },
 
       setPendingTarget: (target: PendingTarget | null) => {
-        set({ pendingTarget: target });
+        set({ pendingTarget: target, pendingLabel: '', pendingColor: '#06B6D4' })
+      },
+
+      setPendingPreview: (label: string, color: string) => {
+        set({ pendingLabel: label, pendingColor: color })
       },
 
       openDetailsSheet: () => {
-        set({ isDetailsSheetOpen: true });
+        set({ isDetailsSheetOpen: true })
       },
 
       closeDetailsSheet: () => {
-        set({ isDetailsSheetOpen: false });
+        set({ isDetailsSheetOpen: false })
       },
 
       clearPendingTarget: () => {
         set({
           pendingTarget: null,
           isDetailsSheetOpen: false,
-        });
+          pendingLabel: '',
+          pendingColor: '#06B6D4',
+        })
       },
     }),
-    { name: "TargetAddStore", enabled: import.meta.env?.DEV ?? false },
+    { name: 'TargetAddStore', enabled: import.meta.env?.DEV ?? false },
   ),
-);
+)

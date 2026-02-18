@@ -57,16 +57,6 @@ function formatTime(jd: JulianDate | null, style: 'full' | 'short' | 'date-time'
   }
 }
 
-/** Format seconds into human-friendly duration */
-function formatDuration(totalSec: number): string {
-  const h = Math.floor(Math.abs(totalSec) / 3600)
-  const m = Math.floor((Math.abs(totalSec) % 3600) / 60)
-  const s = Math.floor(Math.abs(totalSec) % 60)
-  if (h > 0) return `${h}h ${m.toString().padStart(2, '0')}m`
-  if (m > 0) return `${m}m ${s.toString().padStart(2, '0')}s`
-  return `${s}s`
-}
-
 /** Get fraction of current time within the time window [0..1] */
 function getProgress(current: JulianDate, start: JulianDate, stop: JulianDate): number {
   const total = JulianDate.secondsDifference(stop, start)
@@ -91,8 +81,6 @@ const TimelineControls: React.FC<TimelineControlsProps> = ({ viewerRef }) => {
   const [hasMission, setHasMission] = useState(false)
   const [speedMenuOpen, setSpeedMenuOpen] = useState(false)
   const [hoverFrac, setHoverFrac] = useState<number | null>(null)
-  const [elapsed, setElapsed] = useState(0)
-  const [remaining, setRemaining] = useState(0)
   const rafRef = useRef<number | null>(null)
   const timelineRef = useRef<HTMLDivElement>(null)
   const isDraggingRef = useRef(false)
@@ -122,12 +110,6 @@ const TimelineControls: React.FC<TimelineControlsProps> = ({ viewerRef }) => {
 
         if (hasMissionData && !isDraggingRef.current) {
           setProgress(getProgress(cur, start, stop))
-        }
-
-        // Elapsed / remaining
-        if (hasMissionData) {
-          setElapsed(JulianDate.secondsDifference(cur, start))
-          setRemaining(JulianDate.secondsDifference(stop, cur))
         }
       }
       rafRef.current = requestAnimationFrame(tick)
@@ -382,11 +364,6 @@ const TimelineControls: React.FC<TimelineControlsProps> = ({ viewerRef }) => {
           {formatTime(startTime, 'date-time')}
         </span>
 
-        {/* Elapsed indicator */}
-        <span className="text-[9px] text-gray-600 font-mono ml-1" title="Elapsed">
-          +{formatDuration(elapsed)}
-        </span>
-
         {/* Spacer */}
         <div className="flex-1" />
 
@@ -502,11 +479,6 @@ const TimelineControls: React.FC<TimelineControlsProps> = ({ viewerRef }) => {
 
         {/* Spacer */}
         <div className="flex-1" />
-
-        {/* Remaining indicator */}
-        <span className="text-[9px] text-gray-600 font-mono mr-1" title="Remaining">
-          -{formatDuration(remaining)}
-        </span>
 
         {/* End time label */}
         <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap text-right">

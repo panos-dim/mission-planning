@@ -1,11 +1,13 @@
-import React, { useState, useEffect, useMemo } from 'react'
-import { Layers, ChevronLeft, FileSearch, BarChart2, Bot, Sparkles } from 'lucide-react'
+import React, { useState, useEffect, useMemo, useRef } from 'react'
+import { Layers, ChevronLeft, FileSearch, BarChart2, Bot, Sparkles, MapPin } from 'lucide-react'
 import { Inspector } from './ObjectExplorer'
 import MissionResultsPanel from './MissionResultsPanel'
+import TargetConfirmPanel from './Targets/TargetConfirmPanel'
 import ResizeHandle from './ResizeHandle'
 import SwathLayerControl from './Map/SwathLayerControl'
 import { useMission } from '../context/MissionContext'
 import { useVisStore } from '../store/visStore'
+import { useTargetAddStore } from '../store/targetAddStore'
 import {
   RIGHT_SIDEBAR_PANELS,
   SIMPLE_MODE_RIGHT_PANELS,
@@ -26,6 +28,12 @@ const RightSidebar: React.FC = () => {
   const [activePanel, setActivePanel] = useState<string | null>(null)
   const [isPanelOpen, setIsPanelOpen] = useState(false)
 
+  // Track previous panel so we can restore it after contextual panels close
+  const previousPanelRef = useRef<{ id: string | null; open: boolean }>({ id: null, open: false })
+
+  // Target add mode — auto-open Confirm Target panel when user clicks the map
+  const { pendingTarget, isDetailsSheetOpen } = useTargetAddStore()
+
   // Use visStore for layer states to synchronize across viewports
   const {
     activeLayers,
@@ -39,6 +47,28 @@ const RightSidebar: React.FC = () => {
   useEffect(() => {
     setRightSidebarOpen(isPanelOpen)
   }, [isPanelOpen, setRightSidebarOpen])
+
+  // Auto-open Confirm Target panel when a pending target appears
+  useEffect(() => {
+    if (pendingTarget && isDetailsSheetOpen) {
+      // Save current state before switching
+      if (activePanel !== RIGHT_SIDEBAR_PANELS.CONFIRM_TARGET) {
+        previousPanelRef.current = { id: activePanel, open: isPanelOpen }
+      }
+      setActivePanel(RIGHT_SIDEBAR_PANELS.CONFIRM_TARGET)
+      setIsPanelOpen(true)
+    } else if (!pendingTarget && activePanel === RIGHT_SIDEBAR_PANELS.CONFIRM_TARGET) {
+      // Restore previous panel when pending target is cleared
+      const prev = previousPanelRef.current
+      if (prev.open && prev.id) {
+        setActivePanel(prev.id)
+      } else {
+        setIsPanelOpen(false)
+        setTimeout(() => setActivePanel(null), 300)
+      }
+      previousPanelRef.current = { id: null, open: false }
+    }
+  }, [pendingTarget, isDetailsSheetOpen]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Enable ground stations and mission-specific layers when mission data is loaded
   useEffect(() => {
@@ -340,6 +370,13 @@ const RightSidebar: React.FC = () => {
           </div>
         ),
       },
+      // Contextual: Confirm Target (auto-opened when user clicks the map)
+      {
+        id: RIGHT_SIDEBAR_PANELS.CONFIRM_TARGET,
+        title: 'Confirm Target',
+        icon: MapPin,
+        component: <TargetConfirmPanel />,
+      },
       {
         id: RIGHT_SIDEBAR_PANELS.AI_ASSISTANT,
         title: 'AI Assistant',
@@ -462,16 +499,18 @@ const RightSidebar: React.FC = () => {
 
       {/* Vertical Icon Menu */}
       <div className="h-full w-12 bg-gray-950 border-l border-gray-700 flex flex-col items-center py-2 z-30 flex-shrink-0">
-        {panels.map((panel) => {
-          const isDisabled = panel.requiresMissionData && !state.missionData
-          const isActive = activePanel === panel.id && isPanelOpen
+        {panels
+          .filter((p) => p.id !== RIGHT_SIDEBAR_PANELS.CONFIRM_TARGET)
+          .map((panel) => {
+            const isDisabled = panel.requiresMissionData && !state.missionData
+            const isActive = activePanel === panel.id && isPanelOpen
 
-          return (
-            <button
-              key={panel.id}
-              onClick={() => !isDisabled && handlePanelClick(panel.id)}
-              disabled={isDisabled}
-              className={`
+            return (
+              <button
+                key={panel.id}
+                onClick={() => !isDisabled && handlePanelClick(panel.id)}
+                disabled={isDisabled}
+                className={`
                 p-2.5 mb-1 rounded-lg transition-all duration-200 relative group
                 ${
                   isActive
@@ -481,17 +520,17 @@ const RightSidebar: React.FC = () => {
                       : 'text-gray-400 hover:text-white hover:bg-gray-800'
                 }
               `}
-              title={panel.title}
-            >
-              <panel.icon className="w-5 h-5" />
+                title={panel.title}
+              >
+                <panel.icon className="w-5 h-5" />
 
-              {/* Tooltip */}
-              <div className="absolute right-full mr-2 px-2 py-1 bg-gray-800 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity">
-                {panel.title}
-              </div>
-            </button>
-          )
-        })}
+                {/* Tooltip */}
+                <div className="absolute right-full mr-2 px-2 py-1 bg-gray-800 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity">
+                  {panel.title}
+                </div>
+              </button>
+            )
+          })}
       </div>
     </div>
   )

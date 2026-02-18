@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
-import { useMission } from "../context/MissionContext";
-import { SceneObject, WorkspaceSummary } from "../types";
+import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { useMission } from '../context/MissionContext'
+import { SceneObject, WorkspaceSummary } from '../types'
 import {
   Satellite,
   Target,
@@ -24,52 +24,52 @@ import {
   RefreshCw,
   Download,
   AlertCircle,
-} from "lucide-react";
-import * as workspacesApi from "../api/workspaces";
+} from 'lucide-react'
+import * as workspacesApi from '../api/workspaces'
 
 const ObjectMapViewer: React.FC = () => {
-  const { state, selectObject, updateObject, removeObject, flyToObject } =
-    useMission();
+  const { state, selectObject, updateObject, removeObject, flyToObject } = useMission()
 
-  const [searchTerm, setSearchTerm] = useState("");
+  const [searchTerm, setSearchTerm] = useState('')
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
-    new Set(["satellite", "target", "ground_station"])
-  );
-  const [showWorkspaceDialog, setShowWorkspaceDialog] = useState<
-    "save" | "load" | null
-  >(null);
-  const [workspaceName, setWorkspaceName] = useState("");
-  const [editingObject, setEditingObject] = useState<string | null>(null);
+    new Set(['satellite', 'target', 'ground_station']),
+  )
+  const [showWorkspaceDialog, setShowWorkspaceDialog] = useState<'save' | 'load' | null>(null)
+  const [workspaceName, setWorkspaceName] = useState('')
+  const [editingObject, setEditingObject] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<{
-    x: number;
-    y: number;
-    objectId: string;
-  } | null>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
+    x: number
+    y: number
+    objectId: string
+  } | null>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
 
   // Workspace state
-  const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
-  const [isLoadingWorkspaces, setIsLoadingWorkspaces] = useState(false);
-  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
-  const [workspaceSuccess, setWorkspaceSuccess] = useState<string | null>(null);
+  const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
+  const [isLoadingWorkspaces, setIsLoadingWorkspaces] = useState(false)
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null)
+  const [workspaceSuccess, setWorkspaceSuccess] = useState<string | null>(null)
 
   // Close context menu on outside click
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setContextMenu(null);
+        setContextMenu(null)
       }
-    };
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, []);
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [])
 
   // Group objects by type
-  const groupedObjects = state.sceneObjects.reduce((acc, obj) => {
-    if (!acc[obj.type]) acc[obj.type] = [];
-    acc[obj.type].push(obj);
-    return acc;
-  }, {} as Record<string, SceneObject[]>);
+  const groupedObjects = state.sceneObjects.reduce(
+    (acc, obj) => {
+      if (!acc[obj.type]) acc[obj.type] = []
+      acc[obj.type].push(obj)
+      return acc
+    },
+    {} as Record<string, SceneObject[]>,
+  )
 
   // Filter objects by search term
   const filteredGroupedObjects = Object.entries(groupedObjects).reduce(
@@ -77,190 +77,175 @@ const ObjectMapViewer: React.FC = () => {
       const filtered = objects.filter(
         (obj) =>
           obj.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          obj.description?.toLowerCase().includes(searchTerm.toLowerCase())
-      );
-      if (filtered.length > 0) acc[type] = filtered;
-      return acc;
+          obj.description?.toLowerCase().includes(searchTerm.toLowerCase()),
+      )
+      if (filtered.length > 0) acc[type] = filtered
+      return acc
     },
-    {} as Record<string, SceneObject[]>
-  );
+    {} as Record<string, SceneObject[]>,
+  )
 
   const getObjectIcon = (type: string) => {
     switch (type) {
-      case "satellite":
-        return Satellite;
-      case "target":
-        return Target;
-      case "ground_station":
-        return Radio;
-      case "area":
-        return MapPin;
-      case "sensor":
-        return Radar;
+      case 'satellite':
+        return Satellite
+      case 'target':
+        return Target
+      case 'ground_station':
+        return Radio
+      case 'area':
+        return MapPin
+      case 'sensor':
+        return Radar
       default:
-        return Box;
+        return Box
     }
-  };
+  }
 
   const getTypeName = (type: string) => {
     return type
-      .split("_")
+      .split('_')
       .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(" ");
-  };
+      .join(' ')
+  }
 
   const handleObjectClick = (objectId: string) => {
-    selectObject(objectId);
+    selectObject(objectId)
     // Don't auto-fly when clicking object name - only when using Fly To button
-  };
+  }
 
   const handleToggleVisibility = (objectId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const object = state.sceneObjects.find((obj) => obj.id === objectId);
+    e.stopPropagation()
+    const object = state.sceneObjects.find((obj) => obj.id === objectId)
     if (object) {
-      updateObject(objectId, { visible: !object.visible });
+      updateObject(objectId, { visible: !object.visible })
     }
-  };
+  }
 
   const handleDeleteObject = (objectId: string) => {
-    removeObject(objectId);
-    setContextMenu(null);
-  };
+    removeObject(objectId)
+    setContextMenu(null)
+  }
 
   const handleContextMenu = (e: React.MouseEvent, objectId: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setContextMenu({ x: e.clientX, y: e.clientY, objectId });
-  };
+    e.preventDefault()
+    e.stopPropagation()
+    setContextMenu({ x: e.clientX, y: e.clientY, objectId })
+  }
 
   // Load workspaces from API
   const loadWorkspacesList = useCallback(async () => {
-    setIsLoadingWorkspaces(true);
-    setWorkspaceError(null);
+    setIsLoadingWorkspaces(true)
+    setWorkspaceError(null)
     try {
-      const result = await workspacesApi.listWorkspaces();
-      setWorkspaces(result.workspaces);
+      const result = await workspacesApi.listWorkspaces()
+      setWorkspaces(result.workspaces)
     } catch (err) {
-      setWorkspaceError(
-        err instanceof Error ? err.message : "Failed to load workspaces"
-      );
+      setWorkspaceError(err instanceof Error ? err.message : 'Failed to load workspaces')
     } finally {
-      setIsLoadingWorkspaces(false);
+      setIsLoadingWorkspaces(false)
     }
-  }, []);
+  }, [])
 
   // Load workspaces when dialog opens
   useEffect(() => {
-    if (showWorkspaceDialog === "load") {
-      loadWorkspacesList();
+    if (showWorkspaceDialog === 'load') {
+      loadWorkspacesList()
     }
-  }, [showWorkspaceDialog, loadWorkspacesList]);
+  }, [showWorkspaceDialog, loadWorkspacesList])
 
   // Clear messages after 3s
   useEffect(() => {
     if (workspaceSuccess) {
-      const timer = setTimeout(() => setWorkspaceSuccess(null), 3000);
-      return () => clearTimeout(timer);
+      const timer = setTimeout(() => setWorkspaceSuccess(null), 3000)
+      return () => clearTimeout(timer)
     }
-  }, [workspaceSuccess]);
+  }, [workspaceSuccess])
 
   const handleSaveWorkspace = async () => {
-    if (!workspaceName.trim()) return;
+    if (!workspaceName.trim()) return
 
-    setIsLoadingWorkspaces(true);
-    setWorkspaceError(null);
+    setIsLoadingWorkspaces(true)
+    setWorkspaceError(null)
     try {
-      await workspacesApi.saveCurrentMission(workspaceName.trim());
-      setWorkspaceSuccess(`Workspace "${workspaceName}" saved`);
-      setWorkspaceName("");
-      setShowWorkspaceDialog(null);
+      await workspacesApi.saveCurrentMission(workspaceName.trim())
+      setWorkspaceSuccess(`Workspace "${workspaceName}" saved`)
+      setWorkspaceName('')
+      setShowWorkspaceDialog(null)
     } catch (err) {
-      setWorkspaceError(
-        err instanceof Error ? err.message : "Failed to save workspace"
-      );
+      setWorkspaceError(err instanceof Error ? err.message : 'Failed to save workspace')
     } finally {
-      setIsLoadingWorkspaces(false);
+      setIsLoadingWorkspaces(false)
     }
-  };
+  }
 
   const handleLoadWorkspace = async (_workspaceId: string) => {
-    setIsLoadingWorkspaces(true);
-    setWorkspaceError(null);
+    setIsLoadingWorkspaces(true)
+    setWorkspaceError(null)
     try {
       // For now, just close the dialog - full load integration requires MissionContext updates
-      setWorkspaceSuccess("Workspace loaded");
-      setShowWorkspaceDialog(null);
+      setWorkspaceSuccess('Workspace loaded')
+      setShowWorkspaceDialog(null)
     } catch (err) {
-      setWorkspaceError(
-        err instanceof Error ? err.message : "Failed to load workspace"
-      );
+      setWorkspaceError(err instanceof Error ? err.message : 'Failed to load workspace')
     } finally {
-      setIsLoadingWorkspaces(false);
+      setIsLoadingWorkspaces(false)
     }
-  };
+  }
 
-  const handleDeleteWorkspace = async (
-    workspaceId: string,
-    workspaceName: string
-  ) => {
-    if (!confirm(`Delete workspace "${workspaceName}"?`)) return;
+  const handleDeleteWorkspace = async (workspaceId: string, workspaceName: string) => {
+    if (!confirm(`Delete workspace "${workspaceName}"?`)) return
 
-    setIsLoadingWorkspaces(true);
+    setIsLoadingWorkspaces(true)
     try {
-      await workspacesApi.deleteWorkspace(workspaceId);
-      await loadWorkspacesList();
+      await workspacesApi.deleteWorkspace(workspaceId)
+      await loadWorkspacesList()
     } catch (err) {
-      setWorkspaceError(
-        err instanceof Error ? err.message : "Failed to delete workspace"
-      );
+      setWorkspaceError(err instanceof Error ? err.message : 'Failed to delete workspace')
     } finally {
-      setIsLoadingWorkspaces(false);
+      setIsLoadingWorkspaces(false)
     }
-  };
+  }
 
   const handleExportWorkspace = async (workspaceId: string) => {
     try {
-      await workspacesApi.downloadWorkspaceExport(workspaceId);
+      await workspacesApi.downloadWorkspaceExport(workspaceId)
     } catch (err) {
-      setWorkspaceError(
-        err instanceof Error ? err.message : "Failed to export workspace"
-      );
+      setWorkspaceError(err instanceof Error ? err.message : 'Failed to export workspace')
     }
-  };
+  }
 
   const formatDate = (dateString: string) => {
     try {
       return new Date(dateString).toLocaleDateString(undefined, {
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
     } catch {
-      return dateString;
+      return dateString
     }
-  };
+  }
 
   const getModeColor = (mode: string | null) => {
     switch (mode?.toUpperCase()) {
-      case "OPTICAL":
-        return "bg-blue-500";
-      case "SAR":
-        return "bg-purple-500";
-      case "COMMUNICATION":
-        return "bg-green-500";
+      case 'OPTICAL':
+        return 'bg-blue-500'
+      case 'SAR':
+        return 'bg-purple-500'
+      case 'COMMUNICATION':
+        return 'bg-green-500'
       default:
-        return "bg-gray-500";
+        return 'bg-gray-500'
     }
-  };
+  }
 
   const handleColorChange = (objectId: string, color: string) => {
-    updateObject(objectId, { color });
-  };
+    updateObject(objectId, { color })
+  }
 
-  const selectedObject = state.sceneObjects.find(
-    (obj) => obj.id === state.selectedObjectId
-  );
+  const selectedObject = state.sceneObjects.find((obj) => obj.id === state.selectedObjectId)
 
   return (
     <div className="flex flex-col h-full bg-gray-900">
@@ -278,14 +263,14 @@ const ObjectMapViewer: React.FC = () => {
             />
           </div>
           <button
-            onClick={() => setShowWorkspaceDialog("save")}
+            onClick={() => setShowWorkspaceDialog('save')}
             className="p-2 bg-gray-800 hover:bg-gray-700 rounded-md text-gray-400 hover:text-gray-300"
             title="Save Workspace"
           >
             <Save className="w-4 h-4" />
           </button>
           <button
-            onClick={() => setShowWorkspaceDialog("load")}
+            onClick={() => setShowWorkspaceDialog('load')}
             className="p-2 bg-gray-800 hover:bg-gray-700 rounded-md text-gray-400 hover:text-gray-300"
             title="Load Workspace"
           >
@@ -297,20 +282,20 @@ const ObjectMapViewer: React.FC = () => {
       {/* Object List */}
       <div className="flex-1 overflow-y-auto">
         {Object.entries(filteredGroupedObjects).map(([type, objects]) => {
-          const Icon = getObjectIcon(type);
-          const isExpanded = expandedGroups.has(type);
+          const Icon = getObjectIcon(type)
+          const isExpanded = expandedGroups.has(type)
 
           return (
             <div key={type} className="border-b border-gray-800">
               <button
                 onClick={() => {
-                  const newExpanded = new Set(expandedGroups);
+                  const newExpanded = new Set(expandedGroups)
                   if (isExpanded) {
-                    newExpanded.delete(type);
+                    newExpanded.delete(type)
                   } else {
-                    newExpanded.add(type);
+                    newExpanded.add(type)
                   }
-                  setExpandedGroups(newExpanded);
+                  setExpandedGroups(newExpanded)
                 }}
                 className="w-full px-3 py-2 flex items-center gap-2 hover:bg-gray-800 text-gray-300"
               >
@@ -320,9 +305,7 @@ const ObjectMapViewer: React.FC = () => {
                   <ChevronRight className="w-4 h-4" />
                 )}
                 <Icon className="w-4 h-4" />
-                <span className="flex-1 text-left text-sm font-medium">
-                  {getTypeName(type)}
-                </span>
+                <span className="flex-1 text-left text-sm font-medium">{getTypeName(type)}</span>
                 <span className="text-xs text-gray-500">{objects.length}</span>
               </button>
 
@@ -335,8 +318,8 @@ const ObjectMapViewer: React.FC = () => {
                       onContextMenu={(e) => handleContextMenu(e, object.id)}
                       className={`px-4 py-2 flex items-center gap-2 hover:bg-gray-800 cursor-pointer transition-colors ${
                         state.selectedObjectId === object.id
-                          ? "bg-blue-900/30 border-l-2 border-blue-500"
-                          : ""
+                          ? 'bg-blue-900/30 border-l-2 border-blue-500'
+                          : ''
                       }`}
                     >
                       <button
@@ -349,13 +332,11 @@ const ObjectMapViewer: React.FC = () => {
                           <EyeOff className="w-3 h-3 text-gray-600" />
                         )}
                       </button>
-                      <span className="flex-1 text-sm text-gray-300 truncate">
-                        {object.name}
-                      </span>
+                      <span className="flex-1 text-sm text-gray-300 truncate">{object.name}</span>
                       <button
                         onClick={(e) => {
-                          e.stopPropagation();
-                          handleContextMenu(e, object.id);
+                          e.stopPropagation()
+                          handleContextMenu(e, object.id)
                         }}
                         className="p-1 hover:bg-gray-700 rounded opacity-0 group-hover:opacity-100"
                       >
@@ -366,12 +347,12 @@ const ObjectMapViewer: React.FC = () => {
                 </div>
               )}
             </div>
-          );
+          )
         })}
 
         {Object.keys(filteredGroupedObjects).length === 0 && (
           <div className="p-4 text-center text-gray-500 text-sm">
-            {searchTerm ? "No objects found" : "No objects in scene"}
+            {searchTerm ? 'No objects found' : 'No objects in scene'}
           </div>
         )}
       </div>
@@ -381,10 +362,7 @@ const ObjectMapViewer: React.FC = () => {
         <div className="border-t border-gray-700 p-3 bg-gray-850">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-semibold text-gray-300">Properties</h3>
-            <button
-              onClick={() => selectObject(null)}
-              className="p-1 hover:bg-gray-700 rounded"
-            >
+            <button onClick={() => selectObject(null)} className="p-1 hover:bg-gray-700 rounded">
               <X className="w-3 h-3 text-gray-400" />
             </button>
           </div>
@@ -396,13 +374,9 @@ const ObjectMapViewer: React.FC = () => {
                 <input
                   type="text"
                   value={selectedObject.name}
-                  onChange={(e) =>
-                    updateObject(selectedObject.id, { name: e.target.value })
-                  }
+                  onChange={(e) => updateObject(selectedObject.id, { name: e.target.value })}
                   onBlur={() => setEditingObject(null)}
-                  onKeyPress={(e) =>
-                    e.key === "Enter" && setEditingObject(null)
-                  }
+                  onKeyPress={(e) => e.key === 'Enter' && setEditingObject(null)}
                   className="text-xs bg-gray-800 px-2 py-1 rounded border border-gray-700 text-gray-300"
                   autoFocus
                 />
@@ -418,9 +392,7 @@ const ObjectMapViewer: React.FC = () => {
 
             <div className="flex justify-between items-center">
               <span className="text-xs text-gray-400">Type:</span>
-              <span className="text-xs text-gray-300">
-                {getTypeName(selectedObject.type)}
-              </span>
+              <span className="text-xs text-gray-300">{getTypeName(selectedObject.type)}</span>
             </div>
 
             {selectedObject.position && (
@@ -428,13 +400,13 @@ const ObjectMapViewer: React.FC = () => {
                 <div className="flex justify-between items-center">
                   <span className="text-xs text-gray-400">Lat:</span>
                   <span className="text-xs text-gray-300">
-                    {selectedObject.position.latitude.toFixed(4)}°
+                    {selectedObject.position.latitude.toFixed(2)}°
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-xs text-gray-400">Lon:</span>
                   <span className="text-xs text-gray-300">
-                    {selectedObject.position.longitude.toFixed(4)}°
+                    {selectedObject.position.longitude.toFixed(2)}°
                   </span>
                 </div>
                 {selectedObject.position.altitude !== undefined && (
@@ -454,9 +426,7 @@ const ObjectMapViewer: React.FC = () => {
                 <input
                   type="color"
                   value={selectedObject.color}
-                  onChange={(e) =>
-                    handleColorChange(selectedObject.id, e.target.value)
-                  }
+                  onChange={(e) => handleColorChange(selectedObject.id, e.target.value)}
                   className="w-8 h-6 bg-transparent border border-gray-700 rounded cursor-pointer"
                 />
               </div>
@@ -487,7 +457,7 @@ const ObjectMapViewer: React.FC = () => {
         <div
           ref={menuRef}
           style={{
-            position: "fixed",
+            position: 'fixed',
             left: contextMenu.x,
             top: contextMenu.y,
             zIndex: 1000,
@@ -496,8 +466,8 @@ const ObjectMapViewer: React.FC = () => {
         >
           <button
             onClick={() => {
-              flyToObject(contextMenu.objectId);
-              setContextMenu(null);
+              flyToObject(contextMenu.objectId)
+              setContextMenu(null)
             }}
             className="w-full px-3 py-2 text-left text-sm text-gray-300 hover:bg-gray-700 flex items-center gap-2"
           >
@@ -506,9 +476,9 @@ const ObjectMapViewer: React.FC = () => {
           </button>
           <button
             onClick={() => {
-              selectObject(contextMenu.objectId);
-              setEditingObject(contextMenu.objectId);
-              setContextMenu(null);
+              selectObject(contextMenu.objectId)
+              setEditingObject(contextMenu.objectId)
+              setContextMenu(null)
             }}
             className="w-full px-3 py-2 text-left text-sm text-gray-300 hover:bg-gray-700 flex items-center gap-2"
           >
@@ -517,7 +487,7 @@ const ObjectMapViewer: React.FC = () => {
           </button>
           <button
             onClick={() => {
-              handleDeleteObject(contextMenu.objectId);
+              handleDeleteObject(contextMenu.objectId)
             }}
             className="w-full px-3 py-2 text-left text-sm text-red-400 hover:bg-gray-700 flex items-center gap-2"
           >
@@ -531,11 +501,9 @@ const ObjectMapViewer: React.FC = () => {
       {showWorkspaceDialog && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-gray-800 border border-gray-700 rounded-lg p-4 w-80">
-            {showWorkspaceDialog === "save" ? (
+            {showWorkspaceDialog === 'save' ? (
               <>
-                <h3 className="text-sm font-semibold text-gray-300 mb-3">
-                  Save Workspace
-                </h3>
+                <h3 className="text-sm font-semibold text-gray-300 mb-3">Save Workspace</h3>
                 <input
                   type="text"
                   placeholder="Enter workspace name..."
@@ -553,8 +521,8 @@ const ObjectMapViewer: React.FC = () => {
                   </button>
                   <button
                     onClick={() => {
-                      setShowWorkspaceDialog(null);
-                      setWorkspaceName("");
+                      setShowWorkspaceDialog(null)
+                      setWorkspaceName('')
                     }}
                     className="flex-1 px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm text-gray-300"
                   >
@@ -565,20 +533,14 @@ const ObjectMapViewer: React.FC = () => {
             ) : (
               <>
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-semibold text-gray-300">
-                    Load Workspace
-                  </h3>
+                  <h3 className="text-sm font-semibold text-gray-300">Load Workspace</h3>
                   <button
                     onClick={loadWorkspacesList}
                     disabled={isLoadingWorkspaces}
                     className="p-1 text-gray-400 hover:text-white"
                     title="Refresh"
                   >
-                    <RefreshCw
-                      className={`w-4 h-4 ${
-                        isLoadingWorkspaces ? "animate-spin" : ""
-                      }`}
-                    />
+                    <RefreshCw className={`w-4 h-4 ${isLoadingWorkspaces ? 'animate-spin' : ''}`} />
                   </button>
                 </div>
 
@@ -614,7 +576,7 @@ const ObjectMapViewer: React.FC = () => {
                           {ws.mission_mode && (
                             <span
                               className={`px-1.5 py-0.5 text-xs rounded ${getModeColor(
-                                ws.mission_mode
+                                ws.mission_mode,
                               )} text-white`}
                             >
                               {ws.mission_mode}
@@ -646,9 +608,7 @@ const ObjectMapViewer: React.FC = () => {
                             <Download className="w-3 h-3" />
                           </button>
                           <button
-                            onClick={() =>
-                              handleDeleteWorkspace(ws.id, ws.name)
-                            }
+                            onClick={() => handleDeleteWorkspace(ws.id, ws.name)}
                             className="px-2 py-1 bg-red-900/50 hover:bg-red-900/70 rounded text-xs text-red-400"
                             title="Delete"
                           >
@@ -675,7 +635,7 @@ const ObjectMapViewer: React.FC = () => {
         </div>
       )}
     </div>
-  );
-};
+  )
+}
 
-export default ObjectMapViewer;
+export default ObjectMapViewer

@@ -1,9 +1,10 @@
 /**
- * Side sheet for editing target details after map click
+ * Side sheet for editing target details after map click.
+ * Design: dark glass-panel system with cyan accent for pending state.
  */
 
 import React, { useState, useEffect } from 'react'
-import { X, MapPin, Save, Trash2, Palette } from 'lucide-react'
+import { X, MapPin, Save, Trash2, Palette, AlertCircle } from 'lucide-react'
 import { useTargetAddStore } from '../../store/targetAddStore'
 import { TargetData } from '../../types'
 import { formatCoordinates } from '../../utils/coordinateUtils'
@@ -49,10 +50,13 @@ export const TargetDetailsSheet: React.FC<TargetDetailsSheetProps> = ({ onSave, 
   }
 
   const formatted = formatCoordinates(pendingTarget.latitude, pendingTarget.longitude)
+  const isNameEmpty = !name.trim()
 
   const handleSave = () => {
+    if (isNameEmpty) return
+
     const target: TargetData = {
-      name: name.trim() || `Target ${Date.now()}`,
+      name: name.trim(),
       latitude: formatted.lat,
       longitude: formatted.lon,
       description: description.trim(),
@@ -82,63 +86,73 @@ export const TargetDetailsSheet: React.FC<TargetDetailsSheetProps> = ({ onSave, 
     closeDetailsSheet()
   }
 
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !isNameEmpty) handleSave()
+    if (e.key === 'Escape') handleCancel()
+  }
+
   return (
     <>
-      {/* Backdrop */}
-      <div className="fixed inset-0 bg-black/50 z-40" onClick={handleCancel} />
+      {/* Transparent click-away area — no blur, no tint, so user sees the pending pin */}
+      <div className="fixed inset-0 z-40" onClick={handleCancel} />
 
-      {/* Side sheet */}
-      <div className="fixed right-0 top-0 h-full w-96 bg-slate-900 shadow-2xl z-50 flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-white/10">
+      {/* Side sheet — matches app sidebar pattern: bg-gray-900, border-l border-gray-700 */}
+      <div className="fixed right-0 top-16 bottom-0 w-80 z-50 flex flex-col bg-gray-900 border-l border-gray-700 shadow-2xl">
+        {/* Header — same pattern as LeftSidebar panel headers */}
+        <div className="flex items-center justify-between p-3 border-b border-gray-700">
           <div className="flex items-center space-x-2">
-            <MapPin className="w-5 h-5 text-blue-400" />
-            <h2 className="text-lg font-semibold text-white">Target Details</h2>
+            <MapPin className="w-4 h-4 text-blue-400" />
+            <h2 className="text-sm font-semibold text-white">Confirm Target</h2>
           </div>
           <button
             onClick={handleCancel}
-            className="p-1 text-gray-400 hover:text-white hover:bg-white/10 rounded transition-colors"
+            className="p-1 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {/* Coordinate Display */}
-          <div className="glass-panel rounded-lg p-3 space-y-2">
-            <h3 className="text-xs font-medium text-gray-400 uppercase">Coordinates</h3>
-
-            <div className="space-y-1">
-              <div className="text-sm text-white font-mono">{formatted.decimal}</div>
-              <div className="text-xs text-gray-400 font-mono">{formatted.dms}</div>
-            </div>
-
+          <div className="bg-gray-800/50 rounded-lg p-3 space-y-2">
+            <h3 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">
+              Clicked Location
+            </h3>
+            <div className="text-sm text-white font-mono">{formatted.decimal}</div>
+            <div className="text-xs text-gray-400 font-mono">{formatted.dms}</div>
             <div className="grid grid-cols-2 gap-2 mt-2 text-xs">
               <div>
-                <span className="text-gray-500">Latitude:</span>
+                <span className="text-gray-500">Latitude</span>
                 <div className="text-white font-mono">{formatted.lat.toFixed(6)}°</div>
               </div>
               <div>
-                <span className="text-gray-500">Longitude:</span>
+                <span className="text-gray-500">Longitude</span>
                 <div className="text-white font-mono">{formatted.lon.toFixed(6)}°</div>
               </div>
             </div>
           </div>
 
-          {/* Target Name */}
+          {/* Target Name — required */}
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">
-              Target Name <span className="text-gray-500">(optional)</span>
+              Target Name <span className="text-red-400">*</span>
             </label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
+              onKeyDown={handleKeyDown}
               placeholder="e.g., Ground Station Alpha"
-              className="input-field w-full"
+              className={`input-field w-full ${isNameEmpty && name !== '' ? 'border-red-500/50' : ''}`}
               autoFocus
             />
+            {isNameEmpty && name !== '' && (
+              <div className="flex items-center gap-1 mt-1 text-[10px] text-red-400">
+                <AlertCircle className="w-3 h-3" />
+                <span>Target name is required</span>
+              </div>
+            )}
           </div>
 
           {/* Description */}
@@ -149,13 +163,13 @@ export const TargetDetailsSheet: React.FC<TargetDetailsSheetProps> = ({ onSave, 
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Additional notes or details..."
+              placeholder="Additional notes..."
               className="input-field w-full resize-none"
-              rows={3}
+              rows={2}
             />
           </div>
 
-          {/* Color & Priority Row */}
+          {/* Color & Priority */}
           <div className="grid grid-cols-2 gap-4">
             {/* Color Picker */}
             <div>
@@ -202,20 +216,22 @@ export const TargetDetailsSheet: React.FC<TargetDetailsSheetProps> = ({ onSave, 
 
           {/* Help Text */}
           {isAddMode && (
-            <div className="glass-panel rounded-lg p-3 text-xs text-gray-400">
-              <p>
-                💡 After saving, you can add more targets by clicking on the map again. Press{' '}
-                <kbd className="px-1 py-0.5 bg-white/10 rounded">Esc</kbd> to exit Add Mode.
-              </p>
+            <div className="bg-gray-800/50 rounded-lg p-3 text-xs text-gray-400">
+              After saving, click the map again to add more targets. Press{' '}
+              <kbd className="px-1 py-0.5 bg-gray-700 rounded text-gray-300">Esc</kbd> to exit.
             </div>
           )}
         </div>
 
-        {/* Footer Actions */}
-        <div className="p-4 border-t border-white/10 space-y-2">
-          <button onClick={handleSave} className="btn-primary w-full">
+        {/* Footer Actions — same border pattern as sidebar */}
+        <div className="p-3 border-t border-gray-700 space-y-2">
+          <button
+            onClick={handleSave}
+            disabled={isNameEmpty}
+            className="btn-primary w-full disabled:opacity-40 disabled:cursor-not-allowed"
+          >
             <Save className="w-4 h-4" />
-            <span>Save Target</span>
+            <span>{isNameEmpty ? 'Enter a name to save' : 'Save Target'}</span>
           </button>
 
           <div className="grid grid-cols-2 gap-2">

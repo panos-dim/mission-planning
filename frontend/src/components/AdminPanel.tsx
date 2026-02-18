@@ -820,7 +820,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ isOpen, onClose, onConfigUpdate
                           <h3 className="text-white font-semibold">{station.name}</h3>
                           <p className="text-gray-400 text-sm">{station.description}</p>
                           <p className="text-gray-500 text-xs mt-1">
-                            {station.latitude.toFixed(4)}°, {station.longitude.toFixed(4)}° |
+                            {station.latitude.toFixed(2)}°, {station.longitude.toFixed(2)}° |
                             Elevation Mask: {station.elevation_mask}° | Alt: {station.altitude_km}km
                           </p>
                           <div className="flex space-x-2 mt-2">

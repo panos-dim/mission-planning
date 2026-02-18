@@ -1,13 +1,15 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react'
-import { ChevronRight, RotateCcw, Shield, Info } from 'lucide-react'
+import { ChevronRight, RotateCcw, Shield, Info, AlertCircle } from 'lucide-react'
 import { useMission } from '../context/MissionContext'
-import TargetInput from './TargetInput.tsx'
+import OrdersPanel from './OrdersPanel'
 import MissionParameters from './MissionParameters.tsx'
-import { FormData, TargetData } from '../types'
+import { FormData } from '../types'
 import debug from '../utils/debug'
 import { LABELS } from '../constants/labels'
 import { useManagedSatellites } from '../hooks/queries'
 import { useSatelliteSelectionStore, toTLEDataArray } from '../store/satelliteSelectionStore'
+import { usePreFeasibilityOrdersStore } from '../store/preFeasibilityOrdersStore'
+import { useTargetAddStore } from '../store/targetAddStore'
 
 // Governance indicator component
 const GovernanceIndicator: React.FC = () => {
@@ -114,20 +116,55 @@ const MissionControls: React.FC = () => {
     }
   }, [allSatellites, selectedSatellites, setSelection])
 
+  // Pre-feasibility orders store
+  const pfOrders = usePreFeasibilityOrdersStore((s) => s.orders)
+  const validationIssues = useMemo(() => {
+    const issues: string[] = []
+    if (pfOrders.length === 0) {
+      issues.push('At least one order is required')
+      return issues
+    }
+    for (const order of pfOrders) {
+      if (!order.name || !order.name.trim()) issues.push(`Order "${order.id}" has no name`)
+      if (order.targets.length === 0)
+        issues.push(`Order "${order.name || order.id}" has no targets`)
+      for (const t of order.targets) {
+        if (!t.name || !t.name.trim())
+          issues.push(`A target in order "${order.name || order.id}" has no name`)
+      }
+    }
+    return issues
+  }, [pfOrders])
+  const hasValidOrders = validationIssues.length === 0
+
+  // Auto-disable map add mode when running analysis
+  const { disableAddMode } = useTargetAddStore.getState()
+
   const handleAnalyzeMission = async () => {
+    // Turn off map-click add mode so clicks don't intercept after analysis
+    disableAddMode()
+
     if (formData.satellites.length === 0) {
       alert('Please add at least one satellite')
       return
     }
 
-    if (formData.targets.length === 0) {
-      alert('Please add at least one target')
+    if (!hasValidOrders) {
+      alert('Cannot run feasibility:\n\n' + validationIssues.join('\n'))
       return
     }
 
-    // Use the first satellite for now (can be enhanced later for multi-satellite analysis)
+    // Collect ALL targets from ALL orders
+    const allTargets = pfOrders.flatMap((o) => o.targets)
+    if (allTargets.length === 0) {
+      alert('Please add at least one target to an order')
+      return
+    }
+
+    // Build form data with targets from all orders
     const missionData = {
       ...formData,
+      targets: allTargets,
       tle: formData.satellites[0],
     }
 
@@ -136,11 +173,10 @@ const MissionControls: React.FC = () => {
 
   const handleClearMission = () => {
     clearMission()
-    // Reset form to defaults — satellite selection persists in store,
-    // useEffect will re-sync satellites into formData automatically
-    setFormData({
-      tle: { name: '', line1: '', line2: '' },
-      satellites: [],
+    // Reset mission-specific fields but KEEP satellite selection —
+    // satellites come from admin config and persist in satelliteSelectionStore
+    setFormData((prev) => ({
+      ...prev,
       targets: [],
       startTime: new Date().toISOString().slice(0, 16),
       endTime: getDefaultEndTime(),
@@ -149,7 +185,8 @@ const MissionControls: React.FC = () => {
       pointingAngle: 45,
       imagingType: 'optical',
       sarMode: 'stripmap',
-    })
+    }))
+    // Do NOT clear orders — they persist across analysis runs
   }
 
   const updateFormData = (updates: Partial<FormData>) => {
@@ -189,19 +226,28 @@ const MissionControls: React.FC = () => {
             </div>
           </div>
 
-          {/* Step 1: Targets */}
+          {/* Step 1: Orders & Targets */}
           <div>
             <div className="flex items-center space-x-2 mb-3">
               <div className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold">
                 1
               </div>
-              <h3 className="text-sm font-semibold text-white">Define Targets</h3>
+              <h3 className="text-sm font-semibold text-white">Orders & Targets</h3>
             </div>
-            <TargetInput
-              targets={formData.targets}
-              onChange={(targets: TargetData[]) => updateFormData({ targets })}
-              disabled={isAnalyzed}
-            />
+            <OrdersPanel disabled={!!isAnalyzed} />
+            {/* Validation summary */}
+            {!isAnalyzed && pfOrders.length > 0 && validationIssues.length > 0 && (
+              <div className="mt-2 p-2 bg-red-900/20 border border-red-700/30 rounded-lg">
+                <div className="flex items-start gap-1.5">
+                  <AlertCircle className="w-3.5 h-3.5 text-red-400 flex-shrink-0 mt-0.5" />
+                  <div className="text-[10px] text-red-400 space-y-0.5">
+                    {validationIssues.map((issue, i) => (
+                      <p key={i}>{issue}</p>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Divider */}
@@ -249,16 +295,23 @@ const MissionControls: React.FC = () => {
           <>
             <button
               onClick={handleAnalyzeMission}
-              disabled={state.isLoading || formData.satellites.length === 0 || !formData.tle.name}
+              disabled={
+                state.isLoading ||
+                formData.satellites.length === 0 ||
+                !formData.tle.name ||
+                !hasValidOrders
+              }
               className={`btn-primary flex-1 min-w-0 ${
-                formData.satellites.length === 0 || !formData.tle.name
+                formData.satellites.length === 0 || !formData.tle.name || !hasValidOrders
                   ? 'opacity-50 cursor-not-allowed'
                   : ''
               }`}
               title={
                 formData.satellites.length === 0 || !formData.tle.name
                   ? 'Select at least one satellite in Admin Panel'
-                  : 'Run feasibility analysis'
+                  : !hasValidOrders
+                    ? 'Fix order validation issues first'
+                    : 'Run feasibility analysis'
               }
             >
               {state.isLoading ? (
@@ -269,6 +322,11 @@ const MissionControls: React.FC = () => {
               ) : formData.satellites.length === 0 || !formData.tle.name ? (
                 <div className="flex items-center justify-center space-x-2">
                   <span className="truncate">No Satellite Selected</span>
+                </div>
+              ) : !hasValidOrders ? (
+                <div className="flex items-center justify-center space-x-2">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                  <span className="truncate">Fix Orders</span>
                 </div>
               ) : (
                 <div className="flex items-center justify-center space-x-2">

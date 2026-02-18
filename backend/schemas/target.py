@@ -13,6 +13,13 @@ class TargetData(BaseModel):
     priority: Optional[int] = 5  # Target priority (1=best, 5=lowest)
     color: Optional[str] = "#EF4444"  # Marker color (hex format)
 
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Target name must not be empty")
+        return v.strip()
+
     @field_validator("latitude")
     @classmethod
     def validate_latitude(cls, v: float) -> float:

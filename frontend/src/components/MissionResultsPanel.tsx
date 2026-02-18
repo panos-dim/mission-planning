@@ -15,6 +15,8 @@ import { getSatelliteColorByIndex } from '../constants/colors'
 import { useVisStore } from '../store/visStore'
 import { useSwathStore } from '../store/swathStore'
 import { LABELS } from '../constants/labels'
+import { formatDateTimeShort } from '../utils/date'
+import type { PassData } from '../types'
 
 type Section = 'overview' | 'schedule' | 'timeline'
 
@@ -64,7 +66,7 @@ const getSatelliteColor = (
 // Get color for an opportunity based on its satellite (for constellation support)
 // For single satellite missions, all opportunities use the primary satellite color
 const getOpportunityColor = (
-  pass: any,
+  pass: PassData,
   _passIndex: number,
   satellites?: Array<{ id: string; name: string; color?: string }>,
 ): string => {
@@ -193,7 +195,7 @@ const MissionResultsPanel: React.FC = () => {
     return new Set<string>()
   }, [expandedTargets, targetDisplayOrder])
 
-  const downloadJSON = (data: any, filename: string) => {
+  const downloadJSON = (data: unknown, filename: string) => {
     const blob = new Blob([JSON.stringify(data, null, 2)], {
       type: 'application/json',
     })
@@ -345,15 +347,7 @@ const MissionResultsPanel: React.FC = () => {
           {expandedSections.includes('overview') && (
             <div className="p-3 bg-gray-850 space-y-3">
               {/* Key metrics row */}
-              <div className="grid grid-cols-3 gap-2">
-                <div className="glass-panel rounded-lg p-2.5 text-center">
-                  <div className="text-lg font-bold text-white">
-                    {state.missionData.total_passes}
-                  </div>
-                  <div className="text-[10px] text-gray-400">
-                    {state.missionData.mission_type === 'imaging' ? 'Opportunities' : 'Passes'}
-                  </div>
-                </div>
+              <div className="grid grid-cols-2 gap-2">
                 <div className="glass-panel rounded-lg p-2.5 text-center">
                   <div className="text-lg font-bold text-white">
                     {(() => {
@@ -363,28 +357,37 @@ const MissionResultsPanel: React.FC = () => {
                       return `${hours % 1 === 0 ? hours.toFixed(0) : hours.toFixed(1)}h`
                     })()}
                   </div>
-                  <div className="text-[10px] text-gray-400">Duration</div>
+                  <div className="text-[10px] text-gray-400">Time window</div>
                 </div>
-                <div className="glass-panel rounded-lg p-2.5 text-center">
-                  <div className="text-lg font-bold text-white">
-                    {(() => {
-                      const targetsWithOpportunities = state.missionData!.targets.filter((target) =>
-                        state.missionData!.passes.some((pass) => pass.target === target.name),
-                      )
-                      return `${targetsWithOpportunities.length}/${state.missionData!.targets.length}`
-                    })()}
-                  </div>
-                  <div className="text-[10px] text-gray-400">Targets</div>
-                </div>
+                {(() => {
+                  const targetsWithOpportunities = state.missionData!.targets.filter((target) =>
+                    state.missionData!.passes.some((pass) => pass.target === target.name),
+                  )
+                  const covered = targetsWithOpportunities.length
+                  const total = state.missionData!.targets.length
+                  const isPerfect = total > 0 && covered === total
+                  return (
+                    <div
+                      className={`glass-panel rounded-lg p-2.5 text-center ${
+                        isPerfect ? 'ring-1 ring-green-500/60 bg-green-900/20' : ''
+                      }`}
+                    >
+                      <div
+                        className={`text-lg font-bold ${isPerfect ? 'text-green-400' : 'text-white'}`}
+                      >
+                        {covered}/{total}
+                      </div>
+                      <div className="text-[10px] text-gray-400">
+                        Targets{isPerfect ? ' ✓' : ''}
+                      </div>
+                    </div>
+                  )
+                })()}
               </div>
 
               {/* Configuration details */}
               <div className="glass-panel rounded-lg p-3">
                 <div className="space-y-1.5 text-xs">
-                  <div className="flex justify-between">
-                    <span className="text-gray-400">Mission Type:</span>
-                    <span className="text-white capitalize">{state.missionData.mission_type}</span>
-                  </div>
                   {state.missionData.mission_type === 'imaging' && (
                     <div className="flex justify-between">
                       <span className="text-gray-400">Imaging Type:</span>
@@ -423,14 +426,7 @@ const MissionResultsPanel: React.FC = () => {
                             </span>
                           </div>
                         </>
-                      ) : (
-                        <div className="flex justify-between">
-                          <span className="text-gray-400">Sensor FOV:</span>
-                          <span className="text-white">
-                            {state.missionData.sensor_fov_half_angle_deg || 'N/A'}°
-                          </span>
-                        </div>
-                      )}
+                      ) : null}
                       <div className="flex justify-between">
                         <span className="text-gray-400">{LABELS.MAX_OFF_NADIR_ANGLE_SHORT}:</span>
                         <span className="text-white">
@@ -442,12 +438,6 @@ const MissionResultsPanel: React.FC = () => {
                     <div className="flex justify-between">
                       <span className="text-gray-400">Elevation Mask:</span>
                       <span className="text-white">{state.missionData.elevation_mask}°</span>
-                    </div>
-                  )}
-                  {state.missionData.satellite_agility && (
-                    <div className="flex justify-between">
-                      <span className="text-gray-400">Satellite Agility:</span>
-                      <span className="text-white">{state.missionData.satellite_agility}</span>
                     </div>
                   )}
                   {state.missionData.pass_statistics &&
@@ -548,9 +538,6 @@ const MissionResultsPanel: React.FC = () => {
                           >
                             {targetName}
                           </span>
-                          <span className="text-[10px] text-gray-500 flex-shrink-0">
-                            {targetMeta.latitude.toFixed(2)}°, {targetMeta.longitude.toFixed(2)}°
-                          </span>
                         </div>
                         {hasOpportunities ? (
                           <span className="text-[10px] text-green-400 font-semibold flex-shrink-0 ml-2">
@@ -568,9 +555,6 @@ const MissionResultsPanel: React.FC = () => {
                           <Target className="w-3 h-3 text-green-400 flex-shrink-0" />
                           <span className="text-xs font-medium text-white truncate">
                             {targetName}
-                          </span>
-                          <span className="text-[10px] text-gray-500 flex-shrink-0">
-                            {targetMeta.latitude.toFixed(2)}°, {targetMeta.longitude.toFixed(2)}°
                           </span>
                         </div>
                         <span className="text-[10px] text-green-400 font-semibold flex-shrink-0 ml-2">
@@ -742,19 +726,13 @@ const MissionResultsPanel: React.FC = () => {
                   <div className="flex justify-between mb-2">
                     <span className="text-gray-400">Mission Start:</span>
                     <span className="text-white">
-                      {new Date(state.missionData.start_time.replace('+00:00', 'Z'))
-                        .toISOString()
-                        .substring(0, 16)
-                        .replace('T', ' ')}
+                      {formatDateTimeShort(state.missionData.start_time)}
                     </span>
                   </div>
                   <div className="flex justify-between mb-3">
                     <span className="text-gray-400">Mission End:</span>
                     <span className="text-white">
-                      {new Date(state.missionData.end_time.replace('+00:00', 'Z'))
-                        .toISOString()
-                        .substring(0, 16)
-                        .replace('T', ' ')}
+                      {formatDateTimeShort(state.missionData.end_time)}
                     </span>
                   </div>
 
@@ -783,11 +761,11 @@ const MissionResultsPanel: React.FC = () => {
                     const paddedEnd = lastMs + (range * 0.05 || 60000)
 
                     const formatTime = (d: Date) => {
-                      const month = String(d.getUTCMonth() + 1).padStart(2, '0')
                       const day = String(d.getUTCDate()).padStart(2, '0')
+                      const month = String(d.getUTCMonth() + 1).padStart(2, '0')
                       const hours = String(d.getUTCHours()).padStart(2, '0')
                       const mins = String(d.getUTCMinutes()).padStart(2, '0')
-                      return `${month}/${day} ${hours}:${mins}`
+                      return `${day}-${month} ${hours}:${mins}`
                     }
 
                     return (

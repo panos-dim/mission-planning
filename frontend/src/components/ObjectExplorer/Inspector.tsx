@@ -183,7 +183,7 @@ const CoordinateField: React.FC<CoordinateFieldProps> = ({
 }) => {
   const formatCoord = (val: number, isLat: boolean) => {
     const dir = isLat ? (val >= 0 ? 'N' : 'S') : val >= 0 ? 'E' : 'W'
-    return `${Math.abs(val).toFixed(4)}° ${dir}`
+    return `${Math.abs(val).toFixed(2)}° ${dir}`
   }
 
   return (

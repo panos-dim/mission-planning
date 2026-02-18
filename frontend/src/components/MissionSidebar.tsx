@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { useMission } from '../context/MissionContext'
 import { Calendar, Clock, Download, Activity, List, BarChart2, Map, Target } from 'lucide-react'
 import ObjectMapViewer from './ObjectMapViewer'
+import { formatDateTimeShort, formatDateDDMMYYYY } from '../utils/date'
 
 const MissionSidebar: React.FC = () => {
   const { state, navigateToPassWindow } = useMission()
@@ -9,7 +10,7 @@ const MissionSidebar: React.FC = () => {
     'objects' | 'overview' | 'schedule' | 'timeline' | 'summary'
   >('objects')
 
-  const downloadJSON = (data: any, filename: string) => {
+  const downloadJSON = (data: unknown, filename: string) => {
     const blob = new Blob([JSON.stringify(data, null, 2)], {
       type: 'application/json',
     })
@@ -147,11 +148,7 @@ const MissionSidebar: React.FC = () => {
               <h3 className="text-sm font-semibold text-white mb-3">Mission Overview</h3>
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-gray-400">Mission Type:</span>
-                  <span className="text-white capitalize">{state.missionData.mission_type}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Duration:</span>
+                  <span className="text-gray-400">Time window:</span>
                   <span className="text-white">
                     {(() => {
                       const start = new Date(state.missionData.start_time)
@@ -169,12 +166,6 @@ const MissionSidebar: React.FC = () => {
                       <span className="text-white">{state.missionData.elevation_mask}°</span>
                     </div>
                   )}
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Total Opportunities:</span>
-                  <span className="text-green-400 font-semibold">
-                    {state.missionData.total_passes}
-                  </span>
-                </div>
               </div>
             </div>
 
@@ -229,13 +220,14 @@ const MissionSidebar: React.FC = () => {
                     <div className="flex justify-between">
                       <span className="text-gray-400">Start:</span>
                       <span className="text-white">
-                        {pass.start_time.substring(5, 10)} {pass.start_time.substring(11, 16)} UTC
+                        {formatDateDDMMYYYY(pass.start_time)} {pass.start_time.substring(11, 16)}{' '}
+                        UTC
                       </span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-400">End:</span>
                       <span className="text-white">
-                        {pass.end_time.substring(5, 10)} {pass.end_time.substring(11, 16)} UTC
+                        {formatDateDDMMYYYY(pass.end_time)} {pass.end_time.substring(11, 16)} UTC
                       </span>
                     </div>
                     <div className="flex justify-between">
@@ -258,21 +250,13 @@ const MissionSidebar: React.FC = () => {
                   <div className="flex justify-between mb-1">
                     <span className="text-gray-400">Start Time:</span>
                     <span className="text-white">
-                      {new Date(state.missionData.start_time + 'Z')
-                        .toISOString()
-                        .substring(0, 16)
-                        .replace('T', ' ')}{' '}
-                      UTC
+                      {formatDateTimeShort(state.missionData.start_time)}
                     </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-400">End Time:</span>
                     <span className="text-white">
-                      {new Date(state.missionData.end_time + 'Z')
-                        .toISOString()
-                        .substring(0, 16)
-                        .replace('T', ' ')}{' '}
-                      UTC
+                      {formatDateTimeShort(state.missionData.end_time)}
                     </span>
                   </div>
                 </div>
@@ -285,6 +269,7 @@ const MissionSidebar: React.FC = () => {
                       <div className="flex-1">
                         <div className="text-xs text-white font-medium">{pass.target}</div>
                         <div className="text-xs text-gray-400">
+                          {pass.start_time.substring(8, 10)}-{pass.start_time.substring(5, 7)}{' '}
                           {pass.start_time.substring(11, 16)} → {pass.end_time.substring(11, 16)}{' '}
                           UTC
                         </div>

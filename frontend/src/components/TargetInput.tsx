@@ -58,9 +58,15 @@ const TargetInput: React.FC<TargetInputProps> = ({ targets, onChange, disabled =
     setPreviewTargets(targets)
   }, [targets, setPreviewTargets])
 
+  const isTargetNameEmpty = !newTarget.name.trim()
+
   const addTarget = () => {
-    if (!newTarget.name || newTarget.latitude === 0 || newTarget.longitude === 0) {
-      alert('Please provide target name and coordinates')
+    if (isTargetNameEmpty) {
+      alert('Target name is required')
+      return
+    }
+    if (newTarget.latitude === 0 && newTarget.longitude === 0) {
+      alert('Please provide target coordinates')
       return
     }
 
@@ -95,7 +101,7 @@ const TargetInput: React.FC<TargetInputProps> = ({ targets, onChange, disabled =
         })
         setUploadStatus({
           type: 'success',
-          message: `Parsed: ${data.latitude.toFixed(4)}°, ${data.longitude.toFixed(4)}°`,
+          message: `Parsed: ${data.latitude.toFixed(2)}°, ${data.longitude.toFixed(2)}°`,
         })
       } else {
         setUploadStatus({
@@ -103,7 +109,7 @@ const TargetInput: React.FC<TargetInputProps> = ({ targets, onChange, disabled =
           message: data.error || 'Failed to parse coordinates',
         })
       }
-    } catch (error) {
+    } catch {
       setUploadStatus({ type: 'error', message: 'Error parsing coordinates' })
     }
   }
@@ -126,7 +132,7 @@ const TargetInput: React.FC<TargetInputProps> = ({ targets, onChange, disabled =
 
       const data = await response.json()
       if (response.ok && data.targets) {
-        const newTargets = data.targets.map((t: any) => ({
+        const newTargets = data.targets.map((t: Record<string, unknown>) => ({
           name: t.name,
           latitude: t.latitude,
           longitude: t.longitude,
@@ -144,7 +150,7 @@ const TargetInput: React.FC<TargetInputProps> = ({ targets, onChange, disabled =
           message: data.error || 'Failed to upload file',
         })
       }
-    } catch (error) {
+    } catch {
       setUploadStatus({ type: 'error', message: 'Error uploading file' })
     } finally {
       setIsUploading(false)
@@ -244,7 +250,7 @@ const TargetInput: React.FC<TargetInputProps> = ({ targets, onChange, disabled =
       type: 'success',
       message: `Added target "${
         target.name
-      }" from map (${target.latitude.toFixed(4)}°, ${target.longitude.toFixed(4)}°)`,
+      }" from map (${target.latitude.toFixed(2)}°, ${target.longitude.toFixed(2)}°)`,
     })
   }
 
@@ -394,7 +400,7 @@ const TargetInput: React.FC<TargetInputProps> = ({ targets, onChange, disabled =
                   </div>
                   <div className="text-xs text-gray-400 mb-1">
                     <MapPin className="w-3 h-3 inline mr-1" />
-                    {target.latitude.toFixed(4)}°, {target.longitude.toFixed(4)}°
+                    {target.latitude.toFixed(2)}°, {target.longitude.toFixed(2)}°
                   </div>
                   {target.description && (
                     <div className="text-xs text-gray-500">{target.description}</div>
@@ -578,8 +584,9 @@ const TargetInput: React.FC<TargetInputProps> = ({ targets, onChange, disabled =
 
             <button
               onClick={addTarget}
-              disabled={isUploading}
+              disabled={isUploading || isTargetNameEmpty}
               className="btn-primary w-full text-sm disabled:opacity-50"
+              title={isTargetNameEmpty ? 'Target name is required' : 'Add target'}
             >
               {isUploading ? (
                 <>
