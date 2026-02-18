@@ -1,12 +1,98 @@
-/* Custom Cesium Selection Indicator Styling - Blue Theme */
+/* Custom Cesium UI Overrides — COSMOS42 Theme */
 
-/* Only change the color from green to blue, keep original Cesium behavior */
-.cesium-selection-wrapper svg {
-  fill: rgb(59, 130, 246) !important; /* Blue instead of green */
-  stroke: rgb(59, 130, 246) !important; /* Blue instead of green */
+/* ===== Hide ALL default Cesium UI widgets ===== */
+.cesium-selection-wrapper,
+.cesium-viewer-toolbar,
+.cesium-viewer-animationContainer,
+.cesium-viewer-timelineContainer,
+.cesium-viewer-fullscreenContainer,
+.cesium-viewer-bottom {
+  display: none !important;
 }
 
-.cesium-selection-wrapper svg path {
-  fill: rgb(59, 130, 246) !important; /* Blue instead of green */
-  stroke: rgb(59, 130, 246) !important; /* Blue instead of green */
+/* ===== Custom Selection Indicator Animations ===== */
+
+.selection-ring {
+  position: absolute;
+  border-radius: 50%;
+  border: 2.5px solid;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+/* Outer ring: blue pulsing */
+.selection-ring-outer {
+  width: 64px;
+  height: 64px;
+  border-color: rgba(59, 130, 246, 1);
+  box-shadow:
+    0 0 16px rgba(59, 130, 246, 0.7),
+    inset 0 0 12px rgba(59, 130, 246, 0.25);
+}
+
+/* Inner ring: slightly delayed, smaller */
+.selection-ring-inner {
+  width: 42px;
+  height: 42px;
+  border-color: rgba(96, 165, 250, 1);
+  box-shadow: 0 0 12px rgba(96, 165, 250, 0.6);
+}
+
+/* Center crosshair diamond */
+.selection-crosshair {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(45deg);
+  background: rgba(59, 130, 246, 1);
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.8), 0 0 20px rgba(59, 130, 246, 0.3);
+  pointer-events: none;
+  will-change: transform;
+}
+
+/* Pulse animations now driven by Web Animations API in SelectionIndicator.tsx
+   for instant smooth playback on target switch (no CSS cold-start stutter) */
+
+/* ===== Corner bracket selection variant (for larger entities) ===== */
+.selection-brackets {
+  position: absolute;
+  width: 52px;
+  height: 52px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  animation: brackets-rotate 8s linear infinite;
+}
+
+.selection-brackets::before,
+.selection-brackets::after {
+  content: '';
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-color: rgba(59, 130, 246, 0.8);
+  border-style: solid;
+}
+
+.selection-brackets::before {
+  top: 0;
+  left: 0;
+  border-width: 2px 0 0 2px;
+}
+
+.selection-brackets::after {
+  bottom: 0;
+  right: 0;
+  border-width: 0 2px 2px 0;
+}
+
+@keyframes brackets-rotate {
+  from { transform: translate(-50%, -50%) rotate(0deg); }
+  to   { transform: translate(-50%, -50%) rotate(360deg); }
 }

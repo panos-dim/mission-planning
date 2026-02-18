@@ -164,9 +164,14 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
           <AcceptedOrders orders={orders} onOrdersChange={onOrdersChange} />
         )}
 
-        {/* PR-OPS-REPAIR-DEFAULT-01: Timeline tab */}
+        {/* PR-UI-006: Timeline tab with mission time window for axis bounds */}
         {activeTab === SCHEDULE_TABS.TIMELINE && (
-          <ScheduleTimeline acquisitions={timelineAcquisitions} onLockToggle={handleLockToggle} />
+          <ScheduleTimeline
+            acquisitions={timelineAcquisitions}
+            onLockToggle={handleLockToggle}
+            missionStartTime={missionState.missionData?.start_time}
+            missionEndTime={missionState.missionData?.end_time}
+          />
         )}
 
         {activeTab === SCHEDULE_TABS.HISTORY && showHistoryTab && (

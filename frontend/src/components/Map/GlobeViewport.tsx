@@ -33,7 +33,10 @@ import { useUnifiedMapHighlight } from '../../hooks/useUnifiedMapHighlight'
 import SlewVisualizationLayer from './SlewVisualizationLayer'
 import { SlewCanvasOverlay } from './SlewCanvasOverlay'
 import SwathDebugOverlay from './SwathDebugOverlay'
-import LockModeButton from './LockModeButton'
+// LockModeButton is now integrated into MapControls strip
+import MapControls from './MapControls'
+import SelectionIndicator from './SelectionIndicator'
+import TimelineControls from './TimelineControls'
 import { useLockModeStore } from '../../store/lockModeStore'
 import { useLockStore } from '../../store/lockStore'
 import debug from '../../utils/debug'
@@ -944,7 +947,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
         baseLayerPicker={false}
         geocoder={false}
         infoBox={false}
-        selectionIndicator={true}
+        selectionIndicator={false}
         shadows={false}
         terrainShadows={ShadowMode.DISABLED}
         requestRenderMode={true}
@@ -1087,14 +1090,18 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
         </div>
       )}
 
-      {/* PR-UI-003: Lock Mode toggle button (bottom-right, primary viewport only) */}
-      {viewportId === 'primary' && (
-        <div className="absolute bottom-24 right-4 z-40">
-          <LockModeButton />
-        </div>
-      )}
+      {/* Custom map navigation controls (sibling, same pattern as LockModeButton) */}
+      <div className="absolute top-3 right-3 z-40 flex flex-col items-center gap-1.5 select-none">
+        <MapControls viewerRef={viewerRef} viewportId={viewportId} />
+      </div>
 
-      {/* Lock mode cursor hint overlay */}
+      {/* Custom selection indicator (replaces Cesium blue rectangle) */}
+      <SelectionIndicator viewerRef={viewerRef} />
+
+      {/* STK-style timeline + animation controls (primary viewport only) */}
+      {viewportId === 'primary' && <TimelineControls viewerRef={viewerRef} />}
+
+      {/* Lock mode cursor hint overlay (lock button now in MapControls strip) */}
       {viewportId === 'primary' && isLockMode && (
         <div className="absolute inset-0 pointer-events-none z-30 border-2 border-red-500/30 rounded" />
       )}

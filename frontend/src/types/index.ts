@@ -559,25 +559,25 @@ export interface PlanningRequest {
   // Planning mode (incremental vs from_scratch vs repair)
   mode?: 'from_scratch' | 'incremental' | 'repair'
   workspace_id?: string
-  // Agility parameters
-  imaging_time_s: number
-  max_roll_rate_dps: number
-  max_roll_accel_dps2: number
-  max_pitch_rate_dps: number // Max pitch rate (deg/s)
-  max_pitch_accel_dps2: number // Max pitch acceleration (deg/s²)
+  // Agility parameters — PR_UI_008: all optional, backend Pydantic defaults apply when omitted
+  imaging_time_s?: number
+  max_roll_rate_dps?: number
+  max_roll_accel_dps2?: number
+  max_pitch_rate_dps?: number
+  max_pitch_accel_dps2?: number
   algorithms: string[]
-  value_source: 'uniform' | 'target_priority' | 'custom'
+  value_source?: 'uniform' | 'target_priority' | 'custom'
   custom_values?: Record<string, number>
-  look_window_s: number
-  // Quality model for geometry scoring
-  quality_model: 'off' | 'monotonic' | 'band'
-  ideal_incidence_deg: number // Ideal off-nadir angle for SAR band model
-  band_width_deg: number // For band model
-  // Multi-criteria weights
-  weight_priority: number // Weight for target priority (raw value, auto-normalized)
-  weight_geometry: number // Weight for imaging geometry quality
-  weight_timing: number // Weight for chronological preference
-  weight_preset?: string | null // Preset name: balanced | priority_first | quality_first | urgent | archival
+  look_window_s?: number // PR_UI_007: backend uses config default when omitted
+  // Quality model for geometry scoring — PR_UI_008: optional, backend defaults apply
+  quality_model?: 'off' | 'monotonic' | 'band'
+  ideal_incidence_deg?: number
+  band_width_deg?: number
+  // Multi-criteria weights — PR_UI_008: optional, backend defaults apply
+  weight_priority?: number
+  weight_geometry?: number
+  weight_timing?: number
+  weight_preset?: string | null
 }
 
 export interface PlanningResponse {
@@ -590,7 +590,7 @@ export interface PlanningConfig {
   imaging_time_s: number
   max_roll_rate_dps: number
   max_roll_accel_dps2: number
-  look_window_s: number
+  look_window_s?: number // PR_UI_007: optional — backend uses config default when omitted
   value_source: string
   algorithms: string[]
 }

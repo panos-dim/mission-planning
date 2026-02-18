@@ -8,18 +8,7 @@ import { useExplorerStore } from '../store/explorerStore'
 import { useSelectionStore, useContextFilter } from '../store/selectionStore'
 import ContextFilterBar from './ContextFilterBar'
 import { JulianDate } from 'cesium'
-import {
-  Eye,
-  EyeOff,
-  Database,
-  RefreshCw,
-  AlertTriangle,
-  CheckCircle,
-  ChevronDown,
-  ChevronUp,
-  Settings,
-  Shield,
-} from 'lucide-react'
+import { Eye, EyeOff, Database, RefreshCw, AlertTriangle, CheckCircle, Shield } from 'lucide-react'
 import debug from '../utils/debug'
 import { ApiError, NetworkError, TimeoutError } from '../api/errors'
 import { createRepairPlan, type PlanningMode, type RepairPlanResponse } from '../api/scheduleApi'
@@ -28,11 +17,7 @@ import { planningApi } from '../api'
 import { ConflictWarningModal, type CommitPreview } from './ConflictWarningModal'
 import { RepairDiffPanel } from './RepairDiffPanel'
 import { useRepairHighlightStore } from '../store/repairHighlightStore'
-import {
-  isAdvancedPlanningEnabled,
-  isDebugMode,
-  COLLAPSED_BY_DEFAULT,
-} from '../constants/simpleMode'
+import { isAdvancedPlanningEnabled, isDebugMode } from '../constants/simpleMode'
 import { LABELS } from '../constants/labels'
 
 interface MissionPlanningProps {
@@ -81,38 +66,14 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
   const [isCommitting, setIsCommitting] = useState(false)
   const [pendingCommitAlgorithm, setPendingCommitAlgorithm] = useState<string | null>(null)
 
-  // PR-PARAM-GOV-01: Advanced accordion collapsed by default
-  const [showAdvancedPlanning, setShowAdvancedPlanning] = useState(
-    !COLLAPSED_BY_DEFAULT.planningAdvanced,
-  )
-
   // PR-PARAM-GOV-01: Config summary from backend (read-only platform truth)
   const { data: configSummaryData } = useSatelliteConfigSummary()
   const configSummary = configSummaryData?.satellites ?? []
 
-  // State for planning configuration
-  // NOTE: Only roll_pitch_best_fit is used - other algorithms are deprecated
-  const [config, setConfig] = useState<PlanningRequest>({
-    imaging_time_s: 1.0,
-    max_roll_rate_dps: 1.0,
-    max_roll_accel_dps2: 10000.0, // High acceleration simulates near-instant slew
-    max_pitch_rate_dps: 1.0, // Match roll rate for symmetric agility
-    max_pitch_accel_dps2: 10000.0, // Match roll accel for symmetric agility
-    algorithms: ['roll_pitch_best_fit'], // Only algorithm in use (others deprecated)
-    value_source: 'target_priority', // Use target priority by default
-    look_window_s: 600.0,
-    // Quality model for geometry scoring
-    quality_model: 'monotonic', // Default for optical
-    ideal_incidence_deg: 35.0, // SAR ideal
-    band_width_deg: 7.5, // SAR band width
-    // Multi-criteria weights
-    weight_priority: 40,
-    weight_geometry: 40,
-    weight_timing: 20,
-    weight_preset: 'balanced',
-  })
+  // PR_UI_008: Agility, quality model, value source tuning knobs removed.
+  // Scoring Strategy presets kept for planner use.
 
-  // Weight presets
+  // Weight presets for scoring strategy (planner-facing)
   const WEIGHT_PRESETS: Record<
     string,
     {
@@ -160,12 +121,18 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
     },
   }
 
-  // Apply preset
+  // Scoring strategy state (weight presets — planner-facing)
+  const [weightConfig, setWeightConfig] = useState({
+    weight_priority: 40,
+    weight_geometry: 40,
+    weight_timing: 20,
+    weight_preset: 'balanced' as string | null,
+  })
+
   const applyPreset = (presetName: string) => {
     const preset = WEIGHT_PRESETS[presetName]
     if (preset) {
-      setConfig({
-        ...config,
+      setWeightConfig({
         weight_priority: preset.priority,
         weight_geometry: preset.geometry,
         weight_timing: preset.timing,
@@ -174,14 +141,14 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
     }
   }
 
-  // Get normalized weights for display
   const getNormalizedWeights = () => {
-    const total = config.weight_priority + config.weight_geometry + config.weight_timing
+    const total =
+      weightConfig.weight_priority + weightConfig.weight_geometry + weightConfig.weight_timing
     if (total === 0) return { priority: 33.3, geometry: 33.3, timing: 33.3 }
     return {
-      priority: (config.weight_priority / total) * 100,
-      geometry: (config.weight_geometry / total) * 100,
-      timing: (config.weight_timing / total) * 100,
+      priority: (weightConfig.weight_priority / total) * 100,
+      geometry: (weightConfig.weight_geometry / total) * 100,
+      timing: (weightConfig.weight_timing / total) * 100,
     }
   }
 
@@ -247,13 +214,8 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
           planning_mode: 'repair' as const,
           workspace_id: workspaceId,
           include_tentative: includeTentative,
-          imaging_time_s: config.imaging_time_s,
-          max_roll_rate_dps: config.max_roll_rate_dps,
-          max_roll_accel_dps2: config.max_roll_accel_dps2,
-          max_pitch_rate_dps: config.max_pitch_rate_dps,
-          max_pitch_accel_dps2: config.max_pitch_accel_dps2,
-          look_window_s: config.look_window_s,
-          value_source: config.value_source,
+          // Scoring strategy from planner preset selection
+          ...weightConfig,
         }
 
         debug.apiRequest('POST /api/v1/schedule/repair', repairRequest)
@@ -333,10 +295,11 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
       } else {
         // Standard planning (from_scratch or incremental)
         const request: PlanningRequest = {
-          ...config,
           algorithms: ['roll_pitch_best_fit'],
           mode: planningMode,
           workspace_id: planningMode === 'incremental' ? workspaceId : undefined,
+          // Scoring strategy from planner preset selection
+          ...weightConfig,
         }
 
         debug.section('MISSION PLANNING')
@@ -803,16 +766,7 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
             </div>
           )}
 
-          {/* PR-PARAM-GOV-01: Planning Parameters — Basic + Advanced accordion */}
-          <div className="flex items-center justify-between border-b border-gray-700 pb-2">
-            <h3 className="text-sm font-semibold text-white">Planning Parameters</h3>
-            <div className="flex items-center gap-1 text-[10px] text-gray-500">
-              <Shield size={10} />
-              <span>Governed</span>
-            </div>
-          </div>
-
-          {/* === BASIC: Scoring Strategy (always visible) === */}
+          {/* Scoring Strategy — planner-facing preset selection */}
           <div className="space-y-2">
             <h4 className="text-xs font-semibold text-blue-400 uppercase tracking-wide">
               Scoring Strategy
@@ -823,7 +777,7 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
                   key={key}
                   onClick={() => applyPreset(key)}
                   className={`px-2 py-1 text-xs rounded transition-colors ${
-                    config.weight_preset === key
+                    weightConfig.weight_preset === key
                       ? 'bg-blue-600 text-white'
                       : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                   }`}
@@ -854,347 +808,42 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
             </div>
           </div>
 
-          {/* === ADVANCED ACCORDION === */}
-          <button
-            onClick={() => setShowAdvancedPlanning(!showAdvancedPlanning)}
-            className="flex items-center justify-between w-full px-3 py-2 bg-gray-800/80 rounded-lg border border-gray-700 hover:border-gray-600 transition-colors"
-          >
-            <span className="flex items-center gap-1.5 text-xs text-gray-400">
-              <Settings size={12} />
-              Advanced Parameters
-            </span>
-            {showAdvancedPlanning ? (
-              <ChevronUp size={14} className="text-gray-500" />
-            ) : (
-              <ChevronDown size={14} className="text-gray-500" />
-            )}
-          </button>
-
-          {showAdvancedPlanning && (
-            <div className="space-y-3 pl-2 border-l-2 border-gray-700/50">
-              {/* Imaging Time + Look Window */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-gray-300 mb-1.5">
-                    Imaging Time (τ)
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      value={config.imaging_time_s}
-                      onChange={(e) =>
-                        setConfig({
-                          ...config,
-                          imaging_time_s: parseFloat(e.target.value),
-                        })
-                      }
-                      className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                      step="0.1"
-                      min="0.1"
-                    />
-                    <span className="absolute right-3 top-2 text-xs text-gray-500">sec</span>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-300 mb-1.5">
-                    Look Window
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      value={config.look_window_s}
-                      onChange={(e) =>
-                        setConfig({
-                          ...config,
-                          look_window_s: parseFloat(e.target.value),
-                        })
-                      }
-                      className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                      step="60"
-                      min="60"
-                    />
-                    <span className="absolute right-3 top-2 text-xs text-gray-500">sec</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Value Source */}
-              <div>
-                <label className="block text-xs font-medium text-gray-300 mb-1.5">
-                  Target Value Source
-                </label>
-                <select
-                  value={config.value_source}
-                  onChange={(e) =>
-                    setConfig({
-                      ...config,
-                      value_source: e.target.value as PlanningRequest['value_source'],
-                    })
-                  }
-                  className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                >
-                  <option value="uniform">Uniform (all = 1)</option>
-                  <option value="target_priority">Target Priority (from analysis)</option>
-                  <option value="custom">Custom Values (CSV upload)</option>
-                </select>
-              </div>
-
-              {/* Quality Model */}
-              <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1">
-                  Quality Model
-                </label>
-                <select
-                  value={config.quality_model}
-                  onChange={(e) =>
-                    setConfig({
-                      ...config,
-                      quality_model: e.target.value as PlanningRequest['quality_model'],
-                    })
-                  }
-                  className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm"
-                >
-                  <option value="off">Off (no quality adjustment)</option>
-                  <option value="monotonic">Monotonic (lower off-nadir = better) — Optical</option>
-                  <option value="band">Band (ideal ± width) — SAR</option>
-                </select>
-              </div>
-
-              {/* Band Model Parameters (conditional) */}
-              {config.quality_model === 'band' && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-400 mb-1">
-                      Ideal Off-Nadir (°)
-                    </label>
-                    <input
-                      type="number"
-                      value={config.ideal_incidence_deg}
-                      onChange={(e) =>
-                        setConfig({
-                          ...config,
-                          ideal_incidence_deg: parseFloat(e.target.value),
-                        })
-                      }
-                      className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm"
-                      step="1"
-                      min="0"
-                      max="90"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-400 mb-1">
-                      Band Width (°)
-                    </label>
-                    <input
-                      type="number"
-                      value={config.band_width_deg}
-                      onChange={(e) =>
-                        setConfig({
-                          ...config,
-                          band_width_deg: parseFloat(e.target.value),
-                        })
-                      }
-                      className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm"
-                      step="0.5"
-                      min="0.5"
-                      max="45"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* Fine-tune Weight Sliders */}
-              <div className="space-y-2 pt-2 border-t border-gray-700/50">
-                <h5 className="text-xs text-gray-400">Fine-tune Weights</h5>
-                <div>
-                  <div className="flex justify-between items-center mb-0.5">
-                    <label className="text-xs text-gray-400">Priority</label>
-                    <span className="text-xs text-blue-400">
-                      {getNormalizedWeights().priority.toFixed(0)}%
+          {/* PR_UI_008: Read-only config summary (agility/quality tuning knobs removed). */}
+          {configSummary.length > 0 && (
+            <div className="bg-gray-900/60 rounded-lg p-3 border border-gray-700/50">
+              <h5 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2 flex items-center gap-1">
+                <Shield size={10} />
+                Platform Config (read-only)
+              </h5>
+              {configSummary.slice(0, 3).map((sat) => (
+                <div key={sat.id} className="text-[10px] space-y-0.5 mb-2 last:mb-0">
+                  <div className="text-gray-300 font-medium">{sat.name}</div>
+                  <div className="grid grid-cols-2 gap-x-3 text-gray-500">
+                    <span>
+                      Roll limit: <span className="text-gray-300">{sat.bus.max_roll_deg}°</span>
                     </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    step="5"
-                    value={config.weight_priority}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        weight_priority: parseInt(e.target.value),
-                        weight_preset: null,
-                      })
-                    }
-                    className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                  />
-                </div>
-                <div>
-                  <div className="flex justify-between items-center mb-0.5">
-                    <label className="text-xs text-gray-400">Geometry</label>
-                    <span className="text-xs text-green-400">
-                      {getNormalizedWeights().geometry.toFixed(0)}%
+                    <span>
+                      Roll rate:{' '}
+                      <span className="text-gray-300">{sat.bus.max_roll_rate_dps}°/s</span>
                     </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    step="5"
-                    value={config.weight_geometry}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        weight_geometry: parseInt(e.target.value),
-                        weight_preset: null,
-                      })
-                    }
-                    className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-green-500"
-                  />
-                </div>
-                <div>
-                  <div className="flex justify-between items-center mb-0.5">
-                    <label className="text-xs text-gray-400">Timing</label>
-                    <span className="text-xs text-orange-400">
-                      {getNormalizedWeights().timing.toFixed(0)}%
+                    <span>
+                      Pitch limit: <span className="text-gray-300">{sat.bus.max_pitch_deg}°</span>
                     </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    step="5"
-                    value={config.weight_timing}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        weight_timing: parseInt(e.target.value),
-                        weight_preset: null,
-                      })
-                    }
-                    className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
-                  />
-                </div>
-              </div>
-
-              {/* Spacecraft Agility — developer mode only */}
-              {showAdvancedOptions && (
-                <div className="space-y-2 pt-2 border-t border-gray-700/50">
-                  <h5 className="text-xs text-gray-400 flex items-center gap-1">
-                    Spacecraft Agility
-                    <span className="text-[9px] text-yellow-500">(developer)</span>
-                  </h5>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-[10px] text-gray-500 mb-0.5">Roll Rate</label>
-                      <input
-                        type="number"
-                        value={config.max_roll_rate_dps}
-                        onChange={(e) =>
-                          setConfig({
-                            ...config,
-                            max_roll_rate_dps: parseFloat(e.target.value),
-                          })
-                        }
-                        className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs"
-                        step="0.1"
-                        min="0.1"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] text-gray-500 mb-0.5">Roll Accel</label>
-                      <input
-                        type="number"
-                        value={config.max_roll_accel_dps2}
-                        onChange={(e) =>
-                          setConfig({
-                            ...config,
-                            max_roll_accel_dps2: parseFloat(e.target.value),
-                          })
-                        }
-                        className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs"
-                        step="0.1"
-                        min="0.1"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] text-gray-500 mb-0.5">Pitch Rate</label>
-                      <input
-                        type="number"
-                        value={config.max_pitch_rate_dps}
-                        onChange={(e) =>
-                          setConfig({
-                            ...config,
-                            max_pitch_rate_dps: parseFloat(e.target.value),
-                          })
-                        }
-                        className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs"
-                        step="0.1"
-                        min="0"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] text-gray-500 mb-0.5">Pitch Accel</label>
-                      <input
-                        type="number"
-                        value={config.max_pitch_accel_dps2}
-                        onChange={(e) =>
-                          setConfig({
-                            ...config,
-                            max_pitch_accel_dps2: parseFloat(e.target.value),
-                          })
-                        }
-                        className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs"
-                        step="0.1"
-                        min="0"
-                      />
-                    </div>
+                    <span>
+                      FOV: <span className="text-gray-300">{sat.sensor.fov_half_angle_deg}°</span>
+                    </span>
+                    {sat.sensor.swath_width_km && (
+                      <span>
+                        Swath: <span className="text-gray-300">{sat.sensor.swath_width_km} km</span>
+                      </span>
+                    )}
+                    {sat.sar_capable && <span className="text-purple-400">SAR capable</span>}
                   </div>
                 </div>
-              )}
-
-              {/* PR-PARAM-GOV-01: Read-only Config Summary */}
-              {configSummary.length > 0 && (
-                <div className="bg-gray-900/60 rounded-lg p-3 border border-gray-700/50">
-                  <h5 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2 flex items-center gap-1">
-                    <Shield size={10} />
-                    Platform Config (read-only)
-                  </h5>
-                  {configSummary.slice(0, 3).map((sat) => (
-                    <div key={sat.id} className="text-[10px] space-y-0.5 mb-2 last:mb-0">
-                      <div className="text-gray-300 font-medium">{sat.name}</div>
-                      <div className="grid grid-cols-2 gap-x-3 text-gray-500">
-                        <span>
-                          Roll limit: <span className="text-gray-300">{sat.bus.max_roll_deg}°</span>
-                        </span>
-                        <span>
-                          Roll rate:{' '}
-                          <span className="text-gray-300">{sat.bus.max_roll_rate_dps}°/s</span>
-                        </span>
-                        <span>
-                          Pitch limit:{' '}
-                          <span className="text-gray-300">{sat.bus.max_pitch_deg}°</span>
-                        </span>
-                        <span>
-                          FOV:{' '}
-                          <span className="text-gray-300">{sat.sensor.fov_half_angle_deg}°</span>
-                        </span>
-                        {sat.sensor.swath_width_km && (
-                          <span>
-                            Swath:{' '}
-                            <span className="text-gray-300">{sat.sensor.swath_width_km} km</span>
-                          </span>
-                        )}
-                        {sat.sar_capable && <span className="text-purple-400">SAR capable</span>}
-                      </div>
-                    </div>
-                  ))}
-                  {configSummary.length > 3 && (
-                    <div className="text-[9px] text-gray-500 mt-1">
-                      +{configSummary.length - 3} more satellites
-                    </div>
-                  )}
+              ))}
+              {configSummary.length > 3 && (
+                <div className="text-[9px] text-gray-500 mt-1">
+                  +{configSummary.length - 3} more satellites
                 </div>
               )}
             </div>
