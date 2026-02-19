@@ -79,6 +79,7 @@ from backend.czml_generator import CZMLGenerator, generate_mission_czml
 from backend.mission_settings_manager import MissionSettingsManager
 from backend.routers.batching import router as batching_router
 from backend.routers.config_admin import router as config_admin_router
+from backend.routers.dev import router as dev_router
 from backend.routers.orders import router as orders_router
 from backend.routers.schedule import router as schedule_router
 from backend.routers.validation import router as validation_router
@@ -173,6 +174,7 @@ app.include_router(config_admin_router)
 app.include_router(schedule_router)
 app.include_router(orders_router)
 app.include_router(batching_router)
+app.include_router(dev_router)
 
 # Serve static files (built React app)
 if os.path.exists("../frontend/dist"):
@@ -2114,7 +2116,7 @@ def _compute_incidence_angle_at_time(
 
 
 @app.post("/api/v1/planning/schedule")
-async def schedule_mission(request: PlanningRequest) -> PlanningResponse:
+def schedule_mission(request: PlanningRequest) -> PlanningResponse:
     """
     Run mission planning algorithms on opportunities from last mission analysis.
 
@@ -3047,7 +3049,7 @@ async def test_baseline_performance() -> Dict[str, Any]:
             planning_request = PlanningRequest(
                 imaging_time_s=1.0, algorithms=["first_fit", "best_fit"]
             )
-            planning_response = await schedule_mission(planning_request)
+            planning_response = schedule_mission(planning_request)
             if planning_response.success and planning_response.results:
                 results["one_day"] = {
                     "first_fit": planning_response.results.get("first_fit", {}).get(
@@ -3075,7 +3077,7 @@ async def test_baseline_performance() -> Dict[str, Any]:
             planning_request = PlanningRequest(
                 imaging_time_s=1.0, algorithms=["first_fit", "best_fit"]
             )
-            planning_response = await schedule_mission(planning_request)
+            planning_response = schedule_mission(planning_request)
             if planning_response.success and planning_response.results:
                 results["one_week"] = {
                     "first_fit": planning_response.results.get("first_fit", {}).get(

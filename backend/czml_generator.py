@@ -75,6 +75,44 @@ class CZMLGenerator:
             max_spacecraft_roll_deg if max_spacecraft_roll_deg is not None else 45.0
         )
 
+    # Earth mean radius in km (WGS-84 volumetric mean)
+    EARTH_RADIUS_KM = 6371.0
+
+    @staticmethod
+    def _ground_arc_distance_m(alt_km: float, angle_deg: float) -> float:
+        """Compute ground arc distance from sub-satellite point for a given off-nadir angle.
+
+        Uses spherical-Earth geometry (law of sines) instead of the flat-Earth
+        approximation ``h * tan(θ)`` which underestimates at large angles
+        (≈5 % error at 45°).
+
+        Geometry (triangle: Earth-center C, Satellite S, Ground-point G):
+            |CS| = R + h,  |CG| = R,  angle at S = θ (off-nadir)
+            By sine rule  →  sin(∠G) = (R+h)/R · sin(θ)
+            Earth central angle  α = arcsin((R+h)/R · sin(θ)) − θ
+            Ground arc distance  d = R · α
+
+        Args:
+            alt_km:   Satellite altitude above Earth surface in km.
+            angle_deg: Off-nadir (or half-FOV) angle in degrees.
+
+        Returns:
+            Ground arc distance in **metres**.
+        """
+        R = CZMLGenerator.EARTH_RADIUS_KM  # km
+        h = alt_km
+        theta = math.radians(angle_deg)
+
+        sin_gamma = (R + h) / R * math.sin(theta)
+
+        if sin_gamma >= 1.0:
+            # Angle exceeds horizon – return maximum visible arc (tangent case)
+            alpha = math.acos(R / (R + h))  # Earth central angle to horizon
+            return R * 1000.0 * alpha
+
+        alpha = math.asin(sin_gamma) - theta  # Earth central angle (radians)
+        return R * 1000.0 * alpha  # metres
+
     def _format_czml_date(self, dt: Union[datetime, str, None]) -> str:
         """Format datetime for CZML in Cesium-compatible ISO 8601 format.
 
@@ -527,9 +565,9 @@ class CZMLGenerator:
 
             # Calculate footprint radius dynamically based on current altitude
             # IMPORTANT: Uses SENSOR FOV, not spacecraft roll limit!
-            # Radius = altitude * tan(sensor_fov_half_angle_deg)
-            current_radius_m = (
-                alt_km * 1000 * math.tan(math.radians(self.sensor_fov_half_angle_deg))
+            # Uses spherical-Earth geometry (law of sines) for accuracy
+            current_radius_m = self._ground_arc_distance_m(
+                alt_km, self.sensor_fov_half_angle_deg
             )
             current_radius_m = min(current_radius_m, 700000)  # Cap at 700km
 
@@ -630,9 +668,9 @@ class CZMLGenerator:
             ellipse_positions.extend([seconds_from_epoch, sat_lon, sat_lat, 0])
 
             # Calculate envelope radius based on max spacecraft roll
-            # Radius = altitude * tan(max_spacecraft_roll_deg)
-            current_radius_m = (
-                alt_km * 1000 * math.tan(math.radians(self.max_spacecraft_roll_deg))
+            # Uses spherical-Earth geometry (law of sines) for accuracy
+            current_radius_m = self._ground_arc_distance_m(
+                alt_km, self.max_spacecraft_roll_deg
             )
             current_radius_m = min(current_radius_m, 700000)  # Cap at 700km
 
@@ -836,24 +874,19 @@ class CZMLGenerator:
         import numpy as np
 
         # Earth radius in km
-        earth_radius = 6371.0
+        earth_radius = self.EARTH_RADIUS_KM
 
-        # Calculate footprint radius using spherical Earth approximation
-        # For off-nadir pointing, use the slant range calculation
+        # Calculate Earth-central angle using spherical geometry (law of sines)
+        # Same formula as _ground_arc_distance_m but we need the angle in radians
+        # for the great-circle point calculation below
         sensor_fov_rad = math.radians(sensor_fov_half_angle_deg)
+        sin_gamma = (earth_radius + alt_km) / earth_radius * math.sin(sensor_fov_rad)
 
-        # Maximum ground range for the given sensor FOV
-        # Using spherical Earth and accounting for Earth curvature
-        satellite_radius = earth_radius + alt_km
-
-        # Calculate the angular radius of footprint on Earth's surface
-        # This accounts for Earth curvature and sensor FOV angle
-        cos_ground_angle = (earth_radius / satellite_radius) * math.cos(sensor_fov_rad)
-
-        if cos_ground_angle > 1.0:  # No visibility
-            ground_angle_rad: float = 0.0
+        if sin_gamma >= 1.0:
+            # Angle exceeds horizon – use tangent case
+            ground_angle_rad = math.acos(earth_radius / (earth_radius + alt_km))
         else:
-            ground_angle_rad = math.acos(cos_ground_angle) - sensor_fov_rad
+            ground_angle_rad = math.asin(sin_gamma) - sensor_fov_rad
 
         # Convert to degrees
         ground_angle_deg = math.degrees(ground_angle_rad)

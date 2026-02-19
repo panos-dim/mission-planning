@@ -56,6 +56,10 @@ export const API_ENDPOINTS = {
   ORDER_REJECT: (id: string) => `/api/v1/orders/${id}/reject`,
   ORDER_DEFER: (id: string) => `/api/v1/orders/${id}/defer`,
 
+  // Dev endpoints (demo runner)
+  DEV_SCHEDULE_SNAPSHOT: '/api/v1/dev/schedule-snapshot',
+  DEV_WRITE_ARTIFACTS: '/api/v1/dev/write-artifacts',
+
   // Batching endpoints
   BATCHES: '/api/v1/batches',
   BATCHES_POLICIES: '/api/v1/batches/policies',

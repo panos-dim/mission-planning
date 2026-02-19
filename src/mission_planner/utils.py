@@ -5,70 +5,110 @@ This module provides common utility functions used throughout
 the mission planning tool.
 """
 
-from datetime import datetime, timezone
-from typing import Union, Optional
 import logging
-import requests
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional, Union
+
+import requests
 
 logger = logging.getLogger(__name__)
+
+# Earth mean radius in km (WGS-84 volumetric mean)
+EARTH_RADIUS_KM = 6371.0
+
+
+def ground_arc_distance_km(alt_km: float, angle_deg: float) -> float:
+    """Compute ground arc distance from sub-satellite point for a given off-nadir angle.
+
+    Uses spherical-Earth geometry (law of sines) instead of the flat-Earth
+    approximation ``h * tan(θ)`` which underestimates at large angles
+    (≈5 % error at 45°).
+
+    Geometry (triangle: Earth-center C, Satellite S, Ground-point G):
+        |CS| = R + h,  |CG| = R,  angle at S = θ (off-nadir)
+        By sine rule  →  sin(∠G) = (R+h)/R · sin(θ)
+        Earth central angle  α = arcsin((R+h)/R · sin(θ)) − θ
+        Ground arc distance  d = R · α
+
+    Args:
+        alt_km:   Satellite altitude above Earth surface in km.
+        angle_deg: Off-nadir (or incidence) angle in degrees.
+
+    Returns:
+        Ground arc distance in **kilometres**.
+    """
+    import math
+
+    R = EARTH_RADIUS_KM
+    theta = math.radians(angle_deg)
+    sin_gamma = (R + alt_km) / R * math.sin(theta)
+
+    if sin_gamma >= 1.0:
+        # Angle exceeds horizon – return maximum visible arc
+        alpha = math.acos(R / (R + alt_km))
+        return R * alpha
+
+    alpha = math.asin(sin_gamma) - theta  # Earth central angle (radians)
+    return R * alpha
 
 
 def setup_logging(level: str = "INFO", log_file: Optional[str] = None) -> None:
     """
     Set up logging configuration.
-    
+
     Args:
         level: Logging level (DEBUG, INFO, WARNING, ERROR)
         log_file: Optional log file path
-        
+
     Environment Variables:
         MISSION_PLANNER_LOG_LEVEL: Override log level (DEBUG, INFO, WARNING, ERROR)
     """
     import os
+
     # Allow environment variable to override
     env_level = os.environ.get("MISSION_PLANNER_LOG_LEVEL")
     if env_level:
         level = env_level
     log_level = getattr(logging, level.upper(), logging.INFO)
-    
+
     # Create formatter
     formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
-    
+
     # Configure root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(log_level)
-    
+
     # Remove existing handlers
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
-    
+
     # Add console handler
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
-    
+
     # Add file handler if specified
     if log_file:
         file_handler = logging.FileHandler(log_file)
         file_handler.setFormatter(formatter)
         root_logger.addHandler(file_handler)
-    
+
     logger.info(f"Logging configured at {level} level")
 
 
 def parse_datetime(date_string: str) -> datetime:
     """
     Parse datetime string in various formats.
-    
+
     Args:
         date_string: Date string to parse
-        
+
     Returns:
         Parsed datetime object (UTC)
-        
+
     Raises:
         ValueError: If date string cannot be parsed
     """
@@ -80,7 +120,7 @@ def parse_datetime(date_string: str) -> datetime:
         "%Y-%m-%dT%H:%M:%S.%fZ",
         "%Y-%m-%d",
     ]
-    
+
     for fmt in formats:
         try:
             dt = datetime.strptime(date_string, fmt)
@@ -90,36 +130,36 @@ def parse_datetime(date_string: str) -> datetime:
             return dt.astimezone(timezone.utc).replace(tzinfo=None)
         except ValueError:
             continue
-    
+
     raise ValueError(f"Could not parse datetime string: {date_string}")
 
 
 def download_tle_file(url: str, output_file: Union[str, Path]) -> bool:
     """
     Download TLE file from URL.
-    
+
     Args:
         url: URL to download TLE data from
         output_file: Local file path to save TLE data
-        
+
     Returns:
         True if successful, False otherwise
     """
     try:
         logger.info(f"Downloading TLE data from {url}")
-        
+
         response = requests.get(url, timeout=30)
         response.raise_for_status()
-        
+
         output_path = Path(output_file)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(output_path, 'w') as f:
+
+        with open(output_path, "w") as f:
             f.write(response.text)
-        
+
         logger.info(f"TLE data saved to {output_path}")
         return True
-        
+
     except Exception as e:
         logger.error(f"Error downloading TLE file: {e}")
         return False
@@ -128,7 +168,7 @@ def download_tle_file(url: str, output_file: Union[str, Path]) -> bool:
 def get_common_tle_sources() -> dict:
     """
     Get dictionary of common TLE data sources.
-    
+
     Returns:
         Dictionary mapping source names to URLs
     """
@@ -149,11 +189,11 @@ def get_common_tle_sources() -> dict:
 def validate_coordinates(latitude: float, longitude: float) -> bool:
     """
     Validate latitude and longitude coordinates.
-    
+
     Args:
         latitude: Latitude in degrees
         longitude: Longitude in degrees
-        
+
     Returns:
         True if coordinates are valid
     """
@@ -163,10 +203,10 @@ def validate_coordinates(latitude: float, longitude: float) -> bool:
 def degrees_to_dms(degrees: float) -> tuple:
     """
     Convert decimal degrees to degrees, minutes, seconds.
-    
+
     Args:
         degrees: Decimal degrees
-        
+
     Returns:
         Tuple of (degrees, minutes, seconds)
     """
@@ -174,19 +214,21 @@ def degrees_to_dms(degrees: float) -> tuple:
     d = int(abs_degrees)
     m = int((abs_degrees - d) * 60)
     s = ((abs_degrees - d) * 60 - m) * 60
-    
+
     return (d, m, s)
 
 
-def format_coordinates(latitude: float, longitude: float, format: str = "decimal") -> str:
+def format_coordinates(
+    latitude: float, longitude: float, format: str = "decimal"
+) -> str:
     """
     Format coordinates for display.
-    
+
     Args:
         latitude: Latitude in degrees
         longitude: Longitude in degrees
         format: Format type ("decimal" or "dms")
-        
+
     Returns:
         Formatted coordinate string
     """
@@ -195,46 +237,49 @@ def format_coordinates(latitude: float, longitude: float, format: str = "decimal
     elif format == "dms":
         lat_d, lat_m, lat_s = degrees_to_dms(latitude)
         lon_d, lon_m, lon_s = degrees_to_dms(longitude)
-        
+
         lat_dir = "N" if latitude >= 0 else "S"
         lon_dir = "E" if longitude >= 0 else "W"
-        
-        return (f"{lat_d}°{lat_m}'{lat_s:.1f}\"{lat_dir}, "
-                f"{lon_d}°{lon_m}'{lon_s:.1f}\"{lon_dir}")
+
+        return (
+            f"{lat_d}°{lat_m}'{lat_s:.1f}\"{lat_dir}, "
+            f"{lon_d}°{lon_m}'{lon_s:.1f}\"{lon_dir}"
+        )
     else:
         raise ValueError(f"Unknown format: {format}")
 
 
 def calculate_ground_distance(
-    lat1: float, lon1: float,
-    lat2: float, lon2: float
+    lat1: float, lon1: float, lat2: float, lon2: float
 ) -> float:
     """
     Calculate great circle distance between two points on Earth.
-    
+
     Args:
         lat1, lon1: First point coordinates (degrees)
         lat2, lon2: Second point coordinates (degrees)
-        
+
     Returns:
         Distance in kilometers
     """
     import math
-    
+
     # Convert to radians
     lat1_rad = math.radians(lat1)
     lon1_rad = math.radians(lon1)
     lat2_rad = math.radians(lat2)
     lon2_rad = math.radians(lon2)
-    
+
     # Haversine formula
     dlat = lat2_rad - lat1_rad
     dlon = lon2_rad - lon1_rad
-    
-    a = (math.sin(dlat/2)**2 + 
-         math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon/2)**2)
+
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2) ** 2
+    )
     c = 2 * math.asin(math.sqrt(a))
-    
+
     # Earth's radius in km
     earth_radius = 6371.0
     return earth_radius * c
@@ -243,10 +288,10 @@ def calculate_ground_distance(
 def format_duration(seconds: float) -> str:
     """
     Format duration in seconds to human-readable string.
-    
+
     Args:
         seconds: Duration in seconds
-        
+
     Returns:
         Formatted duration string
     """
@@ -263,7 +308,7 @@ def format_duration(seconds: float) -> str:
 def create_sample_tle_file(output_file: Union[str, Path]) -> None:
     """
     Create a sample TLE file with common satellites.
-    
+
     Args:
         output_file: Path to create sample TLE file
     """
@@ -282,20 +327,20 @@ AQUA
 LANDSAT 8
 1 39084U 13008A   24001.00000000  .00000012  00000-0  28110-4 0  9993
 2 39084  98.2062 348.0319 0001378  83.7123 276.4313 14.57107527560649"""
-    
+
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    with open(output_path, 'w') as f:
+
+    with open(output_path, "w") as f:
         f.write(sample_tle_data)
-    
+
     logger.info(f"Created sample TLE file: {output_path}")
 
 
 def get_current_utc() -> datetime:
     """
     Get current UTC datetime.
-    
+
     Returns:
         Current UTC datetime (timezone-naive)
     """
@@ -305,10 +350,10 @@ def get_current_utc() -> datetime:
 def ensure_directory_exists(directory: Union[str, Path]) -> Path:
     """
     Ensure directory exists, create if it doesn't.
-    
+
     Args:
         directory: Directory path
-        
+
     Returns:
         Path object for the directory
     """

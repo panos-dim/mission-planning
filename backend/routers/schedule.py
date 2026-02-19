@@ -989,6 +989,10 @@ class DirectCommitRequest(BaseModel):
     lock_level: str = Field(default="none", description="Lock level: none | hard")
     workspace_id: Optional[str] = None
     notes: Optional[str] = None
+    force: bool = Field(
+        default=False,
+        description="Force commit even with conflicts (for reshuffle scenarios)",
+    )
 
 
 class DirectCommitResponse(BaseModel):
@@ -1024,12 +1028,16 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
 
     # Check for conflicts with existing committed acquisitions
     conflicts = _check_commit_conflicts(db, request.items, request.workspace_id)
-    if conflicts:
+    if conflicts and not request.force:
         conflict_details = "; ".join(conflicts[:3])  # Show first 3 conflicts
         more = f" (+{len(conflicts) - 3} more)" if len(conflicts) > 3 else ""
         raise HTTPException(
             status_code=409,
             detail=f"Cannot commit: {len(conflicts)} conflict(s) detected. {conflict_details}{more}",
+        )
+    if conflicts and request.force:
+        logger.warning(
+            f"[Direct Commit] Force-committing with {len(conflicts)} conflict(s)"
         )
 
     try:
@@ -1350,6 +1358,52 @@ async def create_incremental_plan(
     except (ImportError, AttributeError):
         # No cached opportunities available - this is expected
         pass
+
+    # Fallback: read from current_mission_data if opportunities_cache is empty
+    if not raw_opportunities:
+        try:
+            from datetime import datetime as _dt
+
+            from backend.main import app as main_app
+
+            _cmd = getattr(main_app.state, "current_mission_data", {})
+            if _cmd and "passes" in _cmd:
+                passes = _cmd["passes"]
+                for idx, p in enumerate(passes):
+                    if isinstance(p, dict):
+                        sat = p["satellite_name"]
+                        tgt = p["target_name"]
+                        st = _dt.fromisoformat(p["start_time"])
+                        et = _dt.fromisoformat(p["end_time"])
+                    else:
+                        sat = p.satellite_name
+                        tgt = p.target_name
+                        st = p.start_time
+                        et = p.end_time
+                    raw_opportunities.append(
+                        {
+                            "id": f"{sat}_{tgt}_{idx}",
+                            "opportunity_id": f"{sat}_{tgt}_{idx}",
+                            "satellite_id": sat,
+                            "target_id": tgt,
+                            "start_time": (
+                                st.isoformat() if hasattr(st, "isoformat") else str(st)
+                            ),
+                            "end_time": (
+                                et.isoformat() if hasattr(et, "isoformat") else str(et)
+                            ),
+                            "roll_angle_deg": 0.0,
+                            "pitch_angle_deg": 0.0,
+                            "value": 1.0,
+                        }
+                    )
+                logger.info(
+                    f"[Incremental Plan] Loaded {len(raw_opportunities)} opportunities from mission analysis fallback"
+                )
+        except Exception as e:
+            logger.warning(
+                f"[Incremental Plan] Failed to load mission data fallback: {e}"
+            )
 
     if not raw_opportunities:
         logger.info(
@@ -1849,6 +1903,50 @@ async def create_repair_plan(
         raw_opportunities = get_cached_opportunities() or []
     except (ImportError, AttributeError):
         pass
+
+    # Fallback: read from current_mission_data if opportunities_cache is empty
+    if not raw_opportunities:
+        try:
+            from datetime import datetime as _dt
+
+            from backend.main import app as main_app
+
+            _cmd = getattr(main_app.state, "current_mission_data", {})
+            if _cmd and "passes" in _cmd:
+                passes = _cmd["passes"]
+                for idx, p in enumerate(passes):
+                    if isinstance(p, dict):
+                        sat = p["satellite_name"]
+                        tgt = p["target_name"]
+                        st = _dt.fromisoformat(p["start_time"])
+                        et = _dt.fromisoformat(p["end_time"])
+                    else:
+                        sat = p.satellite_name
+                        tgt = p.target_name
+                        st = p.start_time
+                        et = p.end_time
+                    raw_opportunities.append(
+                        {
+                            "id": f"{sat}_{tgt}_{idx}",
+                            "opportunity_id": f"{sat}_{tgt}_{idx}",
+                            "satellite_id": sat,
+                            "target_id": tgt,
+                            "start_time": (
+                                st.isoformat() if hasattr(st, "isoformat") else str(st)
+                            ),
+                            "end_time": (
+                                et.isoformat() if hasattr(et, "isoformat") else str(et)
+                            ),
+                            "roll_angle_deg": 0.0,
+                            "pitch_angle_deg": 0.0,
+                            "value": 1.0,
+                        }
+                    )
+                logger.info(
+                    f"[Repair Plan] Loaded {len(raw_opportunities)} opportunities from mission analysis fallback"
+                )
+        except Exception as e:
+            logger.warning(f"[Repair Plan] Failed to load mission data fallback: {e}")
 
     if not raw_opportunities:
         logger.info(

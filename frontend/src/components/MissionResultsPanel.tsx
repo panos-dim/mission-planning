@@ -11,11 +11,11 @@ import {
   ChevronDown,
   ChevronRight,
 } from 'lucide-react'
-import { getSatelliteColorByIndex } from '../constants/colors'
+// PR-UI-013: Satellite color import removed — no satellite-based color coding
 import { useVisStore } from '../store/visStore'
 import { useSwathStore } from '../store/swathStore'
 import { LABELS } from '../constants/labels'
-import { formatDateTimeShort } from '../utils/date'
+import { formatDateTimeShort, formatDateTimeDDMMYYYY } from '../utils/date'
 import type { PassData } from '../types'
 
 type Section = 'overview' | 'schedule' | 'timeline'
@@ -48,38 +48,10 @@ const SectionHeader: React.FC<SectionHeaderProps> = React.memo(
   ),
 )
 
-// Get satellite color - uses shared color constants
-// Supports any constellation size with automatic color generation for 9+ satellites
-const getSatelliteColor = (
-  satelliteIndex: number,
-  satellites?: Array<{ id: string; name: string; color?: string }>,
-): string => {
-  // If we have satellite info with colors from backend, use it
-  if (satellites && satellites.length > 0 && satelliteIndex < satellites.length) {
-    const color = satellites[satelliteIndex].color
-    if (color) return color
-  }
-  // Fallback to shared color palette (handles any constellation size)
-  return getSatelliteColorByIndex(satelliteIndex)
-}
-
-// Get color for an opportunity based on its satellite (for constellation support)
-// For single satellite missions, all opportunities use the primary satellite color
-const getOpportunityColor = (
-  pass: PassData,
-  _passIndex: number,
-  satellites?: Array<{ id: string; name: string; color?: string }>,
-): string => {
-  // If pass has satellite_id, find matching satellite color
-  if (pass.satellite_id && satellites) {
-    const satIndex = satellites.findIndex((s) => s.id === pass.satellite_id)
-    if (satIndex >= 0 && satellites[satIndex].color) {
-      return satellites[satIndex].color!
-    }
-  }
-
-  // For single satellite missions or if no satellite_id, use primary satellite color
-  return getSatelliteColor(0, satellites)
+// PR-UI-013: Opportunity color based on mode (not satellite)
+// Cyan for optical, purple for SAR — no satellite-based color coding
+const getOpportunityColor = (pass: PassData): string => {
+  return pass.sar_data ? '#a855f7' : '#06b6d4' // purple-500 : cyan-500
 }
 
 const MissionResultsPanel: React.FC = () => {
@@ -90,11 +62,9 @@ const MissionResultsPanel: React.FC = () => {
   const { selectedOpportunityId, setSelectedOpportunity } = useVisStore()
   const { selectSwath, setFilteredTarget, autoFilterEnabled } = useSwathStore()
 
-  // SAR filter state
-  const [lookSideFilter, setLookSideFilter] = useState<'ALL' | 'LEFT' | 'RIGHT'>('ALL')
-  const [passDirectionFilter, setPassDirectionFilter] = useState<
-    'ALL' | 'ASCENDING' | 'DESCENDING'
-  >('ALL')
+  // SAR filter state — exclude-first toggles (empty set = nothing hidden)
+  const [hiddenLookSides, setHiddenLookSides] = useState<Set<string>>(new Set())
+  const [hiddenPassDirections, setHiddenPassDirections] = useState<Set<string>>(new Set())
 
   // Per-target collapsible state for Opportunities section
   // null = not yet initialized (will default to first target expanded)
@@ -110,6 +80,30 @@ const MissionResultsPanel: React.FC = () => {
         next.delete(targetName)
       } else {
         next.add(targetName)
+      }
+      return next
+    })
+  }, [])
+
+  const toggleLookSide = useCallback((side: string) => {
+    setHiddenLookSides((prev) => {
+      const next = new Set(prev)
+      if (next.has(side)) {
+        next.delete(side)
+      } else {
+        next.add(side)
+      }
+      return next
+    })
+  }, [])
+
+  const togglePassDirection = useCallback((dir: string) => {
+    setHiddenPassDirections((prev) => {
+      const next = new Set(prev)
+      if (next.has(dir)) {
+        next.delete(dir)
+      } else {
+        next.add(dir)
       }
       return next
     })
@@ -146,9 +140,8 @@ const MissionResultsPanel: React.FC = () => {
       .filter((pass) => {
         const isSAR = state.missionData!.imaging_type === 'sar' || !!state.missionData!.sar
         if (isSAR && pass.sar_data) {
-          if (lookSideFilter !== 'ALL' && pass.sar_data.look_side !== lookSideFilter) return false
-          if (passDirectionFilter !== 'ALL' && pass.sar_data.pass_direction !== passDirectionFilter)
-            return false
+          if (hiddenLookSides.has(pass.sar_data.look_side)) return false
+          if (hiddenPassDirections.has(pass.sar_data.pass_direction)) return false
         }
         return true
       })
@@ -164,7 +157,7 @@ const MissionResultsPanel: React.FC = () => {
       groups.get(key)!.push(pass)
     }
     return groups
-  }, [state.missionData, lookSideFilter, passDirectionFilter])
+  }, [state.missionData, hiddenLookSides, hiddenPassDirections])
 
   // Target names in display order (match targets array order, fallback for unknown)
   const targetDisplayOrder = useMemo(() => {
@@ -304,9 +297,6 @@ const MissionResultsPanel: React.FC = () => {
       return timeA - timeB
     })
   })()
-
-  // Get satellite info for consistent coloring with ground tracks
-  const satellites = state.missionData.satellites || []
 
   return (
     <div className="h-full flex flex-col">
@@ -467,28 +457,43 @@ const MissionResultsPanel: React.FC = () => {
             <div className="p-3 bg-gray-850 space-y-2 max-h-96 overflow-y-auto">
               {/* SAR Filters - only show for SAR missions */}
               {isSARMission && state.missionData.passes.some((p) => p.sar_data) && (
-                <div className="flex items-center gap-2 mb-2 pb-2 border-b border-gray-700">
-                  <span className="text-[10px] text-gray-500 uppercase tracking-wide">Filter:</span>
-                  <select
-                    value={lookSideFilter}
-                    onChange={(e) => setLookSideFilter(e.target.value as 'ALL' | 'LEFT' | 'RIGHT')}
-                    className="px-2 py-0.5 bg-gray-700 border border-gray-600 rounded text-xs text-white focus:border-blue-500 focus:outline-none"
-                  >
-                    <option value="ALL">All Sides</option>
-                    <option value="LEFT">Left Only</option>
-                    <option value="RIGHT">Right Only</option>
-                  </select>
-                  <select
-                    value={passDirectionFilter}
-                    onChange={(e) =>
-                      setPassDirectionFilter(e.target.value as 'ALL' | 'ASCENDING' | 'DESCENDING')
-                    }
-                    className="px-2 py-0.5 bg-gray-700 border border-gray-600 rounded text-xs text-white focus:border-blue-500 focus:outline-none"
-                  >
-                    <option value="ALL">All Directions</option>
-                    <option value="ASCENDING">Ascending ↑</option>
-                    <option value="DESCENDING">Descending ↓</option>
-                  </select>
+                <div className="flex flex-wrap items-center gap-1.5 mb-2 pb-2 border-b border-gray-700">
+                  <span className="text-[10px] text-gray-500 uppercase tracking-wide">Side:</span>
+                  {(['LEFT', 'RIGHT'] as const).map((side) => {
+                    const isVisible = !hiddenLookSides.has(side)
+                    return (
+                      <button
+                        key={side}
+                        onClick={() => toggleLookSide(side)}
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-medium transition-colors ${
+                          isVisible
+                            ? 'bg-gray-700 text-white hover:bg-gray-600'
+                            : 'bg-gray-800/50 text-gray-500 line-through hover:bg-gray-700/50'
+                        }`}
+                      >
+                        {side === 'LEFT' ? 'Left' : 'Right'}
+                      </button>
+                    )
+                  })}
+                  <span className="text-[10px] text-gray-500 uppercase tracking-wide ml-1">
+                    Dir:
+                  </span>
+                  {(['ASCENDING', 'DESCENDING'] as const).map((dir) => {
+                    const isVisible = !hiddenPassDirections.has(dir)
+                    return (
+                      <button
+                        key={dir}
+                        onClick={() => togglePassDirection(dir)}
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-medium transition-colors ${
+                          isVisible
+                            ? 'bg-gray-700 text-white hover:bg-gray-600'
+                            : 'bg-gray-800/50 text-gray-500 line-through hover:bg-gray-700/50'
+                        }`}
+                      >
+                        {dir === 'ASCENDING' ? 'Asc ↑' : 'Desc ↓'}
+                      </button>
+                    )
+                  })}
                   <span className="text-[10px] text-gray-500 ml-auto">
                     {sortedPasses.length}/{state.missionData.passes.length}
                   </span>
@@ -570,11 +575,7 @@ const MissionResultsPanel: React.FC = () => {
                           const globalIndex = sortedPasses.findIndex(
                             (p) => p.start_time === pass.start_time && p.target === pass.target,
                           )
-                          const opportunityColor = getOpportunityColor(
-                            pass,
-                            globalIndex,
-                            satellites,
-                          )
+                          const opportunityColor = getOpportunityColor(pass)
                           // Generate stable opportunity ID for cross-panel sync
                           const passTime = new Date(pass.start_time)
                           const timeKey = passTime
@@ -618,8 +619,7 @@ const MissionResultsPanel: React.FC = () => {
                                     style={{ backgroundColor: opportunityColor }}
                                   ></div>
                                   <span className="text-xs font-medium text-white">
-                                    {pass.sar_data ? 'SAR' : 'Imaging'} Opportunity{' '}
-                                    {globalIndex + 1}
+                                    {targetName} {localIndex + 1}
                                   </span>
                                   {/* SAR badges */}
                                   {pass.sar_data && (
@@ -774,18 +774,8 @@ const MissionResultsPanel: React.FC = () => {
                           Opportunity Windows ({visiblePasses.length})
                         </div>
 
-                        {/* Target filter pills */}
+                        {/* Target filter pills — exclude-first, no 'All' option */}
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <button
-                            onClick={() => setHiddenTimelineTargets(new Set())}
-                            className={`px-2 py-0.5 rounded-full text-[10px] font-medium transition-colors ${
-                              hiddenTimelineTargets.size === 0
-                                ? 'bg-blue-500/20 text-blue-300 ring-1 ring-blue-500/40'
-                                : 'bg-gray-700/50 text-gray-400 hover:bg-gray-700'
-                            }`}
-                          >
-                            All
-                          </button>
                           {state.missionData.targets.map((t) => {
                             const isVisible = !hiddenTimelineTargets.has(t.name)
                             const count = sortedPasses.filter((p) => p.target === t.name).length
@@ -847,14 +837,9 @@ const MissionResultsPanel: React.FC = () => {
                                 ).getTime()
                                 const position =
                                   ((startMs - paddedStart) / (paddedEnd - paddedStart)) * 100
-                                const globalIndex = sortedPasses.findIndex(
-                                  (p) =>
-                                    p.start_time === pass.start_time && p.target === pass.target,
-                                )
-                                return { pass, position, globalIndex, startMs }
+                                return { pass, position, startMs }
                               })
                               .sort((a, b) => a.position - b.position)
-
                             // Cluster overlapping markers (within 3% of each other)
                             const OVERLAP_THRESHOLD = 3
                             const clusters: (typeof markerData)[] = []
@@ -904,12 +889,8 @@ const MissionResultsPanel: React.FC = () => {
                                     )
 
                                     if (cluster.length === 1) {
-                                      const { pass, globalIndex } = cluster[0]
-                                      const color = getOpportunityColor(
-                                        pass,
-                                        globalIndex,
-                                        satellites,
-                                      )
+                                      const { pass } = cluster[0]
+                                      const color = getOpportunityColor(pass)
                                       return (
                                         <div
                                           key={clusterIdx}
@@ -927,7 +908,9 @@ const MissionResultsPanel: React.FC = () => {
                                               )
                                               navigateToPassWindow(oi)
                                             }}
-                                            title={`#${globalIndex + 1} ${pass.target} — ${pass.start_time.substring(8, 10)}-${pass.start_time.substring(5, 7)} ${pass.start_time.substring(11, 19)} UTC`}
+                                            title={formatDateTimeDDMMYYYY(
+                                              pass.max_elevation_time || pass.start_time,
+                                            )}
                                           />
                                         </div>
                                       )
@@ -947,11 +930,7 @@ const MissionResultsPanel: React.FC = () => {
                                           }}
                                         >
                                           {cluster.map((marker, mIdx) => {
-                                            const color = getOpportunityColor(
-                                              marker.pass,
-                                              marker.globalIndex,
-                                              satellites,
-                                            )
+                                            const color = getOpportunityColor(marker.pass)
                                             return (
                                               <div
                                                 key={mIdx}
@@ -969,7 +948,10 @@ const MissionResultsPanel: React.FC = () => {
                                                   )
                                                   navigateToPassWindow(oi)
                                                 }}
-                                                title={`#${marker.globalIndex + 1} ${marker.pass.target} — ${marker.pass.start_time.substring(8, 10)}-${marker.pass.start_time.substring(5, 7)} ${marker.pass.start_time.substring(11, 19)} UTC`}
+                                                title={formatDateTimeDDMMYYYY(
+                                                  marker.pass.max_elevation_time ||
+                                                    marker.pass.start_time,
+                                                )}
                                               />
                                             )
                                           })}

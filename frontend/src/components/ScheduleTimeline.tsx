@@ -6,7 +6,7 @@
  */
 
 import React, { useMemo, useCallback, useRef, useState, memo } from 'react'
-import { Clock, Satellite, MapPin, X, Lock, Filter, Shield } from 'lucide-react'
+import { Clock, MapPin, X, Lock, Filter, Shield } from 'lucide-react'
 import { useSelectionStore } from '../store/selectionStore'
 import { useLockStore } from '../store/lockStore'
 import type { LockLevel } from '../api/scheduleApi'
@@ -42,7 +42,6 @@ interface ScheduleTimelineProps {
 }
 
 interface TimelineFilters {
-  satellite: string | null
   target: string | null
   lockedOnly: boolean
 }
@@ -57,7 +56,6 @@ interface TargetLaneData {
 // =============================================================================
 
 const DEFAULT_FILTERS: TimelineFilters = {
-  satellite: null,
   target: null,
   lockedOnly: false,
 }
@@ -75,10 +73,13 @@ const MIN_BAR_WIDTH_PX = 4
 const formatUTCDateTime = (iso: string): string => {
   try {
     const d = new Date(iso)
-    return d
-      .toISOString()
-      .replace('T', ' ')
-      .replace(/\.\d{3}Z$/, ' UTC')
+    const day = String(d.getUTCDate()).padStart(2, '0')
+    const month = String(d.getUTCMonth() + 1).padStart(2, '0')
+    const year = d.getUTCFullYear()
+    const hours = String(d.getUTCHours()).padStart(2, '0')
+    const mins = String(d.getUTCMinutes()).padStart(2, '0')
+    const secs = String(d.getUTCSeconds()).padStart(2, '0')
+    return `${day}-${month}-${year} ${hours}:${mins}:${secs} UTC`
   } catch {
     return iso
   }
@@ -93,19 +94,10 @@ const formatAxisTick = (ts: number): string => {
 
 const formatAxisDate = (ts: number): string => {
   const d = new Date(ts)
-  return d.toLocaleDateString('en-GB', {
-    day: '2-digit',
-    month: 'short',
-    timeZone: 'UTC',
-  })
-}
-
-const getDurationMinutes = (start: string, end: string): number => {
-  try {
-    return Math.round((new Date(end).getTime() - new Date(start).getTime()) / 60000)
-  } catch {
-    return 0
-  }
+  const day = String(d.getUTCDate()).padStart(2, '0')
+  const month = String(d.getUTCMonth() + 1).padStart(2, '0')
+  const year = d.getUTCFullYear()
+  return `${day}-${month}-${year}`
 }
 
 const sortByTime = (acqs: ScheduledAcquisition[]): ScheduledAcquisition[] =>
@@ -217,26 +209,15 @@ interface FilterChipsProps {
   filters: TimelineFilters
   onFilterChange: (updates: Partial<TimelineFilters>) => void
   onClearAll: () => void
-  satellites: string[]
   targets: string[]
 }
 
 const FilterChips: React.FC<FilterChipsProps> = memo(
-  ({ filters, onFilterChange, onClearAll, satellites, targets }) => {
-    const hasActive = filters.satellite !== null || filters.target !== null || filters.lockedOnly
+  ({ filters, onFilterChange, onClearAll, targets }) => {
+    const hasActive = filters.target !== null || filters.lockedOnly
 
     return (
       <div className="flex flex-wrap items-center gap-1.5 px-3 py-2 border-b border-gray-700/50 bg-gray-900/50">
-        {satellites.length > 1 && (
-          <ChipSelect
-            label="Satellite"
-            icon={<Satellite size={11} />}
-            value={filters.satellite}
-            options={satellites}
-            onChange={(v) => onFilterChange({ satellite: v })}
-          />
-        )}
-
         {targets.length > 1 && (
           <ChipSelect
             label="Target"
@@ -275,100 +256,19 @@ FilterChips.displayName = 'FilterChips'
 
 interface TooltipData {
   acquisition: ScheduledAcquisition
+  opportunityName: string
   x: number
   y: number
 }
 
 const AcquisitionTooltip: React.FC<{ data: TooltipData }> = memo(({ data }) => {
   const { acquisition, x, y } = data
-  const duration = getDurationMinutes(acquisition.start_time, acquisition.end_time)
-  const isLocked = acquisition.lock_level === 'hard'
-  const isSAR = acquisition.mode === 'SAR'
 
   return (
     <div className="fixed z-[9999] pointer-events-none" style={{ left: x, top: y }}>
-      <div className="bg-gray-800 border border-gray-600 rounded-lg shadow-xl p-3 text-xs min-w-[220px] max-w-[300px]">
-        {/* Times */}
-        <div className="space-y-1 mb-2">
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-gray-400">Start</span>
-            <span className="font-mono text-gray-200">
-              {formatUTCDateTime(acquisition.start_time)}
-            </span>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-gray-400">End</span>
-            <span className="font-mono text-gray-200">
-              {formatUTCDateTime(acquisition.end_time)}
-            </span>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-gray-400">Duration</span>
-            <span className="text-gray-200">{duration}m</span>
-          </div>
-        </div>
-
-        <div className="border-t border-gray-700 pt-2 space-y-1">
-          {/* Target */}
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-gray-400 flex items-center gap-1">
-              <MapPin size={10} /> Target
-            </span>
-            <span className="text-gray-200 truncate max-w-[140px]">{acquisition.target_id}</span>
-          </div>
-
-          {/* Satellite */}
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-gray-400 flex items-center gap-1">
-              <Satellite size={10} /> Satellite
-            </span>
-            <span className="text-gray-200 truncate max-w-[140px]">{acquisition.satellite_id}</span>
-          </div>
-
-          {/* Mode */}
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-gray-400">Mode</span>
-            <span className={`font-medium ${isSAR ? 'text-purple-300' : 'text-cyan-300'}`}>
-              {isSAR ? 'SAR' : 'Optical'}
-            </span>
-          </div>
-
-          {/* SAR look side */}
-          {acquisition.sar_look_side && (
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-gray-400">Look Side</span>
-              <span className="text-purple-300">{acquisition.sar_look_side}</span>
-            </div>
-          )}
-
-          {/* Priority */}
-          {acquisition.priority != null && acquisition.priority > 0 && (
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-gray-400">Priority</span>
-              <span className="text-gray-200">{acquisition.priority}</span>
-            </div>
-          )}
-
-          {/* Lock status */}
-          {isLocked && (
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-gray-400">Lock</span>
-              <span className="text-red-300 flex items-center gap-1">
-                <Shield size={10} /> Hard Locked
-              </span>
-            </div>
-          )}
-
-          {/* Repair reason */}
-          {acquisition.repair_reason && (
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-gray-400">Repair</span>
-              <span className="text-gray-300 truncate max-w-[140px] italic">
-                {acquisition.repair_reason}
-              </span>
-            </div>
-          )}
-        </div>
+      <div className="bg-gray-800 border border-gray-600 rounded-lg shadow-xl p-2.5 text-xs">
+        {/* PR-UI-017: Off-nadir timestamp only (fallback: start_time) */}
+        <span className="font-mono text-gray-200">{formatUTCDateTime(acquisition.start_time)}</span>
       </div>
     </div>
   )
@@ -443,10 +343,21 @@ interface TargetLaneProps {
   onHover: (data: TooltipData | null) => void
   onLockToggle?: (acquisitionId: string) => void
   laneColor: string
+  opportunityNames: Record<string, string>
 }
 
 const TargetLane: React.FC<TargetLaneProps> = memo(
-  ({ lane, minTs, maxTs, selectedId, onSelect, onHover, onLockToggle, laneColor }) => {
+  ({
+    lane,
+    minTs,
+    maxTs,
+    selectedId,
+    onSelect,
+    onHover,
+    onLockToggle,
+    laneColor,
+    opportunityNames,
+  }) => {
     const range = maxTs - minTs
 
     const handleMouseEnter = useCallback(
@@ -454,11 +365,12 @@ const TargetLane: React.FC<TargetLaneProps> = memo(
         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
         onHover({
           acquisition: acq,
+          opportunityName: opportunityNames[acq.id] || acq.target_id,
           x: rect.left + rect.width / 2,
           y: rect.top - 8,
         })
       },
-      [onHover],
+      [onHover, opportunityNames],
     )
 
     const handleMouseLeave = useCallback(() => {
@@ -565,10 +477,6 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
   const [filters, setFilters] = useState<TimelineFilters>(DEFAULT_FILTERS)
 
   // Unique values for chip dropdowns
-  const uniqueSatellites = useMemo(
-    () => [...new Set(acquisitions.map((a) => a.satellite_id))].sort(),
-    [acquisitions],
-  )
   const uniqueTargets = useMemo(
     () => [...new Set(acquisitions.map((a) => a.target_id))].sort(),
     [acquisitions],
@@ -577,9 +485,6 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
   // Filtered acquisitions (memoized)
   const filteredAcquisitions = useMemo(() => {
     let result = acquisitions
-    if (filters.satellite) {
-      result = result.filter((a) => a.satellite_id === filters.satellite)
-    }
     if (filters.target) {
       result = result.filter((a) => a.target_id === filters.target)
     }
@@ -620,23 +525,27 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
       .map(([targetId, acqs]) => ({ targetId, acquisitions: acqs }))
   }, [filteredAcquisitions])
 
-  // Target-based color palette
+  // PR-UI-013: All lanes use green (acquired status) — no random/satellite color coding
   const laneColors = useMemo(() => {
-    const palette = [
-      '#3b82f6',
-      '#10b981',
-      '#f59e0b',
-      '#ef4444',
-      '#8b5cf6',
-      '#ec4899',
-      '#06b6d4',
-      '#f97316',
-    ]
     const colors: Record<string, string> = {}
-    targetLanes.forEach((lane, i) => {
-      colors[lane.targetId] = palette[i % palette.length]
+    targetLanes.forEach((lane) => {
+      colors[lane.targetId] = '#22c55e' // green-500: acquired
     })
     return colors
+  }, [targetLanes])
+
+  // Per-target opportunity naming: "{TargetName} {n}" (1-based, chronological after filters)
+  const opportunityNames = useMemo(() => {
+    const names: Record<string, string> = {}
+    for (const lane of targetLanes) {
+      const sorted = [...lane.acquisitions].sort(
+        (a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime(),
+      )
+      sorted.forEach((acq, i) => {
+        names[acq.id] = `${lane.targetId} ${i + 1}`
+      })
+    }
+    return names
   }, [targetLanes])
 
   // Measure container width for axis ticks
@@ -704,7 +613,6 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
         filters={filters}
         onFilterChange={handleFilterChange}
         onClearAll={handleClearFilters}
-        satellites={uniqueSatellites}
         targets={uniqueTargets}
       />
 
@@ -762,6 +670,7 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
                   onHover={handleHover}
                   onLockToggle={handleLockToggle}
                   laneColor={laneColors[lane.targetId]}
+                  opportunityNames={opportunityNames}
                 />
               ))}
             </div>

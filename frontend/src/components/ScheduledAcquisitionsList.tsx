@@ -24,6 +24,7 @@ import LockToggle, { BulkLockActions, LockBadge } from './LockToggle'
 import type { LockLevel, AcquisitionSummary } from '../api/scheduleApi'
 import { updateAcquisitionLock, bulkUpdateLocks, hardLockAllCommitted } from '../api/scheduleApi'
 import { useSelectionStore } from '../store/selectionStore'
+import { formatDateTimeShort } from '../utils/date'
 
 interface ScheduledAcquisitionsListProps {
   acquisitions: AcquisitionSummary[]
@@ -201,12 +202,7 @@ export default function ScheduledAcquisitionsList({
 
   const formatTime = (isoString: string) => {
     try {
-      return new Date(isoString).toLocaleString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      })
+      return formatDateTimeShort(isoString)
     } catch {
       return isoString
     }

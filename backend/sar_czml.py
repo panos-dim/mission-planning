@@ -17,6 +17,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from mission_planner.utils import ground_arc_distance_km
+
 logger = logging.getLogger(__name__)
 
 # Earth parameters
@@ -107,7 +109,8 @@ def compute_sar_swath_polygon(
         cross_track_azimuth = (track_azimuth_deg + 90) % 360
 
     # Calculate ground range to swath center
-    ground_range_km = sat_alt_km * math.tan(math.radians(incidence_deg))
+    # Uses spherical-Earth geometry (law of sines) for accuracy
+    ground_range_km = ground_arc_distance_km(sat_alt_km, incidence_deg)
 
     # Calculate swath center point
     center_lat, center_lon = _destination_point_util(
@@ -394,8 +397,8 @@ class SARCZMLGenerator:
             cross_track_azimuth = (track_azimuth + 90) % 360
 
         # Calculate ground range to swath center
-        # ground_range = altitude * tan(incidence)
-        ground_range_km = sat_alt_km * math.tan(math.radians(incidence_deg))
+        # Uses spherical-Earth geometry (law of sines) for accuracy
+        ground_range_km = ground_arc_distance_km(sat_alt_km, incidence_deg)
 
         # Calculate swath center point
         center_lat, center_lon = self._destination_point(

@@ -6,39 +6,36 @@
  * Filters are local to the current view (Analysis / Planning / Schedule).
  */
 
-import React from "react";
-import { X, Filter } from "lucide-react";
+import React from 'react'
+import { X, Filter } from 'lucide-react'
 import {
   useSelectionStore,
   useContextFilter,
   useHasActiveContextFilter,
   type ViewContext,
-} from "../store/selectionStore";
+} from '../store/selectionStore'
 
 interface ContextFilterBarProps {
-  view: ViewContext;
-  showSarFilters?: boolean;
+  view: ViewContext
+  showSarFilters?: boolean
 }
 
-const ContextFilterBar: React.FC<ContextFilterBarProps> = ({
-  view,
-  showSarFilters = false,
-}) => {
-  const filter = useContextFilter(view);
-  const hasActiveFilter = useHasActiveContextFilter(view);
-  const { setContextFilter, clearContextFilter } = useSelectionStore();
+const ContextFilterBar: React.FC<ContextFilterBarProps> = ({ view, showSarFilters = false }) => {
+  const filter = useContextFilter(view)
+  const hasActiveFilter = useHasActiveContextFilter(view)
+  const { setContextFilter, clearContextFilter } = useSelectionStore()
 
   if (!hasActiveFilter) {
-    return null;
+    return null
   }
 
   const handleClearFilter = (key: keyof typeof filter) => {
-    setContextFilter(view, { [key]: null });
-  };
+    setContextFilter(view, { [key]: null })
+  }
 
   const handleClearAll = () => {
-    clearContextFilter(view);
-  };
+    clearContextFilter(view)
+  }
 
   return (
     <div className="flex items-center gap-2 px-3 py-2 bg-gray-800/50 border-b border-gray-700 text-xs">
@@ -50,25 +47,18 @@ const ContextFilterBar: React.FC<ContextFilterBarProps> = ({
           <FilterChip
             label="Target"
             value={filter.targetId}
-            onClear={() => handleClearFilter("targetId")}
+            onClear={() => handleClearFilter('targetId')}
             color="blue"
           />
         )}
 
-        {filter.satelliteId && (
-          <FilterChip
-            label="Satellite"
-            value={filter.satelliteId}
-            onClear={() => handleClearFilter("satelliteId")}
-            color="purple"
-          />
-        )}
+        {/* PR-UI-013: Satellite filter removed — schedule is not per-satellite */}
 
         {showSarFilters && filter.lookSide && (
           <FilterChip
             label="Look Side"
             value={filter.lookSide}
-            onClear={() => handleClearFilter("lookSide")}
+            onClear={() => handleClearFilter('lookSide')}
             color="green"
           />
         )}
@@ -76,8 +66,8 @@ const ContextFilterBar: React.FC<ContextFilterBarProps> = ({
         {showSarFilters && filter.passDirection && (
           <FilterChip
             label="Pass"
-            value={filter.passDirection === "ASCENDING" ? "ASC" : "DESC"}
-            onClear={() => handleClearFilter("passDirection")}
+            value={filter.passDirection === 'ASCENDING' ? 'ASC' : 'DESC'}
+            onClear={() => handleClearFilter('passDirection')}
             color="orange"
           />
         )}
@@ -91,29 +81,24 @@ const ContextFilterBar: React.FC<ContextFilterBarProps> = ({
         Clear all
       </button>
     </div>
-  );
-};
+  )
+}
 
 interface FilterChipProps {
-  label: string;
-  value: string;
-  onClear: () => void;
-  color: "blue" | "purple" | "green" | "orange";
+  label: string
+  value: string
+  onClear: () => void
+  color: 'blue' | 'purple' | 'green' | 'orange'
 }
 
 const colorClasses = {
-  blue: "bg-blue-500/20 text-blue-300 hover:bg-blue-500/30",
-  purple: "bg-purple-500/20 text-purple-300 hover:bg-purple-500/30",
-  green: "bg-green-500/20 text-green-300 hover:bg-green-500/30",
-  orange: "bg-orange-500/20 text-orange-300 hover:bg-orange-500/30",
-};
+  blue: 'bg-blue-500/20 text-blue-300 hover:bg-blue-500/30',
+  purple: 'bg-purple-500/20 text-purple-300 hover:bg-purple-500/30',
+  green: 'bg-green-500/20 text-green-300 hover:bg-green-500/30',
+  orange: 'bg-orange-500/20 text-orange-300 hover:bg-orange-500/30',
+}
 
-const FilterChip: React.FC<FilterChipProps> = ({
-  label,
-  value,
-  onClear,
-  color,
-}) => {
+const FilterChip: React.FC<FilterChipProps> = ({ label, value, onClear, color }) => {
   return (
     <span
       className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${colorClasses[color]} transition-colors`}
@@ -124,8 +109,8 @@ const FilterChip: React.FC<FilterChipProps> = ({
       </span>
       <button
         onClick={(e) => {
-          e.stopPropagation();
-          onClear();
+          e.stopPropagation()
+          onClear()
         }}
         className="ml-0.5 p-0.5 rounded-full hover:bg-white/10 transition-colors"
         title={`Remove ${label} filter`}
@@ -133,7 +118,7 @@ const FilterChip: React.FC<FilterChipProps> = ({
         <X className="w-3 h-3" />
       </button>
     </span>
-  );
-};
+  )
+}
 
-export default ContextFilterBar;
+export default ContextFilterBar

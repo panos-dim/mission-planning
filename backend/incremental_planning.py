@@ -1481,6 +1481,65 @@ def execute_repair_planning(
                 except (ValueError, KeyError):
                     continue
 
+    # Stage D: Fill remaining gaps with feasible opportunities not yet added
+    # This handles the case where schedule is empty (nothing to replace) or
+    # there are more feasible opportunities than flex items to replace.
+    already_added = set(added_ids)
+    for opp in sorted(feasible_opps, key=lambda o: o.get("value", 1.0), reverse=True):
+        if changes_made >= max_changes:
+            break
+        opp_id = opp.get("id", opp.get("opportunity_id", ""))
+        if opp_id in already_added:
+            continue  # Already added via replacement
+
+        # Verify this opportunity doesn't conflict with anything already scheduled
+        # (fixed items + kept flex + already-added opportunities)
+        try:
+            opp_start = datetime.fromisoformat(
+                opp.get("start_time", "").replace("Z", "+00:00")
+            ).replace(tzinfo=None)
+            opp_end = datetime.fromisoformat(
+                opp.get("end_time", "").replace("Z", "+00:00")
+            ).replace(tzinfo=None)
+            opp_sat = opp.get("satellite_id", "")
+
+            is_blocked, _ = all_blocked.is_time_blocked(opp_sat, opp_start, opp_end)
+            if is_blocked:
+                continue
+
+            is_feasible, _ = check_adjacency_feasibility(
+                context=all_blocked,
+                satellite_id=opp_sat,
+                candidate_start=opp_start,
+                candidate_end=opp_end,
+                candidate_roll_deg=opp.get("roll_angle_deg", 0.0),
+                candidate_pitch_deg=opp.get("pitch_angle_deg", 0.0),
+                slew_config=slew_config,
+            )
+            if not is_feasible:
+                continue
+
+            added_ids.append(opp_id)
+            already_added.add(opp_id)
+            changes_made += 1
+
+            # Also add to blocked intervals so subsequent opportunities check against it
+            new_interval = BlockedInterval(
+                acquisition_id=opp_id,
+                satellite_id=opp_sat,
+                target_id=opp.get("target_id", ""),
+                start_time=opp_start,
+                end_time=opp_end,
+                roll_angle_deg=opp.get("roll_angle_deg", 0.0),
+                pitch_angle_deg=opp.get("pitch_angle_deg", 0.0),
+            )
+            if opp_sat not in all_blocked.blocked_intervals:
+                all_blocked.blocked_intervals[opp_sat] = []
+            all_blocked.blocked_intervals[opp_sat].append(new_interval)
+            all_blocked.blocked_intervals[opp_sat].sort(key=lambda x: x.start_time)
+        except (ValueError, KeyError):
+            continue
+
     # Build final proposed schedule
     proposed_schedule: List[Dict[str, Any]] = []
 

@@ -7,9 +7,11 @@ import {
   CheckSquare,
   FolderOpen,
   GitBranch,
+  FlaskConical,
 } from 'lucide-react'
 import MissionControls from './MissionControls'
 import MissionPlanning from './MissionPlanning'
+import DemoScenarioRunner from './DemoScenarioRunner'
 import SchedulePanel from './SchedulePanel'
 import WorkspacePanel from './WorkspacePanel'
 import { ObjectExplorerTree } from './ObjectExplorer'
@@ -48,7 +50,8 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
     const stored = localStorage.getItem('acceptedOrders')
     return stored ? JSON.parse(stored) : []
   })
-  const { setLeftSidebarOpen, leftSidebarWidth, setLeftSidebarWidth, uiMode } = useVisStore()
+  const { setLeftSidebarOpen, setActiveLeftPanel, leftSidebarWidth, setLeftSidebarWidth, uiMode } =
+    useVisStore()
 
   // Get UI mode - in developer mode, show all panels
   const isDeveloperMode = uiMode === 'developer' || isDebugMode()
@@ -172,6 +175,11 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
   useEffect(() => {
     setLeftSidebarOpen(isPanelOpen)
   }, [isPanelOpen, setLeftSidebarOpen])
+
+  // Sync active panel to global store so globe can react (e.g. planning-mode coloring)
+  useEffect(() => {
+    setActiveLeftPanel(isPanelOpen ? activePanel : null)
+  }, [activePanel, isPanelOpen, setActiveLeftPanel])
 
   // Persist orders to localStorage
   useEffect(() => {
@@ -354,6 +362,16 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
         ),
       },
     ]
+
+    // Add dev-only Demo Runner panel (only in developer mode + DEV build)
+    if (isDeveloperMode && import.meta.env.DEV) {
+      allPanels.push({
+        id: 'demo-runner',
+        title: 'Demo Runner',
+        icon: FlaskConical,
+        component: <DemoScenarioRunner />,
+      })
+    }
 
     // Filter panels based on UI Mode
     // In developer mode: show all panels

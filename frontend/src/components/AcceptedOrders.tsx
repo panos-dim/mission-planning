@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Download, Copy, Trash2, Edit2, Check, X } from 'lucide-react'
 import { AcceptedOrder } from '../types'
+import { formatDateTimeShort } from '../utils/date'
 
 interface AcceptedOrdersProps {
   orders: AcceptedOrder[]
@@ -114,13 +115,11 @@ export default function AcceptedOrders({
   }
 
   const formatDateTime = (isoString: string) => {
-    const date = new Date(isoString)
-    return date.toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
+    try {
+      return formatDateTimeShort(isoString)
+    } catch {
+      return isoString
+    }
   }
 
   const formatDuration = (seconds: number) => {
@@ -333,11 +332,9 @@ export default function AcceptedOrders({
             <table className="w-full text-xs">
               <thead className="border-b border-gray-600 bg-gray-750">
                 <tr>
-                  <th className="text-left py-2 px-2">#</th>
+                  <th className="text-left py-2 px-2">Opportunity</th>
                   <th className="text-left py-2 px-2">Satellite</th>
-                  <th className="text-left py-2 px-2">Target</th>
                   <th className="text-left py-2 px-2">Start</th>
-                  <th className="text-left py-2 px-2">End</th>
                   <th className="text-right py-2 px-2">Δroll (°)</th>
                   <th className="text-right py-2 px-2">t_slew (s)</th>
                   <th className="text-right py-2 px-2">Slack (s)</th>
@@ -346,22 +343,33 @@ export default function AcceptedOrders({
                 </tr>
               </thead>
               <tbody className="text-gray-300">
-                {selectedOrder.schedule.map((item, idx) => (
-                  <tr key={idx} className="border-b border-gray-600 hover:bg-gray-650">
-                    <td className="py-2 px-2">{idx + 1}</td>
-                    <td className="py-2 px-2">{item.satellite_id}</td>
-                    <td className="py-2 px-2">{item.target_id}</td>
-                    <td className="py-2 px-2">{new Date(item.start_time).toLocaleString()}</td>
-                    <td className="py-2 px-2">{new Date(item.end_time).toLocaleString()}</td>
-                    <td className="text-right py-2 px-2">{item.droll_deg.toFixed(2)}</td>
-                    <td className="text-right py-2 px-2">{item.t_slew_s.toFixed(3)}</td>
-                    <td className="text-right py-2 px-2">{item.slack_s.toFixed(3)}</td>
-                    <td className="text-right py-2 px-2">{item.value.toFixed(2)}</td>
-                    <td className="text-right py-2 px-2">
-                      {item.density === 'inf' ? '∞' : item.density.toFixed(3)}
-                    </td>
-                  </tr>
-                ))}
+                {(() => {
+                  // Compute per-target opportunity names: "{target_id} {n}" (1-based chronological)
+                  const sorted = [...selectedOrder.schedule].sort(
+                    (a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime(),
+                  )
+                  const targetCounters: Record<string, number> = {}
+                  const oppNames: Record<number, string> = {}
+                  sorted.forEach((item) => {
+                    targetCounters[item.target_id] = (targetCounters[item.target_id] || 0) + 1
+                    const origIdx = selectedOrder.schedule.indexOf(item)
+                    oppNames[origIdx] = `${item.target_id} ${targetCounters[item.target_id]}`
+                  })
+                  return selectedOrder.schedule.map((item, idx) => (
+                    <tr key={idx} className="border-b border-gray-600 hover:bg-gray-650">
+                      <td className="py-2 px-2 font-medium">{oppNames[idx]}</td>
+                      <td className="py-2 px-2">{item.satellite_id}</td>
+                      <td className="py-2 px-2">{formatDateTime(item.start_time)}</td>
+                      <td className="text-right py-2 px-2">{item.droll_deg.toFixed(2)}</td>
+                      <td className="text-right py-2 px-2">{item.t_slew_s.toFixed(3)}</td>
+                      <td className="text-right py-2 px-2">{item.slack_s.toFixed(3)}</td>
+                      <td className="text-right py-2 px-2">{item.value.toFixed(2)}</td>
+                      <td className="text-right py-2 px-2">
+                        {item.density === 'inf' ? '∞' : item.density.toFixed(3)}
+                      </td>
+                    </tr>
+                  ))
+                })()}
               </tbody>
             </table>
           </div>

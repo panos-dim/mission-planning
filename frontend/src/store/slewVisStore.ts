@@ -1,41 +1,41 @@
-import { create } from "zustand";
-import { devtools } from "zustand/middleware";
-import { AlgorithmResult } from "../types";
+import { create } from 'zustand'
+import { devtools } from 'zustand/middleware'
+import { AlgorithmResult } from '../types'
 
-export type ColorByMode = "quality" | "density" | "none";
-export type FilterMode = "accepted" | "rejected_feasible" | "all";
+export type ColorByMode = 'quality' | 'density' | 'none'
+export type FilterMode = 'accepted' | 'rejected_feasible' | 'all'
 
 interface SlewVisStore {
   // Visibility
-  enabled: boolean;
-  showFootprints: boolean;
-  showSlewArcs: boolean;
-  showSlewLabels: boolean;
-  showRejected: boolean;
+  enabled: boolean
+  showFootprints: boolean
+  showSlewArcs: boolean
+  showSlewLabels: boolean
+  showRejected: boolean
 
   // Data
-  activeSchedule: AlgorithmResult | null;
+  activeSchedule: AlgorithmResult | null
 
   // Styling
-  colorBy: ColorByMode;
-  filterMode: FilterMode;
+  colorBy: ColorByMode
+  filterMode: FilterMode
 
   // Interaction
-  hoveredOpportunityId: string | null;
-  selectedOpportunityId: string | null;
+  hoveredOpportunityId: string | null
+  selectedOpportunityId: string | null
 
   // Actions
-  setEnabled: (enabled: boolean) => void;
-  setActiveSchedule: (schedule: AlgorithmResult | null) => void;
-  setShowFootprints: (show: boolean) => void;
-  setShowSlewArcs: (show: boolean) => void;
-  setShowSlewLabels: (show: boolean) => void;
-  setShowRejected: (show: boolean) => void;
-  setColorBy: (mode: ColorByMode) => void;
-  setFilterMode: (mode: FilterMode) => void;
-  setHoveredOpportunity: (id: string | null) => void;
-  setSelectedOpportunity: (id: string | null) => void;
-  reset: () => void;
+  setEnabled: (enabled: boolean) => void
+  setActiveSchedule: (schedule: AlgorithmResult | null) => void
+  setShowFootprints: (show: boolean) => void
+  setShowSlewArcs: (show: boolean) => void
+  setShowSlewLabels: (show: boolean) => void
+  setShowRejected: (show: boolean) => void
+  setColorBy: (mode: ColorByMode) => void
+  setFilterMode: (mode: FilterMode) => void
+  setHoveredOpportunity: (id: string | null) => void
+  setSelectedOpportunity: (id: string | null) => void
+  reset: () => void
 }
 
 const initialState = {
@@ -43,13 +43,13 @@ const initialState = {
   activeSchedule: null,
   showFootprints: true,
   showSlewArcs: true,
-  showSlewLabels: true,
+  showSlewLabels: false,
   showRejected: false,
-  colorBy: "quality" as ColorByMode,
-  filterMode: "accepted" as FilterMode,
+  colorBy: 'quality' as ColorByMode,
+  filterMode: 'accepted' as FilterMode,
   hoveredOpportunityId: null,
   selectedOpportunityId: null,
-};
+}
 
 export const useSlewVisStore = create<SlewVisStore>()(
   devtools(
@@ -68,6 +68,6 @@ export const useSlewVisStore = create<SlewVisStore>()(
       setSelectedOpportunity: (id) => set({ selectedOpportunityId: id }),
       reset: () => set(initialState),
     }),
-    { name: "SlewVisStore", enabled: import.meta.env?.DEV ?? false },
+    { name: 'SlewVisStore', enabled: import.meta.env?.DEV ?? false },
   ),
-);
+)

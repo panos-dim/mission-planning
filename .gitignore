@@ -70,6 +70,9 @@ scripts/**/*.png
 htmlcov/
 .coverage
 
+# Demo runner generated artifacts (keep .gitkeep)
+artifacts/demo/RESHUFFLE_EVIDENCE.*
+
 # PDM
 .pdm-build/
 .pdm-python

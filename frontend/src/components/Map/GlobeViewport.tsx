@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState, useMemo } from 'react'
 import { Viewer, CzmlDataSource } from 'resium'
 import {
   JulianDate,
@@ -18,6 +18,7 @@ import {
   VerticalOrigin,
   HorizontalOrigin,
   LabelStyle,
+  ColorMaterialProperty,
 } from 'cesium'
 import { useMission } from '../../context/MissionContext'
 import { SceneObject } from '../../types'
@@ -39,6 +40,8 @@ import SelectionIndicator from './SelectionIndicator'
 import TimelineControls from './TimelineControls'
 import { useLockModeStore } from '../../store/lockModeStore'
 import { useLockStore } from '../../store/lockStore'
+import { useOrdersStore } from '../../store/ordersStore'
+import { usePlanningStore } from '../../store/planningStore'
 import debug from '../../utils/debug'
 
 /**
@@ -117,6 +120,8 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
   const lightingInitializedRef = useRef<string | null>(null)
   const [isUsingFallback, setIsUsingFallback] = useState(false)
   const imageryReplacedRef = useRef(false)
+  // Loaded CZML DataSource — set from onLoad callback to guarantee availability
+  const [loadedDataSource, setLoadedDataSource] = useState<any>(null)
 
   // Create OSM provider immediately (needed as emergency fallback)
   const [osmProvider] = useState(() => {
@@ -208,6 +213,26 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
   // Unified map highlighting (PR-MAP-HIGHLIGHT-01)
   // Provides consistent entity ID resolution, ghost clone fallback, and timeline focus reliability
   useUnifiedMapHighlight(viewerRef)
+
+  // PR-UI-013: Committed orders for schedule-mode target status colors
+  const committedOrders = useOrdersStore((s) => s.orders)
+
+  // PR-UI-013: Compute set of acquired target IDs from committed schedule
+  const acquiredTargetIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const order of committedOrders) {
+      for (const item of order.schedule || []) {
+        if (item.target_id) ids.add(item.target_id)
+      }
+    }
+    return ids
+  }, [committedOrders])
+
+  // Planning-mode state: which sidebar panel is active + planning results
+  const activeLeftPanel = useVisStore((s) => s.activeLeftPanel)
+  const planningResults = usePlanningStore((s) => s.results)
+  const planningActiveAlgo = usePlanningStore((s) => s.activeAlgorithm)
+  const originalBillboardsRef = useRef<Map<string, string>>(new Map())
 
   // Use shared CZML if provided, otherwise use state CZML
   const czmlData = sharedCzml || state.czmlData
@@ -395,6 +420,167 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
     })
     return () => cancelAnimationFrame(rafId)
   }, [pendingLabel, pendingColor])
+
+  // Planning-mode target coloring
+  // When Planning tab is active: gray all targets. After scheduler run: acquired → blue, rest → gray.
+  // On tab switch away: restore originals.
+  useEffect(() => {
+    const viewer = viewerRef.current?.cesiumElement
+    if (!viewer) return
+
+    const isPlanningMode = activeLeftPanel === 'planning'
+
+    // Collect target entities from loaded data source + viewer's own entities
+    const targetEntities: Entity[] = []
+
+    // Use the loaded data source (set from onLoad callback)
+    if (loadedDataSource?.entities) {
+      loadedDataSource.entities.values.forEach((entity: Entity) => {
+        if (
+          (entity.id?.startsWith('target_') || entity.id?.startsWith('preview_target_')) &&
+          entity.billboard
+        ) {
+          targetEntities.push(entity)
+        }
+      })
+    }
+
+    // Also check viewer's own entities (preview targets added directly)
+    if (viewer.entities) {
+      viewer.entities.values.forEach((entity: Entity) => {
+        if (
+          (entity.id?.startsWith('target_') || entity.id?.startsWith('preview_target_')) &&
+          entity.billboard
+        ) {
+          targetEntities.push(entity)
+        }
+      })
+    }
+
+    if (targetEntities.length === 0) return
+
+    if (!isPlanningMode) {
+      // EXITING planning mode — restore original billboard images
+      const originals = originalBillboardsRef.current
+      if (originals.size > 0) {
+        targetEntities.forEach((entity: Entity) => {
+          const key = entity.id || entity.name || ''
+          const original = originals.get(key)
+          if (original && entity.billboard) {
+            entity.billboard.image = original as never
+          }
+        })
+        originals.clear()
+        viewer.scene.requestRender()
+        requestAnimationFrame(() => viewer.scene?.requestRender())
+      }
+      return
+    }
+
+    // IN planning mode — compute which targets are scheduled
+    const scheduledTargets = new Set<string>()
+    if (planningResults && planningActiveAlgo) {
+      const result = planningResults[planningActiveAlgo]
+      if (result?.schedule) {
+        for (const item of result.schedule) {
+          if (item.target_id) scheduledTargets.add(item.target_id)
+        }
+      }
+    }
+    const hasResults = scheduledTargets.size > 0
+
+    targetEntities.forEach((entity: Entity) => {
+      if (!entity.billboard) return
+      const key = entity.id || entity.name || ''
+
+      // Store original billboard image (only once)
+      if (!originalBillboardsRef.current.has(key)) {
+        // Billboard image can be a string or a Cesium Property — extract the raw value
+        const imgProp = entity.billboard.image
+        let currentImage: string | null = null
+        if (typeof imgProp === 'string') {
+          currentImage = imgProp
+        } else if (imgProp && typeof (imgProp as any).getValue === 'function') {
+          currentImage = (imgProp as any).getValue(JulianDate.now())
+        } else if (imgProp && typeof (imgProp as any).valueOf === 'function') {
+          const val = (imgProp as any).valueOf()
+          if (typeof val === 'string') currentImage = val
+        }
+        if (currentImage) {
+          originalBillboardsRef.current.set(key, currentImage)
+        }
+      }
+
+      const targetName = entity.name || entity.id?.replace(/^(preview_)?target_/, '') || ''
+      const isAcquired = hasResults && scheduledTargets.has(targetName)
+
+      // Gray for unscheduled/no-results, blue for acquired
+      const fillColor = isAcquired ? '#3B82F6' : '#6B7280' // blue-500 : gray-500
+      const strokeColor = isAcquired ? '#2563EB' : '#4B5563' // blue-600 : gray-600
+
+      const svgPin = `<svg width="32" height="40" viewBox="0 0 32 40" xmlns="http://www.w3.org/2000/svg">
+        <path d="M16 0C9.4 0 4 5.4 4 12c0 8 12 28 12 28s12-20 12-28c0-6.6-5.4-12-12-12z"
+              fill="${fillColor}" stroke="${strokeColor}" stroke-width="2"/>
+        <circle cx="16" cy="12" r="5" fill="#FFF"/>
+      </svg>`
+      entity.billboard.image = ('data:image/svg+xml;base64,' + btoa(svgPin)) as never
+    })
+
+    viewer.scene.requestRender()
+    const rafId = requestAnimationFrame(() => viewer.scene?.requestRender())
+    return () => cancelAnimationFrame(rafId)
+  }, [activeLeftPanel, planningResults, planningActiveAlgo, loadedDataSource])
+
+  // PR-UI-013: Schedule-mode target status colors
+  // When committed schedule exists, recolor target pins: green = acquired, red = not-acquired
+  // Skipped while planning tab is active (planning-mode coloring takes priority)
+  useEffect(() => {
+    const viewer = viewerRef.current?.cesiumElement
+    if (!viewer || !czmlDataSourceRef.current) return
+
+    // Skip when planning tab is active — planning-mode effect handles coloring
+    if (activeLeftPanel === 'planning') return
+
+    const dataSource = czmlDataSourceRef.current
+    if (!dataSource?.entities) return
+
+    // Only apply when there are committed orders (schedule exists)
+    const hasSchedule = committedOrders.length > 0
+    if (!hasSchedule) return
+
+    // Get all target names from mission data for complete coverage check
+    const allTargetNames = new Set((state.missionData?.targets || []).map((t) => t.name))
+    if (allTargetNames.size === 0) return
+
+    dataSource.entities.values.forEach((entity: Entity) => {
+      // Only target entities (billboard pins)
+      if (!entity.id?.startsWith('target_') && !entity.name?.includes('Target')) return
+      if (!entity.billboard) return
+
+      // Extract target name from entity
+      const targetName = entity.name || entity.id?.replace('target_', '') || ''
+      const isAcquired = acquiredTargetIds.has(targetName)
+
+      // Build SVG pin with status color
+      const fillColor = isAcquired ? '#22c55e' : '#ef4444' // green-500 : red-500
+      const strokeColor = isAcquired ? '#16a34a' : '#dc2626' // green-600 : red-600
+
+      const svgPin = `<svg width="32" height="40" viewBox="0 0 32 40" xmlns="http://www.w3.org/2000/svg">
+        <path d="M16 0C9.4 0 4 5.4 4 12c0 8 12 28 12 28s12-20 12-28c0-6.6-5.4-12-12-12z"
+              fill="${fillColor}" stroke="${strokeColor}" stroke-width="2"/>
+        <circle cx="16" cy="12" r="5" fill="#FFF"/>
+      </svg>`
+      const svgBase64 = 'data:image/svg+xml;base64,' + btoa(svgPin)
+      entity.billboard.image = svgBase64 as never
+    })
+
+    viewer.scene.requestRender()
+    // Second render for async image decode
+    const rafId = requestAnimationFrame(() => {
+      viewer.scene?.requestRender()
+    })
+    return () => cancelAnimationFrame(rafId)
+  }, [committedOrders, acquiredTargetIds, state.missionData, czmlData, activeLeftPanel])
 
   // Smart fallback: Only use OSM if Cesium Ion actually fails
   useEffect(() => {
@@ -661,13 +847,12 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
             entity.show = activeLayers.pointingCone
           }
           // Satellite entity - keep visible but control path separately
-          else if (entity.id?.startsWith('sat_')) {
+          else if (entity.id?.startsWith('sat_') || entity.point) {
             // Always show the satellite point itself
             entity.show = true
-            // Path is hidden in CZML, using ground track polyline instead
           }
-          // Ground track (dynamic path at ground level)
-          else if (entity.id === 'satellite_ground_track') {
+          // Ground track: single-sat (satellite_ground_track) or constellation ({sat_id}_ground_track)
+          else if (entity.id?.includes('ground_track')) {
             entity.show = true // Always show entity
             if (entity.path) {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Cesium Property system accepts boolean at runtime
@@ -1081,9 +1266,15 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
                 : null
 
               debug.verbose(`[${viewportId}] CZML loaded`)
+              setLoadedDataSource(dataSource)
 
-              // Apply initial layer visibility
+              // Apply initial layer visibility + PR-UI-013: neutralize satellite colors
+              // COSMOS42 brand blue (#3b82f6 = Tailwind blue-500)
               if (dataSource && dataSource.entities) {
+                const brandBlue = Color.fromCssColorString('#3b82f6')
+                const neutralColor = brandBlue.withAlpha(0.7)
+                const neutralMaterial = new ColorMaterialProperty(neutralColor)
+
                 dataSource.entities.values.forEach((entity: Entity) => {
                   // Hide coverage areas by default
                   if (entity.name && entity.name.includes('Coverage Area')) {
@@ -1091,9 +1282,31 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
                   }
 
                   // Apply ground track path visibility from layer settings
-                  if (entity.id === 'satellite_ground_track' && entity.path) {
+                  // Handle both single-sat (satellite_ground_track) and constellation ({sat_id}_ground_track)
+                  if (entity.id?.includes('ground_track') && entity.path) {
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Cesium Property system accepts boolean at runtime
                     ;(entity.path.show as any) = activeLayers.orbitLine
+                  }
+
+                  // PR-UI-013: Neutralize ALL per-satellite colors to uniform brand blue
+                  // Ground track polylines
+                  if (entity.id?.includes('ground_track') && entity.polyline) {
+                    entity.polyline.material = neutralMaterial as never
+                  }
+                  // Satellite orbit path trails
+                  if (entity.path) {
+                    entity.path.material = neutralMaterial as never
+                  }
+                  // Satellite point markers
+                  if (entity.point) {
+                    entity.point.color = brandBlue as never
+                  }
+                  // Pointing cone + agility envelope ellipses (both use entity.ellipse)
+                  if (entity.ellipse) {
+                    entity.ellipse.material = new ColorMaterialProperty(
+                      brandBlue.withAlpha(0.1),
+                    ) as never
+                    entity.ellipse.outlineColor = brandBlue.withAlpha(0.8) as never
                   }
                 })
               }
@@ -1205,8 +1418,8 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
         </div>
       )}
 
-      {/* Custom map navigation controls (sibling, same pattern as LockModeButton) */}
-      <div className="absolute top-3 right-3 z-40 flex flex-col items-center gap-1.5 select-none">
+      {/* Custom map navigation controls — horizontal toolbar, top-center */}
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 z-40 flex items-center gap-0.5 px-2 py-1 rounded-b-lg bg-gray-900/95 backdrop-blur-md border-b border-x border-gray-700/50 select-none">
         <MapControls viewerRef={viewerRef} viewportId={viewportId} />
       </div>
 

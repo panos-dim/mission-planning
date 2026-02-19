@@ -1407,8 +1407,11 @@ class VisibilityCalculator:
 
         if target.mission_type == "imaging":
             # For imaging, add extra margin based on max spacecraft roll
+            # Uses spherical-Earth geometry (law of sines) for accuracy
+            from mission_planner.utils import ground_arc_distance_km
+
             max_roll = getattr(target, "max_spacecraft_roll", None) or 45.0
-            pointing_margin = sat_alt * math.tan(math.radians(max_roll))
+            pointing_margin = ground_arc_distance_km(sat_alt, max_roll)
             margin_km = max(margin_km, pointing_margin * 1.5)  # Extra 50% safety factor
 
         # Fast rejection: if ground track is too far, skip 3D calculations

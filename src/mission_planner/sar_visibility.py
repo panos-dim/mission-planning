@@ -496,8 +496,11 @@ class SARVisibilityCalculator:
 
         # Calculate swath center offset from nadir
         # Use average incidence angle for center
+        # Uses spherical-Earth geometry (law of sines) for accuracy
+        from mission_planner.utils import ground_arc_distance_km
+
         avg_incidence = (self.incidence_min + self.incidence_max) / 2
-        ground_range_km = sat_alt_km * math.tan(math.radians(avg_incidence))
+        ground_range_km = ground_arc_distance_km(sat_alt_km, avg_incidence)
 
         # Swath center on ground
         swath_center = nadir_point + cross_track * ground_range_km
