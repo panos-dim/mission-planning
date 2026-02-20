@@ -10,6 +10,7 @@ import { Clock, MapPin, X, Lock, Filter, Shield } from 'lucide-react'
 import { useSelectionStore } from '../store/selectionStore'
 import { useLockStore } from '../store/lockStore'
 import type { LockLevel } from '../api/scheduleApi'
+import { fmt2 } from '../utils/format'
 
 // =============================================================================
 // Types
@@ -29,6 +30,8 @@ export interface ScheduledAcquisition {
   priority?: number
   sar_look_side?: 'LEFT' | 'RIGHT'
   repair_reason?: string
+  satellite_name?: string // PR-UI-021: Display name (fallback: satellite_id)
+  off_nadir_deg?: number // PR-UI-021: Off-nadir angle in degrees
 }
 
 interface ScheduleTimelineProps {
@@ -266,9 +269,20 @@ const AcquisitionTooltip: React.FC<{ data: TooltipData }> = memo(({ data }) => {
 
   return (
     <div className="fixed z-[9999] pointer-events-none" style={{ left: x, top: y }}>
-      <div className="bg-gray-800 border border-gray-600 rounded-lg shadow-xl p-2.5 text-xs">
-        {/* PR-UI-017: Off-nadir timestamp only (fallback: start_time) */}
-        <span className="font-mono text-gray-200">{formatUTCDateTime(acquisition.start_time)}</span>
+      <div className="bg-gray-800 border border-gray-600 rounded-lg shadow-xl p-2.5 text-xs space-y-1">
+        {/* PR-UI-021: Satellite name */}
+        <div className="font-medium text-white">
+          {acquisition.satellite_name || acquisition.satellite_id}
+        </div>
+        {/* PR-UI-021: Off-nadir angle (2dp) */}
+        {acquisition.off_nadir_deg != null && (
+          <div className="text-gray-300">
+            <span className="text-gray-500">Off-nadir angle: </span>
+            {fmt2(acquisition.off_nadir_deg)}°
+          </div>
+        )}
+        {/* PR-UI-021: Off-nadir time (DD-MM-YYYY HH:MM:SS UTC) */}
+        <div className="font-mono text-gray-400">{formatUTCDateTime(acquisition.start_time)}</div>
       </div>
     </div>
   )
@@ -402,7 +416,7 @@ const TargetLane: React.FC<TargetLaneProps> = memo(
 
             const barColor = isSAR
               ? 'bg-purple-500/70 hover:bg-purple-500/90 border-purple-400/50'
-              : 'bg-cyan-500/70 hover:bg-cyan-500/90 border-cyan-400/50'
+              : 'bg-blue-500/70 hover:bg-blue-500/90 border-blue-400/50'
 
             const selectedRing = isSelected
               ? 'ring-2 ring-blue-400 ring-offset-1 ring-offset-gray-900'
@@ -595,9 +609,9 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
     return (
       <div className="flex flex-col items-center justify-center h-full text-center p-8">
         <Clock size={48} className="text-gray-600 mb-4" />
-        <h3 className="text-lg font-medium text-gray-400 mb-2">No committed schedule yet</h3>
+        <h3 className="text-lg font-medium text-gray-400 mb-2">No schedule yet</h3>
         <p className="text-sm text-gray-500 max-w-xs">
-          Run mission planning and commit a schedule to see acquisitions here.
+          Run mission planning and apply a schedule to see acquisitions here.
         </p>
       </div>
     )
@@ -678,7 +692,7 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
             {/* Legend */}
             <div className="flex items-center gap-4 px-2 pb-3 pt-1 border-t border-gray-800/50">
               <div className="flex items-center gap-1.5">
-                <div className="w-3 h-2 rounded-sm bg-cyan-500/70 border border-cyan-400/50" />
+                <div className="w-3 h-2 rounded-sm bg-blue-500/70 border border-blue-400/50" />
                 <span className="text-[10px] text-gray-400">Optical</span>
               </div>
               <div className="flex items-center gap-1.5">

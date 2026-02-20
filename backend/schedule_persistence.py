@@ -17,7 +17,7 @@ import sqlite3
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
@@ -479,12 +479,15 @@ class ScheduleDB:
             if current_version < "2.3":
                 self._migrate_to_v2_3(conn)
 
+            if current_version < "2.4":
+                self._migrate_to_v2_4(conn)
+
             conn.commit()
 
     def _migrate_to_v2(self, conn: sqlite3.Connection) -> None:
         """Migrate database schema to v2.0."""
         cursor = conn.cursor()
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
 
         logger.info("Running migration to schema v2.0...")
 
@@ -711,7 +714,7 @@ class ScheduleDB:
     def _migrate_to_v2_1(self, conn: sqlite3.Connection) -> None:
         """Migrate database schema to v2.1 - Order inbox & batch planning."""
         cursor = conn.cursor()
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
 
         logger.info("Running migration to schema v2.1...")
 
@@ -820,7 +823,7 @@ class ScheduleDB:
         Only hard and none lock levels are supported going forward.
         """
         cursor = conn.cursor()
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
 
         logger.info("Running migration to schema v2.2...")
 
@@ -862,7 +865,7 @@ class ScheduleDB:
         Formula: new_priority = 6 - old_priority  (1<->5, 2<->4, 3 stays 3)
         """
         cursor = conn.cursor()
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
 
         logger.info(
             "Running migration to schema v2.3 (priority semantics inversion)..."
@@ -896,6 +899,49 @@ class ScheduleDB:
         )
 
         logger.info("Migration to schema v2.3 complete")
+
+    def _migrate_to_v2_4(self, conn: sqlite3.Connection) -> None:
+        """Migrate database schema to v2.4 - Add missing audit log columns.
+
+        The commit_audit_logs table was created in v2.0 but score_before,
+        score_after, conflicts_before, and conflicts_after columns were added
+        to the CREATE TABLE definition without an ALTER migration.
+        """
+        cursor = conn.cursor()
+        now = datetime.now(timezone.utc).isoformat() + "Z"
+
+        logger.info("Running migration to schema v2.4...")
+
+        new_columns = [
+            ("score_before", "REAL"),
+            ("score_after", "REAL"),
+            ("conflicts_before", "INTEGER NOT NULL DEFAULT 0"),
+            ("conflicts_after", "INTEGER NOT NULL DEFAULT 0"),
+        ]
+
+        for col_name, col_type in new_columns:
+            try:
+                cursor.execute(
+                    f"ALTER TABLE commit_audit_logs ADD COLUMN {col_name} {col_type}"
+                )
+                logger.info(f"  Added column commit_audit_logs.{col_name}")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
+        # Record migration
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO schema_migrations (version, applied_at, description)
+            VALUES (?, ?, ?)
+        """,
+            (
+                "2.4",
+                now,
+                "Add score_before/after, conflicts_before/after to commit_audit_logs",
+            ),
+        )
+
+        logger.info("Migration to schema v2.4 complete")
 
     # =========================================================================
     # Order Operations
@@ -945,7 +991,7 @@ class ScheduleDB:
             Created Order object
         """
         order_id = f"ord_{uuid.uuid4().hex[:12]}"
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
 
         constraints_json = json.dumps(constraints) if constraints else None
         tags_json = json.dumps(tags) if tags else None
@@ -1075,7 +1121,7 @@ class ScheduleDB:
                 f"Invalid status: {status}. Must be one of {valid_statuses}"
             )
 
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -1085,6 +1131,61 @@ class ScheduleDB:
             )
             conn.commit()
             return cursor.rowcount > 0
+
+    def delete_order(
+        self, order_id: str, cascade_acquisitions: bool = True
+    ) -> Dict[str, Any]:
+        """Delete an order and optionally its associated acquisitions.
+
+        Args:
+            order_id: Order to delete
+            cascade_acquisitions: If True, also delete acquisitions linked to this order
+
+        Returns:
+            Dict with deleted counts: {"order_deleted": bool, "acquisitions_deleted": int}
+        """
+        result: Dict[str, Any] = {"order_deleted": False, "acquisitions_deleted": 0}
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Check order exists
+            cursor.execute("SELECT id FROM orders WHERE id = ?", (order_id,))
+            if not cursor.fetchone():
+                return result
+
+            # Delete associated acquisitions if requested
+            if cascade_acquisitions:
+                cursor.execute(
+                    "SELECT COUNT(*) as cnt FROM acquisitions WHERE order_id = ?",
+                    (order_id,),
+                )
+                acq_count = cursor.fetchone()["cnt"]
+                cursor.execute(
+                    "DELETE FROM acquisitions WHERE order_id = ?",
+                    (order_id,),
+                )
+                result["acquisitions_deleted"] = acq_count
+
+            # Remove from batch_members
+            cursor.execute(
+                "DELETE FROM batch_members WHERE order_id = ?",
+                (order_id,),
+            )
+
+            # Delete the order
+            cursor.execute("DELETE FROM orders WHERE id = ?", (order_id,))
+            result["order_deleted"] = cursor.rowcount > 0
+
+            conn.commit()
+
+        if result["order_deleted"]:
+            logger.info(
+                f"Deleted order {order_id} (cascade_acquisitions={cascade_acquisitions}, "
+                f"acquisitions_deleted={result['acquisitions_deleted']})"
+            )
+
+        return result
 
     def _row_to_order(self, row: sqlite3.Row) -> Order:
         """Convert database row to Order object."""
@@ -1154,7 +1255,7 @@ class ScheduleDB:
     ) -> Acquisition:
         """Create a new acquisition (scheduled slot)."""
         acq_id = f"acq_{uuid.uuid4().hex[:12]}"
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -1300,6 +1401,64 @@ class ScheduleDB:
             cursor.execute(query, params)
             return [self._row_to_acquisition(row) for row in cursor.fetchall()]
 
+    def delete_acquisition(self, acquisition_id: str) -> bool:
+        """Delete a single acquisition by ID.
+
+        Hard-locked acquisitions cannot be deleted unless force is used
+        at the router level.
+
+        Args:
+            acquisition_id: Acquisition to delete
+
+        Returns:
+            True if deleted
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM acquisitions WHERE id = ?",
+                (acquisition_id,),
+            )
+            conn.commit()
+            deleted = cursor.rowcount > 0
+
+        if deleted:
+            logger.info(f"Deleted acquisition {acquisition_id}")
+        return deleted
+
+    def bulk_delete_acquisitions(self, acquisition_ids: List[str]) -> Dict[str, Any]:
+        """Delete multiple acquisitions by ID.
+
+        Args:
+            acquisition_ids: List of acquisition IDs to delete
+
+        Returns:
+            Dict with {"deleted": int, "failed": list[str]}
+        """
+        if not acquisition_ids:
+            return {"deleted": 0, "failed": []}
+
+        deleted_count = 0
+        failed: List[str] = []
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            for acq_id in acquisition_ids:
+                cursor.execute(
+                    "DELETE FROM acquisitions WHERE id = ?",
+                    (acq_id,),
+                )
+                if cursor.rowcount > 0:
+                    deleted_count += 1
+                else:
+                    failed.append(acq_id)
+            conn.commit()
+
+        logger.info(
+            f"Bulk deleted {deleted_count} acquisitions " f"({len(failed)} failed)"
+        )
+        return {"deleted": deleted_count, "failed": failed}
+
     def get_acquisitions_in_horizon(
         self,
         start_time: str,
@@ -1400,7 +1559,7 @@ class ScheduleDB:
         lock_level: Optional[str] = None,
     ) -> bool:
         """Update acquisition state and/or lock level."""
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
 
         updates = ["updated_at = ?"]
         params: List[Any] = [now]
@@ -1486,7 +1645,7 @@ class ScheduleDB:
     ) -> Plan:
         """Create a new plan."""
         plan_id = f"plan_{uuid.uuid4().hex[:12]}"
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
 
         config_json = json.dumps(config)
         metrics_json = json.dumps(metrics)
@@ -1724,7 +1883,7 @@ class ScheduleDB:
                 cursor.execute("SELECT * FROM plan_items WHERE plan_id = ?", (plan_id,))
 
             items = cursor.fetchall()
-            now = datetime.utcnow().isoformat() + "Z"
+            now = datetime.now(timezone.utc).isoformat() + "Z"
 
             for item in items:
                 acq_id = f"acq_{uuid.uuid4().hex[:12]}"
@@ -1878,7 +2037,7 @@ class ScheduleDB:
             Created Conflict object
         """
         conflict_id = f"conflict_{uuid.uuid4().hex[:12]}"
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
         acquisition_ids_json = json.dumps(acquisition_ids)
 
         with self._get_connection() as conn:
@@ -2099,7 +2258,7 @@ class ScheduleDB:
         Returns:
             True if updated
         """
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -2247,7 +2406,7 @@ class ScheduleDB:
                 f"Invalid lock_level: {lock_level}. Must be one of {valid_locks}"
             )
 
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
         updated = 0
         failed: List[str] = []
 
@@ -2290,7 +2449,7 @@ class ScheduleDB:
         Returns:
             Dict with updated count
         """
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -2386,7 +2545,7 @@ class ScheduleDB:
             Created CommitAuditLog object
         """
         audit_id = f"audit_{uuid.uuid4().hex[:12]}"
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
         repair_diff_json = json.dumps(repair_diff) if repair_diff else None
 
         with self._get_connection() as conn:
@@ -2556,7 +2715,7 @@ class ScheduleDB:
                 if plan_row["status"] == "committed":
                     raise ValueError(f"Plan {plan_id} is already committed")
 
-                now = datetime.utcnow().isoformat() + "Z"
+                now = datetime.now(timezone.utc).isoformat() + "Z"
 
                 # Step 1: Drop acquisitions (for repair commits)
                 if drop_acquisition_ids:
@@ -2692,7 +2851,7 @@ class ScheduleDB:
             Created OrderBatch object
         """
         batch_id = f"batch_{uuid.uuid4().hex[:12]}"
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -2802,7 +2961,7 @@ class ScheduleDB:
                 f"Invalid status: {status}. Must be one of {valid_statuses}"
             )
 
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
         metrics_json = json.dumps(metrics) if metrics else None
 
         with self._get_connection() as conn:
@@ -2856,7 +3015,7 @@ class ScheduleDB:
             Created BatchMember object
         """
         member_id = f"bm_{uuid.uuid4().hex[:12]}"
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -2894,7 +3053,7 @@ class ScheduleDB:
         Returns:
             True if removed
         """
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -3059,7 +3218,7 @@ class ScheduleDB:
         Returns:
             True if updated
         """
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
 
         updates = ["updated_at = ?"]
         params: List[Any] = [now]
@@ -3112,7 +3271,7 @@ class ScheduleDB:
             List of created Order objects
         """
         created_orders: List[Order] = []
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
 
         with self._get_connection() as conn:
             cursor = conn.cursor()

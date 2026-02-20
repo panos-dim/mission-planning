@@ -59,6 +59,8 @@ export function useScheduleContext(params: ScheduleContextParams, enabled = true
     }),
     queryFn: () => getScheduleContext(params),
     enabled,
-    staleTime: 1000 * 30, // 30 seconds
+    staleTime: 0, // Always refetch — lightweight count query, must reflect deletions immediately
+    refetchOnWindowFocus: true,
+    refetchOnMount: 'always',
   })
 }

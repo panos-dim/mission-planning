@@ -575,6 +575,24 @@ export interface RepairPlanResponse {
   algorithm_metrics: Record<string, unknown>
   plan_id?: string
   schedule_context: Record<string, unknown>
+  // Planner-facing summary: per-target details for intelligent narrative
+  planner_summary?: {
+    target_acquisitions: Array<{
+      target_id: string
+      satellite_id: string
+      start_time: string
+      end_time: string
+      action: 'kept' | 'added'
+    }>
+    targets_not_scheduled: Array<{
+      target_id: string
+      reason: string
+    }>
+    horizon: { start: string; end: string }
+    satellites_used: string[]
+    total_targets_with_opportunities: number
+    total_targets_covered: number
+  }
 }
 
 /**
@@ -647,6 +665,75 @@ export async function hardLockAllCommitted(
   return apiClient.post<HardLockCommittedResponse>(API_ENDPOINTS.SCHEDULE_HARD_LOCK_COMMITTED, {
     workspace_id: workspaceId,
   })
+}
+
+// =============================================================================
+// Acquisition Deletion API
+// =============================================================================
+
+export interface DeleteAcquisitionResponse {
+  success: boolean
+  message: string
+  acquisition_id: string
+}
+
+export interface BulkDeleteAcquisitionsRequest {
+  acquisition_ids: string[]
+  force?: boolean
+}
+
+export interface BulkDeleteAcquisitionsResponse {
+  success: boolean
+  message: string
+  deleted: number
+  failed: string[]
+  skipped_hard_locked: string[]
+}
+
+/**
+ * Delete a single acquisition from the schedule.
+ * Hard-locked acquisitions require force=true.
+ */
+export async function deleteAcquisition(
+  acquisitionId: string,
+  force: boolean = false,
+): Promise<DeleteAcquisitionResponse> {
+  const qs = force ? '?force=true' : ''
+  return apiClient.delete<DeleteAcquisitionResponse>(
+    `${API_ENDPOINTS.SCHEDULE_ACQUISITION_DELETE(acquisitionId)}${qs}`,
+  )
+}
+
+/**
+ * Bulk delete multiple acquisitions from the schedule.
+ * Hard-locked acquisitions are skipped unless force=true.
+ */
+export async function bulkDeleteAcquisitions(
+  request: BulkDeleteAcquisitionsRequest,
+): Promise<BulkDeleteAcquisitionsResponse> {
+  return apiClient.post<BulkDeleteAcquisitionsResponse>(API_ENDPOINTS.SCHEDULE_BULK_DELETE, request)
+}
+
+// =============================================================================
+// Order Deletion API
+// =============================================================================
+
+export interface DeleteOrderResponse {
+  success: boolean
+  message: string
+  order_deleted: boolean
+  acquisitions_deleted: number
+}
+
+/**
+ * Delete an order and optionally its associated acquisitions.
+ */
+export async function deleteOrder(
+  orderId: string,
+  cascadeAcquisitions: boolean = true,
+): Promise<DeleteOrderResponse> {
+  const qs = buildQuery({ cascade_acquisitions: cascadeAcquisitions })
+  return apiClient.delete<DeleteOrderResponse>(`${API_ENDPOINTS.ORDER_BY_ID(orderId)}${qs}`)
 }
 
 // =============================================================================

@@ -9,24 +9,20 @@ import {
   Move,
   TrendingUp,
   TrendingDown,
-} from "lucide-react";
-import { useState } from "react";
-import type {
-  RepairDiff,
-  MetricsComparison,
-  PlanItemPreview,
-} from "../api/scheduleApi";
+} from 'lucide-react'
+import { useState } from 'react'
+import type { RepairDiff, MetricsComparison, PlanItemPreview } from '../api/scheduleApi'
 
-type CompareMode = "side-by-side" | "overlay" | "diff-only";
+type CompareMode = 'side-by-side' | 'overlay' | 'diff-only'
 
 interface WhatIfComparePanelProps {
-  baselineItems: PlanItemPreview[];
-  proposedItems: PlanItemPreview[];
-  repairDiff: RepairDiff;
-  metricsComparison: MetricsComparison;
-  onItemClick?: (itemId: string, isProposed: boolean) => void;
-  onAcceptProposed?: () => void;
-  onRejectProposed?: () => void;
+  baselineItems: PlanItemPreview[]
+  proposedItems: PlanItemPreview[]
+  repairDiff: RepairDiff
+  metricsComparison: MetricsComparison
+  onItemClick?: (itemId: string, isProposed: boolean) => void
+  onAcceptProposed?: () => void
+  onRejectProposed?: () => void
 }
 
 export default function WhatIfComparePanel({
@@ -38,86 +34,84 @@ export default function WhatIfComparePanel({
   onAcceptProposed,
   onRejectProposed,
 }: WhatIfComparePanelProps): JSX.Element {
-  const [compareMode, setCompareMode] = useState<CompareMode>("side-by-side");
-  const [showKept, setShowKept] = useState(true);
-  const [showDropped, setShowDropped] = useState(true);
-  const [showAdded, setShowAdded] = useState(true);
-  const [showMoved, setShowMoved] = useState(true);
+  const [compareMode, setCompareMode] = useState<CompareMode>('side-by-side')
+  const [showKept, setShowKept] = useState(true)
+  const [showDropped, setShowDropped] = useState(true)
+  const [showAdded, setShowAdded] = useState(true)
+  const [showMoved, setShowMoved] = useState(true)
 
-  const scoreDelta = metricsComparison.score_delta;
-  const isPositiveChange = scoreDelta >= 0;
+  const scoreDelta = metricsComparison.score_delta
+  const isPositiveChange = scoreDelta >= 0
 
-  const keptSet = new Set(repairDiff.kept);
-  const droppedSet = new Set(repairDiff.dropped);
-  const addedSet = new Set(repairDiff.added);
-  const movedSet = new Set(repairDiff.moved.map((m) => m.id));
+  const keptSet = new Set(repairDiff.kept)
+  const droppedSet = new Set(repairDiff.dropped)
+  const addedSet = new Set(repairDiff.added)
+  const movedSet = new Set(repairDiff.moved.map((m) => m.id))
 
-  const getItemStatus = (
-    itemId: string,
-  ): "kept" | "dropped" | "added" | "moved" | null => {
-    if (keptSet.has(itemId)) return "kept";
-    if (droppedSet.has(itemId)) return "dropped";
-    if (addedSet.has(itemId)) return "added";
-    if (movedSet.has(itemId)) return "moved";
-    return null;
-  };
+  const getItemStatus = (itemId: string): 'kept' | 'dropped' | 'added' | 'moved' | null => {
+    if (keptSet.has(itemId)) return 'kept'
+    if (droppedSet.has(itemId)) return 'dropped'
+    if (addedSet.has(itemId)) return 'added'
+    if (movedSet.has(itemId)) return 'moved'
+    return null
+  }
 
   const statusConfig = {
     kept: {
-      color: "text-green-400",
-      bgColor: "bg-green-900/20",
-      borderColor: "border-green-700",
+      color: 'text-green-400',
+      bgColor: 'bg-green-900/20',
+      borderColor: 'border-green-700',
       icon: CheckCircle,
-      label: "Kept",
+      label: 'Kept',
     },
     dropped: {
-      color: "text-red-400",
-      bgColor: "bg-red-900/20",
-      borderColor: "border-red-700",
+      color: 'text-red-400',
+      bgColor: 'bg-red-900/20',
+      borderColor: 'border-red-700',
       icon: XCircle,
-      label: "Dropped",
+      label: 'Dropped',
     },
     added: {
-      color: "text-blue-400",
-      bgColor: "bg-blue-900/20",
-      borderColor: "border-blue-700",
+      color: 'text-blue-400',
+      bgColor: 'bg-blue-900/20',
+      borderColor: 'border-blue-700',
       icon: Plus,
-      label: "Added",
+      label: 'Added',
     },
     moved: {
-      color: "text-yellow-400",
-      bgColor: "bg-yellow-900/20",
-      borderColor: "border-yellow-700",
+      color: 'text-yellow-400',
+      bgColor: 'bg-yellow-900/20',
+      borderColor: 'border-yellow-700',
       icon: Move,
-      label: "Moved",
+      label: 'Moved',
     },
-  };
+  }
 
-  const filterVisible = (status: "kept" | "dropped" | "added" | "moved") => {
+  const filterVisible = (status: 'kept' | 'dropped' | 'added' | 'moved') => {
     switch (status) {
-      case "kept":
-        return showKept;
-      case "dropped":
-        return showDropped;
-      case "added":
-        return showAdded;
-      case "moved":
-        return showMoved;
+      case 'kept':
+        return showKept
+      case 'dropped':
+        return showDropped
+      case 'added':
+        return showAdded
+      case 'moved':
+        return showMoved
       default:
-        return true;
+        return true
     }
-  };
+  }
 
   const formatTime = (isoString: string) => {
     try {
-      return new Date(isoString).toLocaleTimeString("en-US", {
-        hour: "2-digit",
-        minute: "2-digit",
-      });
+      return new Date(isoString).toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+      })
     } catch {
-      return isoString;
+      return isoString
     }
-  };
+  }
 
   return (
     <div className="bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
@@ -125,32 +119,22 @@ export default function WhatIfComparePanel({
       <div className="flex items-center justify-between px-4 py-3 bg-gray-800 border-b border-gray-700">
         <div className="flex items-center gap-2">
           <ArrowLeftRight className="w-4 h-4 text-blue-400" />
-          <h3 className="text-sm font-semibold text-white">
-            What-If Comparison
-          </h3>
+          <h3 className="text-sm font-semibold text-white">What-If Comparison</h3>
         </div>
 
         {/* Mode Selector */}
         <div className="flex items-center gap-1 bg-gray-700 rounded-lg p-1">
-          {(["side-by-side", "overlay", "diff-only"] as CompareMode[]).map(
-            (mode) => (
-              <button
-                key={mode}
-                onClick={() => setCompareMode(mode)}
-                className={`px-2 py-1 text-xs rounded ${
-                  compareMode === mode
-                    ? "bg-blue-600 text-white"
-                    : "text-gray-400 hover:text-white"
-                }`}
-              >
-                {mode === "side-by-side"
-                  ? "Split"
-                  : mode === "overlay"
-                    ? "Overlay"
-                    : "Diff"}
-              </button>
-            ),
-          )}
+          {(['side-by-side', 'overlay', 'diff-only'] as CompareMode[]).map((mode) => (
+            <button
+              key={mode}
+              onClick={() => setCompareMode(mode)}
+              className={`px-2 py-1 text-xs rounded ${
+                compareMode === mode ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              {mode === 'side-by-side' ? 'Split' : mode === 'overlay' ? 'Overlay' : 'Diff'}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -158,38 +142,32 @@ export default function WhatIfComparePanel({
       <div className="flex items-center gap-4 px-4 py-2 bg-gray-800/50 border-b border-gray-700">
         <span className="text-xs text-gray-500">Show:</span>
         {[
-          { key: "kept", state: showKept, setter: setShowKept },
-          { key: "dropped", state: showDropped, setter: setShowDropped },
-          { key: "added", state: showAdded, setter: setShowAdded },
-          { key: "moved", state: showMoved, setter: setShowMoved },
+          { key: 'kept', state: showKept, setter: setShowKept },
+          { key: 'dropped', state: showDropped, setter: setShowDropped },
+          { key: 'added', state: showAdded, setter: setShowAdded },
+          { key: 'moved', state: showMoved, setter: setShowMoved },
         ].map(({ key, state, setter }) => {
-          const config = statusConfig[key as keyof typeof statusConfig];
+          const config = statusConfig[key as keyof typeof statusConfig]
           return (
             <button
               key={key}
               onClick={() => setter(!state)}
               className={`flex items-center gap-1 text-xs px-2 py-1 rounded ${
-                state
-                  ? `${config.bgColor} ${config.color}`
-                  : "text-gray-500 bg-gray-700"
+                state ? `${config.bgColor} ${config.color}` : 'text-gray-500 bg-gray-700'
               }`}
             >
-              {state ? (
-                <Eye className="w-3 h-3" />
-              ) : (
-                <EyeOff className="w-3 h-3" />
-              )}
+              {state ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
               {config.label} (
-              {key === "kept"
+              {key === 'kept'
                 ? repairDiff.kept.length
-                : key === "dropped"
+                : key === 'dropped'
                   ? repairDiff.dropped.length
-                  : key === "added"
+                  : key === 'added'
                     ? repairDiff.added.length
                     : repairDiff.moved.length}
               )
             </button>
-          );
+          )
         })}
       </div>
 
@@ -213,7 +191,7 @@ export default function WhatIfComparePanel({
           <span className="text-xs text-gray-500">Score Δ:</span>
           <span
             className={`text-sm font-bold flex items-center gap-1 ${
-              isPositiveChange ? "text-green-400" : "text-red-400"
+              isPositiveChange ? 'text-green-400' : 'text-red-400'
             }`}
           >
             {isPositiveChange ? (
@@ -221,7 +199,7 @@ export default function WhatIfComparePanel({
             ) : (
               <TrendingDown className="w-4 h-4" />
             )}
-            {isPositiveChange ? "+" : ""}
+            {isPositiveChange ? '+' : ''}
             {scoreDelta.toFixed(1)}
           </span>
         </div>
@@ -229,7 +207,7 @@ export default function WhatIfComparePanel({
 
       {/* Comparison Content */}
       <div className="p-4">
-        {compareMode === "side-by-side" && (
+        {compareMode === 'side-by-side' && (
           <div className="grid grid-cols-2 gap-4">
             {/* Baseline Column */}
             <div>
@@ -239,9 +217,9 @@ export default function WhatIfComparePanel({
               </div>
               <div className="space-y-1 max-h-64 overflow-y-auto">
                 {baselineItems.map((item) => {
-                  const status = getItemStatus(item.opportunity_id);
-                  if (status && !filterVisible(status)) return null;
-                  const config = status ? statusConfig[status] : null;
+                  const status = getItemStatus(item.opportunity_id)
+                  if (status && !filterVisible(status)) return null
+                  const config = status ? statusConfig[status] : null
 
                   return (
                     <div
@@ -249,23 +227,19 @@ export default function WhatIfComparePanel({
                       onClick={() => onItemClick?.(item.opportunity_id, false)}
                       className={`
                         p-2 rounded text-xs cursor-pointer transition
-                        ${config ? `${config.bgColor} border ${config.borderColor}` : "bg-gray-800 border border-gray-700"}
+                        ${config ? `${config.bgColor} border ${config.borderColor}` : 'bg-gray-800 border border-gray-700'}
                         hover:opacity-80
                       `}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="font-medium text-white">
-                          {item.target_id}
-                        </span>
-                        {config && (
-                          <span className={config.color}>{config.label}</span>
-                        )}
+                        <span className="font-medium text-white">{item.target_id}</span>
+                        {config && <span className={config.color}>{config.label}</span>}
                       </div>
                       <div className="text-gray-400 mt-1">
                         {formatTime(item.start_time)} - {item.satellite_id}
                       </div>
                     </div>
-                  );
+                  )
                 })}
               </div>
             </div>
@@ -278,9 +252,9 @@ export default function WhatIfComparePanel({
               </div>
               <div className="space-y-1 max-h-64 overflow-y-auto">
                 {proposedItems.map((item) => {
-                  const status = getItemStatus(item.opportunity_id);
-                  if (status && !filterVisible(status)) return null;
-                  const config = status ? statusConfig[status] : null;
+                  const status = getItemStatus(item.opportunity_id)
+                  if (status && !filterVisible(status)) return null
+                  const config = status ? statusConfig[status] : null
 
                   return (
                     <div
@@ -288,30 +262,26 @@ export default function WhatIfComparePanel({
                       onClick={() => onItemClick?.(item.opportunity_id, true)}
                       className={`
                         p-2 rounded text-xs cursor-pointer transition
-                        ${config ? `${config.bgColor} border ${config.borderColor}` : "bg-gray-800 border border-gray-700"}
+                        ${config ? `${config.bgColor} border ${config.borderColor}` : 'bg-gray-800 border border-gray-700'}
                         hover:opacity-80
                       `}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="font-medium text-white">
-                          {item.target_id}
-                        </span>
-                        {config && (
-                          <span className={config.color}>{config.label}</span>
-                        )}
+                        <span className="font-medium text-white">{item.target_id}</span>
+                        {config && <span className={config.color}>{config.label}</span>}
                       </div>
                       <div className="text-gray-400 mt-1">
                         {formatTime(item.start_time)} - {item.satellite_id}
                       </div>
                     </div>
-                  );
+                  )
                 })}
               </div>
             </div>
           </div>
         )}
 
-        {compareMode === "diff-only" && (
+        {compareMode === 'diff-only' && (
           <div className="space-y-3">
             {/* Dropped Items */}
             {showDropped && repairDiff.dropped.length > 0 && (
@@ -327,16 +297,9 @@ export default function WhatIfComparePanel({
                       className="p-2 rounded text-xs bg-red-900/20 border border-red-700"
                     >
                       <span className="font-mono text-red-400">{id}</span>
-                      {repairDiff.reason_summary?.dropped?.find(
-                        (r) => r.id === id,
-                      ) && (
+                      {repairDiff.reason_summary?.dropped?.find((r) => r.id === id) && (
                         <span className="text-gray-400 ml-2">
-                          -{" "}
-                          {
-                            repairDiff.reason_summary.dropped.find(
-                              (r) => r.id === id,
-                            )?.reason
-                          }
+                          - {repairDiff.reason_summary.dropped.find((r) => r.id === id)?.reason}
                         </span>
                       )}
                     </div>
@@ -390,15 +353,12 @@ export default function WhatIfComparePanel({
           </div>
         )}
 
-        {compareMode === "overlay" && (
+        {compareMode === 'overlay' && (
           <div className="text-center py-8 text-gray-500">
             <Layers className="w-8 h-8 mx-auto mb-2 opacity-50" />
-            <p className="text-sm">
-              Overlay view available in Timeline and Map components
-            </p>
+            <p className="text-sm">Overlay view available in Timeline and Map components</p>
             <p className="text-xs mt-1">
-              Both baseline and proposed items are shown with color-coded
-              markers
+              Both baseline and proposed items are shown with color-coded markers
             </p>
           </div>
         )}
@@ -418,14 +378,14 @@ export default function WhatIfComparePanel({
           {onAcceptProposed && (
             <button
               onClick={onAcceptProposed}
-              className="px-3 py-1.5 text-sm bg-green-600 hover:bg-green-500 text-white rounded flex items-center gap-1"
+              className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 text-white rounded flex items-center gap-1"
             >
               <CheckCircle className="w-4 h-4" />
-              Accept & Commit
+              Accept & Apply
             </button>
           )}
         </div>
       )}
     </div>
-  );
+  )
 }

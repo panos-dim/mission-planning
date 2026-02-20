@@ -6,7 +6,7 @@ ground tracks, target points, and optional day/night terminator shading.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
@@ -292,7 +292,7 @@ class Visualizer:
         # Determine satellite altitude - prefer actual TLE data over hardcoded value
         if satellite is not None:
             # Get actual altitude from TLE data at current time or start_time
-            reference_time = start_time if start_time else datetime.utcnow()
+            reference_time = start_time if start_time else datetime.now(timezone.utc)
             try:
                 _, _, actual_altitude_km = satellite.get_position(reference_time)
                 logger.info(

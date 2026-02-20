@@ -67,18 +67,6 @@ const MissionParameters: React.FC<MissionParametersProps> = ({
     return { ...FALLBACK_SAR_DEFAULTS[mode], absMin: 10, absMax: 55 }
   }
 
-  // Calculate duration in hours for display
-  const calculateDuration = (): number => {
-    if (parameters.startTime && parameters.endTime) {
-      const start = new Date(parameters.startTime)
-      const end = new Date(parameters.endTime)
-      const diffMs = end.getTime() - start.getTime()
-      return Math.max(0, diffMs / (1000 * 60 * 60)) // Convert to hours
-    }
-    return 0
-  }
-
-  const durationHours = calculateDuration()
   const isSAR = parameters.imagingType === 'sar'
 
   // Initialize SAR params with defaults if switching to SAR
@@ -154,24 +142,28 @@ const MissionParameters: React.FC<MissionParametersProps> = ({
           </div>
         </div>
 
-        {/* Start Time */}
-        <DateTimePicker
-          label="Start Time (UTC)"
-          value={parameters.startTime}
-          onChange={(value) => onChange({ startTime: value })}
-          icon={<Calendar className="w-3 h-3 inline mr-1" />}
-          disabled={disabled}
-        />
-
-        {/* End Time */}
-        <DateTimePicker
-          label="End Time (UTC)"
-          value={parameters.endTime}
-          onChange={(value) => onChange({ endTime: value })}
-          minDate={parameters.startTime}
-          icon={<Clock className="w-3 h-3 inline mr-1" />}
-          disabled={disabled}
-        />
+        {/* Start + End Time — same row, responsive wrap */}
+        <div className="flex flex-wrap gap-3">
+          <div className="flex-1 min-w-[180px]">
+            <DateTimePicker
+              label="Start Time (UTC)"
+              value={parameters.startTime}
+              onChange={(value) => onChange({ startTime: value })}
+              icon={<Calendar className="w-3 h-3 inline mr-1" />}
+              disabled={disabled}
+            />
+          </div>
+          <div className="flex-1 min-w-[180px]">
+            <DateTimePicker
+              label="End Time (UTC)"
+              value={parameters.endTime}
+              onChange={(value) => onChange({ endTime: value })}
+              minDate={parameters.startTime}
+              icon={<Clock className="w-3 h-3 inline mr-1" />}
+              disabled={disabled}
+            />
+          </div>
+        </div>
 
         {/* SAR-Specific Parameters */}
         {isSAR && (
@@ -345,63 +337,6 @@ const MissionParameters: React.FC<MissionParametersProps> = ({
             </div>
           </div>
         )}
-      </div>
-
-      {/* Parameter Summary */}
-      <div className="glass-panel rounded-lg p-3">
-        <h4 className="text-xs font-medium text-gray-400 mb-2">Summary</h4>
-        <div className="text-xs space-y-1">
-          <div className="flex justify-between">
-            <span className="text-gray-400">Imaging Type:</span>
-            <span className={`capitalize ${isSAR ? 'text-purple-300' : 'text-white'}`}>
-              {parameters.imagingType || 'optical'}
-            </span>
-          </div>
-          {isSAR && (
-            <>
-              <div className="flex justify-between">
-                <span className="text-gray-400">SAR Mode:</span>
-                <span className="text-purple-300 capitalize">{sarParams.imaging_mode}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-400">Look Side:</span>
-                <span className="text-purple-300">{sarParams.look_side}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-400">Pass Dir:</span>
-                <span className="text-purple-300">
-                  {sarParams.pass_direction === 'ASCENDING'
-                    ? 'ASC'
-                    : sarParams.pass_direction === 'DESCENDING'
-                      ? 'DESC'
-                      : 'ANY'}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-400">Incidence:</span>
-                <span className="text-purple-300">
-                  {sarParams.incidence_min_deg}° - {sarParams.incidence_max_deg}°
-                </span>
-              </div>
-            </>
-          )}
-          {!isSAR && (
-            <div className="flex justify-between">
-              <span className="text-gray-400">{LABELS.MAX_OFF_NADIR_ANGLE_SHORT}:</span>
-              <span className="text-white">{parameters.pointingAngle}°</span>
-            </div>
-          )}
-          <div className="flex justify-between">
-            <span className="text-gray-400">Duration:</span>
-            <span className="text-white">
-              {durationHours > 0
-                ? durationHours < 24
-                  ? `${durationHours.toFixed(1)}h`
-                  : `${(durationHours / 24).toFixed(1)} days`
-                : 'N/A'}
-            </span>
-          </div>
-        </div>
       </div>
     </div>
   )

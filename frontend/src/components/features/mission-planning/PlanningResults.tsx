@@ -1,5 +1,6 @@
 import React from 'react'
 import { Card, Button } from '../../ui'
+import { Download } from 'lucide-react'
 import { AlgorithmResult } from '../../../types'
 import { ScheduleTable } from './ScheduleTable'
 import { ALGORITHM_ORDER } from './usePlanningState'
@@ -40,7 +41,7 @@ export const PlanningResults: React.FC<PlanningResultsProps> = ({
           <Button variant="secondary" size="sm" onClick={onToggleComparison}>
             {showComparison ? 'Hide' : 'Show'} Compare
           </Button>
-          <Button variant="success" size="sm" onClick={onAcceptPlan} disabled={!activeResult}>
+          <Button variant="primary" size="sm" onClick={onAcceptPlan} disabled={!activeResult}>
             Apply
           </Button>
         </div>
@@ -192,15 +193,15 @@ export const PlanningResults: React.FC<PlanningResultsProps> = ({
           {/* Schedule Table */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <h4 className="font-semibold">
-                Schedule ({activeResult.schedule.length} opportunities)
-              </h4>
+              <h4 className="font-semibold">Schedule</h4>
               <div className="flex gap-2">
                 <Button variant="secondary" size="sm" onClick={() => onExportCsv(activeTab)}>
-                  Export CSV
+                  <Download className="w-3.5 h-3.5 mr-1" />
+                  CSV
                 </Button>
                 <Button variant="secondary" size="sm" onClick={() => onExportJson(activeTab)}>
-                  Export JSON
+                  <Download className="w-3.5 h-3.5 mr-1" />
+                  JSON
                 </Button>
               </div>
             </div>

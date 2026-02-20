@@ -13,7 +13,7 @@ import json
 import logging
 import os
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -391,7 +391,7 @@ async def create_snapshot(request: CreateSnapshotRequest) -> Dict[str, Any]:
     try:
         ensure_snapshots_dir()
 
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         snapshot_id = f"snapshot_{timestamp}"
         snapshot_dir = SNAPSHOTS_DIR / snapshot_id
         snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -413,7 +413,7 @@ async def create_snapshot(request: CreateSnapshotRequest) -> Dict[str, Any]:
         # Create metadata
         metadata = {
             "id": snapshot_id,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
             "description": request.description,
             "config_hash": get_config_hash(),
             "files": copied_files,
@@ -443,7 +443,7 @@ async def restore_snapshot(snapshot_id: str) -> Dict[str, Any]:
             )
 
         # Create backup of current config before restore
-        backup_timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        backup_timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         backup_id = f"pre_restore_{backup_timestamp}"
         backup_dir = SNAPSHOTS_DIR / backup_id
         backup_dir.mkdir(parents=True, exist_ok=True)
@@ -520,7 +520,7 @@ async def restore_defaults() -> Dict[str, Any]:
     """Restore default configuration (requires backup snapshot first)."""
     try:
         # Create snapshot before restore
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         backup_id = f"pre_default_restore_{timestamp}"
         backup_dir = SNAPSHOTS_DIR / backup_id
         ensure_snapshots_dir()
@@ -542,7 +542,7 @@ async def restore_defaults() -> Dict[str, Any]:
         # Save metadata
         metadata = {
             "id": backup_id,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
             "description": "Auto-backup before restoring defaults",
             "config_hash": get_config_hash(),
             "files": config_files,

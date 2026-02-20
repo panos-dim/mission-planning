@@ -694,12 +694,12 @@ def _convert_sar_to_workflow_scenario(sar_scenario: SARScenario) -> WorkflowScen
 def _save_workflow_report(report: Any) -> bool:
     """Save workflow report to storage."""
     import json
-    from datetime import datetime
+    from datetime import datetime, timezone
     from pathlib import Path
 
     try:
         reports_dir = Path(__file__).parent.parent.parent / "data" / "validation"
-        date_str = datetime.utcnow().strftime("%Y-%m-%d")
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         report_subdir = reports_dir / date_str
         report_subdir.mkdir(parents=True, exist_ok=True)
 

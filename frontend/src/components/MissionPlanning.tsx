@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { PlanningRequest, PlanningResponse, AlgorithmResult } from '../types'
 import { useMission } from '../context/MissionContext'
 import { useSlewVisStore, type ColorByMode } from '../store/slewVisStore'
@@ -8,23 +8,26 @@ import { useExplorerStore } from '../store/explorerStore'
 import { useSelectionStore, useContextFilter } from '../store/selectionStore'
 import ContextFilterBar from './ContextFilterBar'
 import { JulianDate } from 'cesium'
-import { Eye, EyeOff, Shield, Lock } from 'lucide-react'
+import { Eye, EyeOff, Shield, Lock, Download } from 'lucide-react'
 import debug from '../utils/debug'
 import { ApiError, NetworkError, TimeoutError } from '../api/errors'
 import { createRepairPlan, type PlanningMode, type RepairPlanResponse } from '../api/scheduleApi'
 import { useOpportunities, useScheduleContext } from '../hooks/queries'
 import { planningApi } from '../api'
-import { ConflictWarningModal, type CommitPreview } from './ConflictWarningModal'
+import { type CommitPreview } from './ConflictWarningModal'
+import ApplyConfirmationPanel from './ApplyConfirmationPanel'
 import { RepairDiffPanel } from './RepairDiffPanel'
 import { LABELS } from '../constants/labels'
+import { isDebugMode } from '../constants/simpleMode'
 
 interface MissionPlanningProps {
-  onPromoteToOrders?: (algorithm: string, result: AlgorithmResult) => void
+  onPromoteToOrders?: (algorithm: string, result: AlgorithmResult) => void | Promise<void>
 }
 
 export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningProps): JSX.Element {
   const { state } = useMission()
-  const { setClockTime } = useVisStore()
+  const { setClockTime, uiMode } = useVisStore()
+  const isDeveloperMode = uiMode === 'developer' || isDebugMode()
 
   const {
     enabled: slewVisEnabled,
@@ -71,6 +74,8 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
   const [commitPreview, setCommitPreview] = useState<CommitPreview | null>(null)
   const [isCommitting, setIsCommitting] = useState(false)
   const [pendingCommitAlgorithm, setPendingCommitAlgorithm] = useState<string | null>(null)
+  const commitGuardRef = useRef(false)
+  const planningGuardRef = useRef(false)
 
   // PR-PARAM-GOV-01: Config summary removed from UI (platform config is noise for planner)
 
@@ -206,6 +211,9 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
 
   // Auto-detect mode: from_scratch (full algorithm) or repair (around locked items)
   const handleRunPlanning = async () => {
+    // Guard: prevent double-invocation (ref-based — survives React batched updates)
+    if (planningGuardRef.current || isPlanning) return
+    planningGuardRef.current = true
     setIsPlanning(true)
     setError(null)
     setSchedulingReasoning(null)
@@ -220,14 +228,14 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
       if (existingCount > 0) {
         setSchedulingReasoning({
           mode: 'repair',
-          reason: `Found ${existingCount} existing acquisition${existingCount > 1 ? 's' : ''} in the committed schedule. Locked items are preserved, unlocked items may be adjusted to improve the schedule.`,
+          reason: `Found ${existingCount} existing acquisition${existingCount > 1 ? 's' : ''} in the schedule. Locked items are preserved, unlocked items may be adjusted to improve the schedule.`,
           existingCount,
         })
       } else {
         setSchedulingReasoning({
           mode: 'from_scratch',
           reason:
-            'No existing committed schedule found. Building a new optimized schedule from all available opportunities.',
+            'No existing schedule found. Building a new optimized schedule from all available opportunities.',
           existingCount: 0,
         })
       }
@@ -298,6 +306,27 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
               mean_density: 0,
               median_density: 0,
             },
+            repair_plan_id: repairResponse.plan_id,
+            repair_dropped_ids: repairResponse.repair_diff.dropped,
+            target_statistics: (() => {
+              const coveredTargets = new Set(repairResponse.new_plan_items.map((i) => i.target_id))
+              const allTargets = new Set([
+                ...coveredTargets,
+                ...(repairResponse.planner_summary?.targets_not_scheduled?.map(
+                  (t) => t.target_id,
+                ) ?? []),
+              ])
+              const total = allTargets.size
+              const acquired = coveredTargets.size
+              return {
+                total_targets: total,
+                targets_acquired: acquired,
+                targets_missing: total - acquired,
+                coverage_percentage: total > 0 ? (acquired / total) * 100 : 0,
+                acquired_target_ids: [...coveredTargets],
+                missing_target_ids: [...allTargets].filter((t) => !coveredTargets.has(t)),
+              }
+            })(),
           }
 
           setResults({ scheduler: algoResult })
@@ -371,6 +400,7 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
       console.error('Planning error:', err)
     } finally {
       setIsPlanning(false)
+      planningGuardRef.current = false
     }
   }
 
@@ -396,9 +426,15 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
       warnings: [],
     }
 
-    // If repairing existing schedule, note it in warnings
+    // Note: repair mode with 0 drops is just incremental addition — no warning needed.
+    // Only warn if the repair actually drops acquisitions.
     if (schedulingReasoning?.mode === 'repair' && scheduleContext.count > 0) {
-      preview.warnings.push(`Repairing around ${scheduleContext.count} existing acquisitions`)
+      const rd = repairResult?.repair_diff
+      if (rd && rd.dropped.length > 0) {
+        preview.warnings.push(
+          `${rd.dropped.length} existing acquisition${rd.dropped.length !== 1 ? 's' : ''} will be replaced`,
+        )
+      }
     }
 
     // Set the preview and show modal
@@ -407,17 +443,24 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
     setShowCommitModal(true)
   }
 
-  const handleConfirmCommit = () => {
+  const handleConfirmCommit = async () => {
+    // Guard: prevent double-invocation (ref-based — survives React batched updates)
+    if (commitGuardRef.current) return
+    commitGuardRef.current = true
     if (results && pendingCommitAlgorithm && results[pendingCommitAlgorithm] && onPromoteToOrders) {
       setIsCommitting(true)
       try {
-        onPromoteToOrders(pendingCommitAlgorithm, results[pendingCommitAlgorithm])
+        // Await the async handler so the guard holds until the commit completes
+        await onPromoteToOrders(pendingCommitAlgorithm, results[pendingCommitAlgorithm])
       } finally {
         setIsCommitting(false)
         setShowCommitModal(false)
         setPendingCommitAlgorithm(null)
         setCommitPreview(null)
+        commitGuardRef.current = false
       }
+    } else {
+      commitGuardRef.current = false
     }
   }
 
@@ -519,11 +562,6 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
   const hasOpportunities = opportunities.length > 0
   const isDisabled = !hasOpportunities
 
-  // Calculate unique targets from opportunities
-  const uniqueTargets = hasOpportunities
-    ? new Set(opportunities.map((opp) => opp.target_id)).size
-    : 0
-
   // Auto-enable slew visualization when results arrive; update active schedule
   useEffect(() => {
     if (results && results[activeTab]) {
@@ -539,16 +577,35 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
   return (
     <div className="h-full flex flex-col bg-gray-900 text-white">
       {/* Status Bar */}
-      <div className="bg-gray-800 border-b border-gray-700 px-4 py-3">
-        <p className="text-xs text-gray-400">
-          {hasOpportunities
-            ? `${uniqueTargets} targets · ${opportunities.length} opportunities`
-            : 'Run Feasibility Analysis first'}
-        </p>
-      </div>
+      {!hasOpportunities && (
+        <div className="bg-gray-800 border-b border-gray-700 px-4 py-3">
+          <p className="text-xs text-gray-400">Run Feasibility Analysis first</p>
+        </div>
+      )}
 
-      {/* Main Content */}
-      <div className="flex-1 overflow-auto p-4 space-y-4">
+      {/* Apply Confirmation — inline step 2 (replaces main content) */}
+      {showCommitModal && commitPreview && (
+        <ApplyConfirmationPanel
+          preview={commitPreview}
+          isCommitting={isCommitting}
+          onConfirm={handleConfirmCommit}
+          onBack={handleCancelCommit}
+          scheduleData={
+            results && results[activeTab]
+              ? {
+                  schedule: results[activeTab].schedule,
+                  targetStatistics: results[activeTab].target_statistics,
+                  plannerSummary:
+                    repairResult?.planner_summary ?? results[activeTab]?.planner_summary,
+                  repairDiff: repairResult?.repair_diff,
+                }
+              : undefined
+          }
+        />
+      )}
+
+      {/* Main Content (hidden during confirmation) */}
+      <div className={`flex-1 overflow-auto p-4 space-y-4 ${showCommitModal ? 'hidden' : ''}`}>
         {/* No Opportunities Warning */}
         {!hasOpportunities && (
           <div className="bg-yellow-900/30 border border-yellow-700/50 rounded-lg p-4">
@@ -595,9 +652,9 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
             <div className="flex items-center gap-2 px-3 py-2 bg-blue-900/20 border border-blue-700/30 rounded-lg text-xs text-blue-300">
               <Shield size={12} />
               <span>
-                <span className="text-white font-medium">{scheduleContext.count}</span> committed
-                acquisition{scheduleContext.count !== 1 ? 's' : ''} in schedule — scheduler will
-                auto-repair around locked items
+                <span className="text-white font-medium">{scheduleContext.count}</span> existing
+                acquisition{scheduleContext.count !== 1 ? 's' : ''} in schedule — locked items will
+                be preserved
               </span>
             </div>
           )}
@@ -655,139 +712,277 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
           </div>
         </div>
 
-        {/* Action Button */}
-        <div
-          className={`bg-gray-800 rounded-lg p-3 ${
-            isDisabled ? 'opacity-50 pointer-events-none' : ''
-          }`}
-        >
-          {!results ? (
-            <button
-              onClick={handleRunPlanning}
-              disabled={isPlanning}
-              className="w-full px-3 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-medium"
-            >
-              {isPlanning ? 'Optimizing...' : '▶ Run Scheduler'}
-            </button>
-          ) : (
-            <div className="flex gap-2">
-              <button
-                onClick={handleClearResults}
-                className="flex-1 px-3 py-2 bg-gray-600 hover:bg-gray-500 rounded text-sm font-medium"
-              >
-                Change Presets & Re-run
-              </button>
-            </div>
-          )}
-        </div>
-
         {/* Results Section */}
         {results && results[activeTab] && (
-          <div className="bg-gray-800 rounded-lg p-3 space-y-3">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <h3 className="text-sm font-semibold text-white">Schedule Results</h3>
-              <button
-                onClick={handleAcceptPlan}
-                disabled={!results[activeTab]}
-                className="px-3 py-1.5 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-xs font-semibold"
-                title="Apply plan to schedule"
-              >
-                {LABELS.APPLY}
-              </button>
-            </div>
+          <div className="space-y-3">
+            {/* ── Developer mode: full detail panels ── */}
+            {isDeveloperMode && (
+              <div className="bg-gray-800 rounded-lg p-3 space-y-3">
+                <h3 className="text-sm font-semibold text-white">Schedule Results</h3>
+                {/* Scheduling Reasoning Banner */}
+                {schedulingReasoning && (
+                  <div
+                    className={`flex items-start gap-2 px-3 py-2 rounded-lg text-xs border ${
+                      schedulingReasoning.mode === 'repair'
+                        ? 'bg-orange-900/20 border-orange-700/40 text-orange-200'
+                        : 'bg-blue-900/20 border-blue-700/40 text-blue-200'
+                    }`}
+                  >
+                    <Shield size={14} className="mt-0.5 shrink-0" />
+                    <div>
+                      <span className="font-semibold">
+                        {schedulingReasoning.mode === 'repair' ? 'Repair Mode' : 'New Schedule'}
+                      </span>
+                      <span className="text-gray-400"> — </span>
+                      {schedulingReasoning.reason}
+                    </div>
+                  </div>
+                )}
 
-            {/* Scheduling Reasoning Banner */}
-            {schedulingReasoning && (
-              <div
-                className={`flex items-start gap-2 px-3 py-2 rounded-lg text-xs border ${
-                  schedulingReasoning.mode === 'repair'
-                    ? 'bg-orange-900/20 border-orange-700/40 text-orange-200'
-                    : 'bg-blue-900/20 border-blue-700/40 text-blue-200'
-                }`}
-              >
-                <Shield size={14} className="mt-0.5 shrink-0" />
-                <div>
-                  <span className="font-semibold">
-                    {schedulingReasoning.mode === 'repair' ? 'Repair Mode' : 'New Schedule'}
-                  </span>
-                  <span className="text-gray-400"> — </span>
-                  {schedulingReasoning.mode === 'repair'
-                    ? schedulingReasoning.reason
-                    : 'No existing committed schedule found. Building a new optimized schedule from all available opportunities.'}
-                </div>
+                {/* Repair Diff Panel (repair mode) */}
+                {schedulingReasoning?.mode === 'repair' && repairResult && (
+                  <RepairDiffPanel repairResult={repairResult} />
+                )}
               </div>
             )}
 
-            {/* Repair Diff Panel (shown in repair mode) */}
-            {schedulingReasoning?.mode === 'repair' && repairResult && (
-              <RepairDiffPanel repairResult={repairResult} />
-            )}
+            {/* ── Planner mode: intelligent schedule narrative ── */}
+            {!isDeveloperMode &&
+              results[activeTab] &&
+              (() => {
+                const ts = results[activeTab]?.target_statistics
+                const scheduled = results[activeTab].schedule.length
+                const isRepair = schedulingReasoning?.mode === 'repair' && repairResult
+                const rd = repairResult?.repair_diff
+                const ps = repairResult?.planner_summary ?? results[activeTab]?.planner_summary
+
+                // Format time for display: "Feb 20, 14:22 UTC"
+                const fmtTime = (iso: string) => {
+                  try {
+                    const d = new Date(iso)
+                    return (
+                      d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) +
+                      ', ' +
+                      d.toLocaleTimeString('en-US', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: false,
+                        timeZone: 'UTC',
+                      }) +
+                      ' UTC'
+                    )
+                  } catch {
+                    return iso
+                  }
+                }
+
+                return (
+                  <div className="bg-gray-800/50 rounded-lg border border-gray-700/60 overflow-hidden">
+                    <div className="p-3 space-y-3">
+                      {/* Headline — what happened */}
+                      <div className="text-sm text-gray-300 leading-relaxed">
+                        {isRepair && rd ? (
+                          rd.change_score.num_changes === 0 ? (
+                            <p>No changes needed. The current schedule is already optimal.</p>
+                          ) : (
+                            <p>
+                              Schedule updated:{' '}
+                              <span className="text-white font-medium">{scheduled}</span> total
+                              acquisition{scheduled !== 1 ? 's' : ''}
+                              {ps ? (
+                                <>
+                                  {' '}
+                                  across{' '}
+                                  <span className="text-white font-medium">
+                                    {ps.satellites_used.length}
+                                  </span>{' '}
+                                  satellite{ps.satellites_used.length !== 1 ? 's' : ''}
+                                </>
+                              ) : (
+                                ''
+                              )}
+                              {ts ? (
+                                <>
+                                  {' '}
+                                  covering{' '}
+                                  <span className="text-white font-medium">
+                                    {ts.targets_acquired}
+                                  </span>{' '}
+                                  of {ts.total_targets} target{ts.total_targets !== 1 ? 's' : ''}
+                                </>
+                              ) : (
+                                ''
+                              )}
+                              .
+                            </p>
+                          )
+                        ) : (
+                          <p>
+                            New schedule with{' '}
+                            <span className="text-white font-medium">{scheduled}</span> acquisition
+                            {scheduled !== 1 ? 's' : ''}
+                            {ts ? (
+                              <>
+                                {' '}
+                                covering{' '}
+                                <span className="text-white font-medium">
+                                  {ts.targets_acquired}
+                                </span>{' '}
+                                of {ts.total_targets} target{ts.total_targets !== 1 ? 's' : ''}
+                              </>
+                            ) : (
+                              ''
+                            )}
+                            .
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Per-target breakdown — the intelligent part */}
+                      {ps && ps.target_acquisitions.length > 0 && (
+                        <div className="space-y-1 pt-1 border-t border-gray-700/30">
+                          <div className="text-[11px] text-gray-500 font-medium uppercase tracking-wide mb-1">
+                            Target Assignments
+                          </div>
+                          {ps.target_acquisitions.map((acq, i) => (
+                            <div
+                              key={i}
+                              className="flex items-center justify-between text-xs py-1 border-b border-gray-700/20 last:border-b-0"
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span
+                                  className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${acq.action === 'kept' ? 'bg-gray-500' : 'bg-blue-400'}`}
+                                />
+                                <span className="text-gray-200 truncate">{acq.target_id}</span>
+                              </div>
+                              <div className="flex items-center gap-2 text-gray-500 flex-shrink-0 ml-2">
+                                <span className="text-gray-400">{acq.satellite_id}</span>
+                                <span>·</span>
+                                <span>{fmtTime(acq.start_time)}</span>
+                                {acq.action === 'kept' && (
+                                  <span className="text-[10px] text-gray-600">(kept)</span>
+                                )}
+                                {acq.action === 'added' && (
+                                  <span className="text-[10px] text-blue-400/70">new</span>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Unreachable targets */}
+                      {ps && ps.targets_not_scheduled.length > 0 && (
+                        <div className="space-y-1 pt-1 border-t border-gray-700/30">
+                          <div className="text-[11px] text-gray-500 font-medium uppercase tracking-wide mb-1">
+                            Not Scheduled
+                          </div>
+                          {ps.targets_not_scheduled.map((t, i) => (
+                            <div
+                              key={i}
+                              className="flex items-center justify-between text-xs py-0.5"
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500/60 flex-shrink-0" />
+                                <span className="text-gray-400">{t.target_id}</span>
+                              </div>
+                              <span className="text-[10px] text-gray-600 ml-2">{t.reason}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Missing targets from target_statistics (no planner_summary fallback) */}
+                      {!ps && ts && ts.targets_missing > 0 && (
+                        <div className="text-xs text-gray-500 pt-1 border-t border-gray-700/30">
+                          <span className="text-amber-400/80">⚠</span> {ts.targets_missing} target
+                          {ts.targets_missing !== 1 ? 's' : ''} not reachable:{' '}
+                          {ts.missing_target_ids.join(', ')}
+                        </div>
+                      )}
+
+                      {/* Horizon info */}
+                      {ps?.horizon && (
+                        <div className="text-[10px] text-gray-600 text-center pt-1 border-t border-gray-700/30">
+                          Planning horizon: {fmtTime(ps.horizon.start)} → {fmtTime(ps.horizon.end)}
+                        </div>
+                      )}
+
+                      <p className="text-[10px] text-gray-600 text-center">
+                        Changes are preview-only until applied.
+                      </p>
+                    </div>
+                  </div>
+                )
+              })()}
 
             {/* Algorithm Details (no tabs - single algorithm) */}
             {results[activeTab] && (
               <div className="space-y-3">
-                {/* Target Coverage Summary - Compact Style */}
-                {(() => {
-                  const ts = results[activeTab]?.target_statistics
-                  if (!ts) return null
-                  return (
-                    <div className="bg-gray-800 rounded-lg p-3">
-                      <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">
-                        Target Coverage
-                      </h4>
-                      <div className="grid grid-cols-4 gap-2 text-xs">
-                        <div className="bg-gray-700/50 rounded p-2">
-                          <div className="text-gray-400 text-[10px]">Total</div>
-                          <div className="text-lg font-bold text-white">{ts.total_targets}</div>
-                        </div>
-                        <div className="bg-gray-700/50 rounded p-2">
-                          <div className="text-gray-400 text-[10px]">Acquired</div>
-                          <div className="text-lg font-bold text-green-400">
-                            {ts.targets_acquired}
+                {/* Target Coverage — dev only (planner sees unified summary above) */}
+                {isDeveloperMode &&
+                  (() => {
+                    const ts = results[activeTab]?.target_statistics
+                    if (!ts) return null
+                    return (
+                      <div className="bg-gray-800 rounded-lg p-3">
+                        <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">
+                          Target Coverage
+                        </h4>
+                        <div className="grid grid-cols-4 gap-2 text-xs">
+                          <div className="bg-gray-700/50 rounded p-2">
+                            <div className="text-gray-400 text-[10px]">Total</div>
+                            <div className="text-lg font-bold text-white">{ts.total_targets}</div>
+                          </div>
+                          <div className="bg-gray-700/50 rounded p-2">
+                            <div className="text-gray-400 text-[10px]">Acquired</div>
+                            <div className="text-lg font-bold text-green-400">
+                              {ts.targets_acquired}
+                            </div>
+                          </div>
+                          <div className="bg-gray-700/50 rounded p-2">
+                            <div className="text-gray-400 text-[10px]">Missing</div>
+                            <div
+                              className={`text-lg font-bold ${
+                                ts.targets_missing > 0 ? 'text-red-400' : 'text-white'
+                              }`}
+                            >
+                              {ts.targets_missing}
+                            </div>
+                          </div>
+                          <div className="bg-gray-700/50 rounded p-2">
+                            <div className="text-gray-400 text-[10px]">Coverage</div>
+                            <div className="text-lg font-bold text-green-400">
+                              {ts.coverage_percentage.toFixed(1)}%
+                            </div>
                           </div>
                         </div>
-                        <div className="bg-gray-700/50 rounded p-2">
-                          <div className="text-gray-400 text-[10px]">Missing</div>
-                          <div
-                            className={`text-lg font-bold ${
-                              ts.targets_missing > 0 ? 'text-red-400' : 'text-white'
-                            }`}
-                          >
-                            {ts.targets_missing}
-                          </div>
-                        </div>
-                        <div className="bg-gray-700/50 rounded p-2">
-                          <div className="text-gray-400 text-[10px]">Coverage</div>
-                          <div className="text-lg font-bold text-green-400">
-                            {ts.coverage_percentage.toFixed(1)}%
-                          </div>
-                        </div>
-                      </div>
 
-                      {/* Missing Targets */}
-                      {ts.targets_missing > 0 && (
-                        <div className="mt-2 bg-red-900/20 border border-red-700/30 rounded-lg p-2">
-                          <div className="flex items-center gap-2 mb-1.5">
-                            <div className="w-1.5 h-1.5 rounded-full bg-red-400" />
-                            <span className="text-[10px] font-semibold text-red-300 uppercase tracking-wide">
-                              {ts.targets_missing} missing target{ts.targets_missing > 1 ? 's' : ''}
-                            </span>
-                          </div>
-                          <div className="flex flex-wrap gap-1">
-                            {ts.missing_target_ids.map((targetId) => (
-                              <span
-                                key={targetId}
-                                className="px-2 py-0.5 bg-red-900/40 border border-red-700/30 text-red-200 rounded-full text-[10px]"
-                              >
-                                {targetId}
+                        {/* Missing Targets */}
+                        {ts.targets_missing > 0 && (
+                          <div className="mt-2 bg-red-900/20 border border-red-700/30 rounded-lg p-2">
+                            <div className="flex items-center gap-2 mb-1.5">
+                              <div className="w-1.5 h-1.5 rounded-full bg-red-400" />
+                              <span className="text-[10px] font-semibold text-red-300 uppercase tracking-wide">
+                                {ts.targets_missing} missing target
+                                {ts.targets_missing > 1 ? 's' : ''}
                               </span>
-                            ))}
+                            </div>
+                            <div className="flex flex-wrap gap-1">
+                              {ts.missing_target_ids.map((targetId: string) => (
+                                <span
+                                  key={targetId}
+                                  className="px-2 py-0.5 bg-red-900/40 border border-red-700/30 text-red-200 rounded-full text-[10px]"
+                                >
+                                  {targetId}
+                                </span>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                      )}
-                    </div>
-                  )
-                })()}
+                        )}
+                      </div>
+                    )
+                  })()}
 
                 {/* Globe Visualization Controls */}
                 <div className="flex items-center gap-3 flex-wrap">
@@ -847,42 +1042,44 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
                   )}
                 </div>
 
-                {/* Key Metrics — 5 most actionable values */}
-                <div className="grid grid-cols-5 gap-2 text-xs">
-                  <div className="bg-gray-700/50 rounded p-2 text-center">
-                    <div className="text-gray-400 text-[10px]">Scheduled</div>
-                    <div className="text-base font-bold text-white">
-                      {results[activeTab].metrics.opportunities_accepted}
+                {/* Key Metrics — dev only */}
+                {isDeveloperMode && (
+                  <div className="grid grid-cols-5 gap-2 text-xs">
+                    <div className="bg-gray-700/50 rounded p-2 text-center">
+                      <div className="text-gray-400 text-[10px]">Scheduled</div>
+                      <div className="text-base font-bold text-white">
+                        {results[activeTab].metrics.opportunities_accepted}
+                      </div>
+                    </div>
+                    <div className="bg-gray-700/50 rounded p-2 text-center">
+                      <div className="text-gray-400 text-[10px]">Value</div>
+                      <div className="text-base font-bold text-white">
+                        {results[activeTab].metrics.total_value?.toFixed(1) ?? '-'}
+                      </div>
+                    </div>
+                    <div className="bg-gray-700/50 rounded p-2 text-center">
+                      <div className="text-gray-400 text-[10px]">Off-Nadir</div>
+                      <div className="text-base font-bold text-white">
+                        {results[activeTab].angle_statistics?.avg_off_nadir_deg?.toFixed(1) ??
+                          results[activeTab].metrics.mean_incidence_deg?.toFixed(1) ??
+                          '-'}
+                        °
+                      </div>
+                    </div>
+                    <div className="bg-gray-700/50 rounded p-2 text-center">
+                      <div className="text-gray-400 text-[10px]">Maneuver</div>
+                      <div className="text-base font-bold text-white">
+                        {results[activeTab].metrics.total_maneuver_time_s?.toFixed(0) ?? '-'}s
+                      </div>
+                    </div>
+                    <div className="bg-gray-700/50 rounded p-2 text-center">
+                      <div className="text-gray-400 text-[10px]">Runtime</div>
+                      <div className="text-base font-bold text-white">
+                        {results[activeTab].metrics.runtime_ms?.toFixed(1) ?? '-'}ms
+                      </div>
                     </div>
                   </div>
-                  <div className="bg-gray-700/50 rounded p-2 text-center">
-                    <div className="text-gray-400 text-[10px]">Value</div>
-                    <div className="text-base font-bold text-white">
-                      {results[activeTab].metrics.total_value?.toFixed(1) ?? '-'}
-                    </div>
-                  </div>
-                  <div className="bg-gray-700/50 rounded p-2 text-center">
-                    <div className="text-gray-400 text-[10px]">Off-Nadir</div>
-                    <div className="text-base font-bold text-white">
-                      {results[activeTab].angle_statistics?.avg_off_nadir_deg?.toFixed(1) ??
-                        results[activeTab].metrics.mean_incidence_deg?.toFixed(1) ??
-                        '-'}
-                      °
-                    </div>
-                  </div>
-                  <div className="bg-gray-700/50 rounded p-2 text-center">
-                    <div className="text-gray-400 text-[10px]">Maneuver</div>
-                    <div className="text-base font-bold text-white">
-                      {results[activeTab].metrics.total_maneuver_time_s?.toFixed(0) ?? '-'}s
-                    </div>
-                  </div>
-                  <div className="bg-gray-700/50 rounded p-2 text-center">
-                    <div className="text-gray-400 text-[10px]">Runtime</div>
-                    <div className="text-base font-bold text-white">
-                      {results[activeTab].metrics.runtime_ms?.toFixed(1) ?? '-'}ms
-                    </div>
-                  </div>
-                </div>
+                )}
 
                 {/* Schedule Table */}
                 <div>
@@ -950,15 +1147,17 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
                             )}
                             <button
                               onClick={() => exportToCsv(activeTab)}
-                              className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm"
+                              className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm flex items-center gap-1"
                             >
-                              Export CSV
+                              <Download className="w-3.5 h-3.5" />
+                              CSV
                             </button>
                             <button
                               onClick={() => exportToJson(activeTab)}
-                              className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm"
+                              className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm flex items-center gap-1"
                             >
-                              Export JSON
+                              <Download className="w-3.5 h-3.5" />
+                              JSON
                             </button>
                           </div>
                         </div>
@@ -1191,15 +1390,36 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
         )}
       </div>
 
-      {/* Conflict Warning Modal */}
-      <ConflictWarningModal
-        isOpen={showCommitModal}
-        onClose={handleCancelCommit}
-        onConfirm={handleConfirmCommit}
-        onCancel={handleCancelCommit}
-        preview={commitPreview}
-        isCommitting={isCommitting}
-      />
+      {/* Sticky bottom action bar — single contextual action */}
+      {!showCommitModal && hasOpportunities && (
+        <div className="border-t border-gray-700 p-4 flex-shrink-0 space-y-2">
+          {results && results[activeTab] ? (
+            <>
+              <button
+                onClick={handleAcceptPlan}
+                className="w-full px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm font-semibold text-white"
+                title="Apply plan to schedule"
+              >
+                {LABELS.APPLY}
+              </button>
+              <button
+                onClick={handleClearResults}
+                className="w-full text-xs text-gray-500 hover:text-gray-300 py-1 transition-colors"
+              >
+                Change Presets &amp; Re-run
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={handleRunPlanning}
+              disabled={isPlanning || isDisabled}
+              className="w-full px-3 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-semibold text-white"
+            >
+              {isPlanning ? 'Optimizing...' : '▶ Run Scheduler'}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }

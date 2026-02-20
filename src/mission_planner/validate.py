@@ -25,7 +25,7 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -223,7 +223,7 @@ def run_all_scenarios(dry_run: bool = True, verbose: bool = False) -> bool:
 def save_report(report: Any) -> None:
     """Save report to disk."""
     reports_dir = project_root / "data" / "validation"
-    date_str = datetime.utcnow().strftime("%Y-%m-%d")
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     report_subdir = reports_dir / date_str
     report_subdir.mkdir(parents=True, exist_ok=True)
 

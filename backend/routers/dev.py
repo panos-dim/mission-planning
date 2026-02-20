@@ -7,12 +7,16 @@ These endpoints are read-only and guarded behind DEV_MODE env var.
 Endpoints:
 - GET  /api/v1/dev/schedule-snapshot  — snapshot metadata + acquisition IDs for a workspace
 - POST /api/v1/dev/write-artifacts    — write demo evidence artifacts to disk
+- GET  /api/v1/dev/metrics            — process RSS/VMS + last feasibility timing
 """
 
+import gc
 import json
 import logging
 import os
-from datetime import datetime
+import resource
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -20,6 +24,36 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.schedule_persistence import get_schedule_db
+
+# ---------------------------------------------------------------------------
+# Lightweight process-level metrics (no psutil dependency)
+# ---------------------------------------------------------------------------
+
+
+def _get_process_rss_mb() -> float:
+    """Return current process RSS in MB via resource module (macOS/Linux)."""
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    # macOS reports in bytes, Linux in KB
+    if hasattr(os, "uname") and os.uname().sysname == "Darwin":
+        return usage.ru_maxrss / (1024 * 1024)
+    return usage.ru_maxrss / 1024
+
+
+def _get_process_vms_mb() -> Optional[float]:
+    """Return process VMS in MB by reading /proc/self/status (Linux only)."""
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmSize:"):
+                    return int(line.split()[1]) / 1024  # KB → MB
+    except (FileNotFoundError, PermissionError, ValueError):
+        pass
+    return None
+
+
+# Module-level timing store: last feasibility run stats.
+# Written by the /mission/analyze handler if DEV_MODE (see note below).
+_last_feasibility_stats: Dict[str, Any] = {}
 
 logger = logging.getLogger(__name__)
 
@@ -86,12 +120,43 @@ class WriteArtifactsRequest(BaseModel):
     json_content: Dict[str, Any]
     markdown_content: str
     output_dir: str = "artifacts/demo"
+    filename_prefix: str = "RESHUFFLE_EVIDENCE"
 
 
 class WriteArtifactsResponse(BaseModel):
     success: bool
     json_path: str
     md_path: str
+
+
+class ProcessMetrics(BaseModel):
+    process_rss_mb: float
+    process_vms_mb: Optional[float] = None
+    uptime_seconds: Optional[float] = None
+
+
+class LastRequestParams(BaseModel):
+    target_count: Optional[int] = None
+    satellite_count: Optional[int] = None
+    duration_days: Optional[float] = None
+
+
+class GcStats(BaseModel):
+    collections: List[int] = Field(
+        default_factory=list, description="GC collection counts per generation"
+    )
+    thresholds: List[int] = Field(default_factory=list)
+    uncollectable: int = 0
+
+
+class MetricsResponse(BaseModel):
+    success: bool
+    process: ProcessMetrics
+    last_feasibility: Dict[str, Any] = Field(default_factory=dict)
+    last_response_bytes: Optional[int] = None
+    last_pass_count: Optional[int] = None
+    last_request_params: Optional[LastRequestParams] = None
+    gc_stats: Optional[GcStats] = None
 
 
 # =============================================================================
@@ -112,7 +177,7 @@ async def get_schedule_snapshot(
     _check_dev_mode()
 
     db = get_schedule_db()
-    now = datetime.utcnow().isoformat() + "Z"
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     # Get acquisitions strictly for this workspace (no NULL fallback)
     # list_acquisitions includes workspace_id IS NULL by default, so we
@@ -200,8 +265,8 @@ async def write_artifacts(request: WriteArtifactsRequest) -> WriteArtifactsRespo
     output_dir = Path(request.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    json_path = output_dir / "RESHUFFLE_EVIDENCE.json"
-    md_path = output_dir / "RESHUFFLE_EVIDENCE.md"
+    json_path = output_dir / f"{request.filename_prefix}.json"
+    md_path = output_dir / f"{request.filename_prefix}.md"
 
     try:
         with open(json_path, "w") as f:
@@ -220,3 +285,76 @@ async def write_artifacts(request: WriteArtifactsRequest) -> WriteArtifactsRespo
     except Exception as e:
         logger.error(f"[Dev Artifacts] Failed to write: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Process metrics endpoint
+# ---------------------------------------------------------------------------
+
+_server_start_time = time.monotonic()
+
+
+@router.get("/metrics", response_model=MetricsResponse)
+async def get_metrics() -> MetricsResponse:
+    """
+    Dev-only endpoint returning process-level metrics.
+
+    Returns RSS/VMS memory usage, last feasibility timing stats,
+    last response/pass metadata, and GC collection counts.
+    """
+    _check_dev_mode()
+
+    # GC stats
+    gc_counts = list(gc.get_count())
+    gc_thresholds = list(gc.get_threshold())
+    gc_info = GcStats(
+        collections=gc_counts,
+        thresholds=gc_thresholds,
+        uncollectable=len(gc.garbage),
+    )
+
+    # Build last_request_params from stored stats
+    last_req_params: Optional[LastRequestParams] = None
+    if _last_feasibility_stats:
+        last_req_params = LastRequestParams(
+            target_count=_last_feasibility_stats.get("target_count"),
+            satellite_count=_last_feasibility_stats.get("satellite_count"),
+            duration_days=_last_feasibility_stats.get("duration_days"),
+        )
+
+    return MetricsResponse(
+        success=True,
+        process=ProcessMetrics(
+            process_rss_mb=round(_get_process_rss_mb(), 2),
+            process_vms_mb=(
+                round(v, 2) if (v := _get_process_vms_mb()) is not None else None
+            ),
+            uptime_seconds=round(time.monotonic() - _server_start_time, 1),
+        ),
+        last_feasibility=dict(_last_feasibility_stats),
+        last_response_bytes=_last_feasibility_stats.get("response_bytes"),
+        last_pass_count=_last_feasibility_stats.get("pass_count"),
+        last_request_params=last_req_params,
+        gc_stats=gc_info,
+    )
+
+
+def record_feasibility_timing(
+    duration_seconds: float,
+    target_count: int,
+    satellite_count: int,
+    **extra: Any,
+) -> None:
+    """Called from mission/analyze handler to record timing (DEV_MODE only)."""
+    _last_feasibility_stats.clear()
+    _last_feasibility_stats.update(
+        {
+            "duration_seconds": round(duration_seconds, 3),
+            "target_count": target_count,
+            "satellite_count": satellite_count,
+            "recorded_at": datetime.now(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
+            **extra,
+        }
+    )

@@ -45,7 +45,9 @@ export const API_ENDPOINTS = {
   SCHEDULE_REPAIR_COMMIT: '/api/v1/schedule/repair/commit',
   SCHEDULE_COMMIT_HISTORY: '/api/v1/schedule/commit-history',
   SCHEDULE_ACQUISITION_LOCK: (id: string) => `/api/v1/schedule/acquisition/${id}/lock`,
+  SCHEDULE_ACQUISITION_DELETE: (id: string) => `/api/v1/schedule/acquisition/${id}`,
   SCHEDULE_BULK_LOCK: '/api/v1/schedule/acquisitions/bulk-lock',
+  SCHEDULE_BULK_DELETE: '/api/v1/schedule/acquisitions/bulk-delete',
   SCHEDULE_HARD_LOCK_COMMITTED: '/api/v1/schedule/acquisitions/hard-lock-committed',
 
   // Orders endpoints
@@ -59,6 +61,7 @@ export const API_ENDPOINTS = {
   // Dev endpoints (demo runner)
   DEV_SCHEDULE_SNAPSHOT: '/api/v1/dev/schedule-snapshot',
   DEV_WRITE_ARTIFACTS: '/api/v1/dev/write-artifacts',
+  DEV_METRICS: '/api/v1/dev/metrics',
 
   // Batching endpoints
   BATCHES: '/api/v1/batches',

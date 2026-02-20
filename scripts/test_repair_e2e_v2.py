@@ -196,7 +196,14 @@ check(
 # STEP 5: Verify horizon
 # ─────────────────────────────────────────────────────────────────────
 section("STEP 5: Verify Schedule Horizon")
-r = requests.get(f"{BASE}/api/v1/schedule/horizon", params={"workspace_id": WS_ID})
+r = requests.get(
+    f"{BASE}/api/v1/schedule/horizon",
+    params={
+        "workspace_id": WS_ID,
+        "from": "2026-02-10T00:00:00Z",
+        "to": "2026-02-12T00:00:00Z",
+    },
+)
 check("Horizon returns 200", r.status_code == 200)
 horizon = r.json()
 acqs = horizon.get("acquisitions", [])

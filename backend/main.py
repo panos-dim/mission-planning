@@ -16,11 +16,11 @@ import os
 import sys
 import tempfile
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from typing import Any, Dict, List, Optional, Union
 
-import requests  # type: ignore[import-untyped]
+import requests
 import yaml  # type: ignore[import-untyped]
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -373,8 +373,6 @@ async def validate_tle(tle_data: TLEData) -> Dict[str, Any]:
         satellite = SatelliteOrbit.from_tle_file(tle_file, satellite_name=tle_data.name)
 
         # Get current position for validation
-        from datetime import timezone
-
         now = datetime.now(timezone.utc)
         lat, lon, alt = satellite.get_position(now)
 
@@ -2486,10 +2484,22 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
                     if hasattr(opp.end_time, "isoformat")
                     else str(opp.end_time)
                 ),
-                "roll_angle_deg": getattr(opp, "roll_angle_deg", 0.0),
-                "pitch_angle_deg": getattr(opp, "pitch_angle_deg", 0.0),
+                "roll_angle_deg": (
+                    getattr(opp, "incidence_angle", None)
+                    if getattr(opp, "incidence_angle", None) is not None
+                    else getattr(opp, "roll_angle_deg", 0.0)
+                ),
+                "pitch_angle_deg": (
+                    getattr(opp, "pitch_angle", None)
+                    if getattr(opp, "pitch_angle", None) is not None
+                    else getattr(opp, "pitch_angle_deg", 0.0)
+                ),
                 "value": getattr(opp, "value", 1.0),
-                "incidence_angle_deg": getattr(opp, "incidence_angle_deg", None),
+                "incidence_angle_deg": (
+                    getattr(opp, "incidence_angle", None)
+                    if getattr(opp, "incidence_angle", None) is not None
+                    else getattr(opp, "incidence_angle_deg", None)
+                ),
                 "quality_score": getattr(opp, "quality_score", None),
                 "priority": getattr(opp, "priority", 1),
             }
@@ -2701,6 +2711,39 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
                 else 0.0
             )
 
+            # Build planner_summary for intelligent UI narrative
+            _ps_target_acqs = []
+            _ps_satellites_used = set()
+            for s in schedule:
+                _ps_satellites_used.add(s.satellite_id)
+                _ps_target_acqs.append(
+                    {
+                        "target_id": s.target_id,
+                        "satellite_id": s.satellite_id,
+                        "start_time": (
+                            s.start_time.isoformat()
+                            if hasattr(s.start_time, "isoformat")
+                            else str(s.start_time)
+                        ),
+                        "end_time": (
+                            s.end_time.isoformat()
+                            if hasattr(s.end_time, "isoformat")
+                            else str(s.end_time)
+                        ),
+                        "action": "added",
+                    }
+                )
+            _ps_not_scheduled = []
+            for tid in sorted(missing_targets):
+                _ps_not_scheduled.append(
+                    {
+                        "target_id": tid,
+                        "reason": "No feasible slot within planning constraints",
+                    }
+                )
+            _horizon_start = mission_data.get("start_time", "")
+            _horizon_end = mission_data.get("end_time", "")
+
             # Package results with target-level info and angle statistics
             results[algo_name] = {
                 "schedule": [s.to_dict() for s in schedule],
@@ -2717,6 +2760,33 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
                     "avg_off_nadir_deg": round(avg_incidence_temp, 2),
                     "avg_cross_track_deg": round(avg_roll_temp, 2),
                     "avg_along_track_deg": round(avg_pitch_temp, 2),
+                },
+                "planner_summary": {
+                    "target_acquisitions": _ps_target_acqs,
+                    "targets_not_scheduled": _ps_not_scheduled,
+                    "horizon": {
+                        "start": (
+                            _horizon_start
+                            if isinstance(_horizon_start, str)
+                            else (
+                                _horizon_start.isoformat()
+                                if hasattr(_horizon_start, "isoformat")
+                                else str(_horizon_start)
+                            )
+                        ),
+                        "end": (
+                            _horizon_end
+                            if isinstance(_horizon_end, str)
+                            else (
+                                _horizon_end.isoformat()
+                                if hasattr(_horizon_end, "isoformat")
+                                else str(_horizon_end)
+                            )
+                        ),
+                    },
+                    "satellites_used": sorted(_ps_satellites_used),
+                    "total_targets_with_opportunities": total_targets,
+                    "total_targets_covered": len(acquired_targets),
                 },
             }
 
@@ -2815,7 +2885,7 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
             }
 
         # Compute audit metadata for instrumentation
-        run_timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        run_timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         run_uuid = str(uuid.uuid4())[:8]
         run_id = f"run_{run_timestamp}_{run_uuid}"
         candidate_plan_id = f"plan_temp_{run_uuid}"

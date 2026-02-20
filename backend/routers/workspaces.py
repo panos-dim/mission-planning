@@ -78,9 +78,9 @@ def _migrate_orders_state_to_v2(
         # Create a plan record for this AcceptedOrder
         import hashlib
         import uuid
-        from datetime import datetime
+        from datetime import datetime, timezone
 
-        run_id = f"migrated_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        run_id = f"migrated_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
         input_hash = f"sha256:{hashlib.sha256(order_id.encode()).hexdigest()[:16]}"
 
         metrics = order.get("metrics", {})

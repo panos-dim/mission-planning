@@ -51,8 +51,20 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
     [toggleLock],
   )
 
+  // PR-UI-021: Build satellite name lookup from mission context
+  const satelliteNameMap = useMemo(() => {
+    const map = new Map<string, string>()
+    if (missionState.missionData?.satellites) {
+      for (const sat of missionState.missionData.satellites) {
+        map.set(sat.id, sat.name)
+      }
+    }
+    return map
+  }, [missionState.missionData?.satellites])
+
   // PR-OPS-REPAIR-DEFAULT-01: Convert orders to timeline acquisitions
   // PR-LOCK-OPS-01: Merge lock levels from lockStore
+  // PR-UI-021: Plumb satellite_name + off_nadir_deg for hover tooltip
   const timelineAcquisitions = useMemo((): ScheduledAcquisition[] => {
     const acquisitions: ScheduledAcquisition[] = []
     const seen = new Set<string>()
@@ -72,16 +84,18 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
           mode: imagingType === 'sar' ? 'SAR' : 'Optical',
           has_conflict: false,
           order_id: order.order_id,
+          satellite_name: satelliteNameMap.get(item.satellite_id) || item.satellite_id,
+          off_nadir_deg: Math.abs(item.droll_deg),
         })
       }
     }
     return acquisitions
-  }, [orders, lockLevels, imagingType])
+  }, [orders, lockLevels, imagingType, satelliteNameMap])
 
   const tabs: Tab[] = [
     {
       id: SCHEDULE_TABS.COMMITTED,
-      label: 'Committed',
+      label: 'Schedule',
       icon: CheckSquare,
       badge: orders.length > 0 ? orders.length : undefined,
       badgeColor: 'green',
@@ -177,9 +191,9 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
         {activeTab === SCHEDULE_TABS.HISTORY && showHistoryTab && (
           <div className="p-4 text-center text-gray-500">
             <History className="w-12 h-12 mx-auto mb-3 opacity-50" />
-            <h3 className="text-sm font-medium text-gray-400 mb-1">Commit History</h3>
+            <h3 className="text-sm font-medium text-gray-400 mb-1">Schedule History</h3>
             <p className="text-xs text-gray-500">
-              Audit log of schedule commits. Available in future release.
+              Audit log of schedule changes. Available in future release.
             </p>
           </div>
         )}

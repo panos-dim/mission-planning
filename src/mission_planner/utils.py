@@ -342,9 +342,9 @@ def get_current_utc() -> datetime:
     Get current UTC datetime.
 
     Returns:
-        Current UTC datetime (timezone-naive)
+        Current UTC datetime (timezone-aware, tzinfo=timezone.utc)
     """
-    return datetime.utcnow()
+    return datetime.now(timezone.utc)
 
 
 def ensure_directory_exists(directory: Union[str, Path]) -> Path:

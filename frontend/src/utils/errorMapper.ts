@@ -88,8 +88,8 @@ const ERROR_TEMPLATES: Record<string, Omit<MappedError, 'code' | 'technical'>> =
 
   // Commit errors
   [ERROR_CODES.CONFLICT_BLOCK]: {
-    message: 'Cannot commit: conflicts exist',
-    suggestion: 'Use Repair mode to resolve scheduling conflicts before committing.',
+    message: 'Cannot apply: conflicts exist',
+    suggestion: 'Use Repair mode to resolve scheduling conflicts before applying.',
     severity: 'error',
   },
   [ERROR_CODES.HARD_LOCK_BLOCK]: {
@@ -98,7 +98,7 @@ const ERROR_TEMPLATES: Record<string, Omit<MappedError, 'code' | 'technical'>> =
     severity: 'error',
   },
   [ERROR_CODES.ALREADY_COMMITTED]: {
-    message: 'Plan already committed',
+    message: 'Plan already applied',
     suggestion: 'Generate a new plan to make additional changes.',
     severity: 'warning',
   },

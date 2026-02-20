@@ -26,7 +26,7 @@ import type { TargetData } from '../types'
 
 const LARGE_CHANGE_THRESHOLD = 20
 
-export interface RiskAssessment {
+interface RiskAssessment {
   hasConflicts: boolean
   conflictCount: number
   droppedHighPriority: Array<{
@@ -41,7 +41,7 @@ export interface RiskAssessment {
   warnings: string[]
 }
 
-export function computeRiskAssessment(
+function computeRiskAssessment(
   repairDiff: RepairDiff,
   _metricsComparison: MetricsComparison,
   commitPreview: CommitPreview,
@@ -255,7 +255,7 @@ export default function RepairCommitModal({
             ) : (
               <CheckCircle className="w-5 h-5 text-green-400" />
             )}
-            Commit Preview
+            Apply Preview
           </h2>
           <button
             onClick={onClose}
@@ -327,7 +327,7 @@ export default function RepairCommitModal({
               </div>
             </div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-gray-400">Conflicts after commit</span>
+              <span className="text-gray-400">Conflicts after apply</span>
               <span
                 className={`font-medium ${risk.conflictCount > 0 ? 'text-red-400' : 'text-green-400'}`}
               >
@@ -462,7 +462,7 @@ export default function RepairCommitModal({
                 </span>
                 <span className="text-red-400/60 text-xs block mt-0.5">
                   {risk.conflictCount} conflict
-                  {risk.conflictCount !== 1 ? 's' : ''} will need resolution after commit
+                  {risk.conflictCount !== 1 ? 's' : ''} will need resolution after apply
                 </span>
               </label>
             </div>
@@ -470,13 +470,11 @@ export default function RepairCommitModal({
 
           {/* Notes */}
           <div>
-            <label className="block text-xs font-medium text-gray-400 mb-1">
-              Commit Notes (optional)
-            </label>
+            <label className="block text-xs font-medium text-gray-400 mb-1">Notes (optional)</label>
             <textarea
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              placeholder="Reason for this repair commit..."
+              placeholder="Reason for this change..."
               className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 resize-none"
               rows={2}
             />
@@ -511,7 +509,7 @@ export default function RepairCommitModal({
                 px-4 py-2 text-sm rounded-lg transition flex items-center gap-2
                 ${
                   canCommit
-                    ? 'bg-green-600 hover:bg-green-500 text-white'
+                    ? 'bg-blue-600 hover:bg-blue-500 text-white'
                     : 'bg-gray-600 text-gray-400 cursor-not-allowed'
                 }
                 disabled:opacity-50
@@ -520,12 +518,12 @@ export default function RepairCommitModal({
               {isCommitting ? (
                 <>
                   <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  Committing...
+                  Applying...
                 </>
               ) : (
                 <>
                   <CheckCircle className="w-4 h-4" />
-                  Confirm Commit
+                  Confirm Apply
                 </>
               )}
             </button>

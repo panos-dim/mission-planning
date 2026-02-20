@@ -16,7 +16,7 @@ import uuid
 import zlib
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
@@ -258,7 +258,7 @@ class WorkspaceDB:
             Workspace ID
         """
         workspace_id = str(uuid.uuid4())
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
 
         # Extract counts from scenario config
         satellites_count = 0
@@ -368,7 +368,7 @@ class WorkspaceDB:
         Returns:
             True if update succeeded
         """
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -615,7 +615,7 @@ class WorkspaceDB:
             return None
 
         export_data = workspace.to_dict(include_czml=True)
-        export_data["export_timestamp"] = datetime.utcnow().isoformat() + "Z"
+        export_data["export_timestamp"] = datetime.now(timezone.utc).isoformat() + "Z"
         export_data["export_version"] = SCHEMA_VERSION
 
         return export_data

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import {
   Satellite,
   ChevronRight,
@@ -24,7 +24,7 @@ import { usePreviewTargetsStore } from '../store/previewTargetsStore'
 import { useOrdersStore } from '../store/ordersStore'
 import { usePlanningStore } from '../store/planningStore'
 import { AlgorithmResult, AcceptedOrder, WorkspaceData, SceneObject, TargetData } from '../types'
-import { commitScheduleDirect, DirectCommitItem } from '../api/scheduleApi'
+import { commitScheduleDirect, commitRepairPlan, DirectCommitItem } from '../api/scheduleApi'
 import { LEFT_SIDEBAR_PANELS, SIMPLE_MODE_LEFT_PANELS, isDebugMode } from '../constants/simpleMode'
 import { LABELS } from '../constants/labels'
 
@@ -46,9 +46,16 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
   const [activePanel, setActivePanel] = useState<string | null>('mission')
   const [isPanelOpen, setIsPanelOpen] = useState(true)
   const [orders, setOrders] = useState<AcceptedOrder[]>(() => {
-    // Load orders from localStorage on mount
+    // Load orders from localStorage on mount, dedup by order_id
     const stored = localStorage.getItem('acceptedOrders')
-    return stored ? JSON.parse(stored) : []
+    if (!stored) return []
+    const parsed: AcceptedOrder[] = JSON.parse(stored)
+    const seen = new Set<string>()
+    return parsed.filter((o) => {
+      if (seen.has(o.order_id)) return false
+      seen.add(o.order_id)
+      return true
+    })
   })
   const { setLeftSidebarOpen, setActiveLeftPanel, leftSidebarWidth, setLeftSidebarWidth, uiMode } =
     useVisStore()
@@ -70,106 +77,109 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
   const hasMissionData = !!state.missionData
 
   // Handler for loading workspace data into MissionContext
-  const handleWorkspaceLoad = (_workspaceId: string, workspaceData: WorkspaceData) => {
-    // Create scene objects from workspace data
-    const sceneObjects: SceneObject[] = []
-    const now = new Date().toISOString()
+  const handleWorkspaceLoad = useCallback(
+    (_workspaceId: string, workspaceData: WorkspaceData) => {
+      // Create scene objects from workspace data
+      const sceneObjects: SceneObject[] = []
+      const now = new Date().toISOString()
 
-    // Add satellites from scenario_config
-    if (workspaceData.scenario_config?.satellites) {
-      workspaceData.scenario_config.satellites.forEach(
-        (sat: { id?: string; name: string; color?: string }) => {
-          sceneObjects.push({
-            id: sat.id || `sat_${sat.name}`,
-            name: sat.name,
-            type: 'satellite',
-            visible: true,
-            color: sat.color || '#FFD700',
-            createdAt: now,
-            updatedAt: now,
-          })
-        },
-      )
-    }
-
-    // Add targets from scenario_config
-    if (workspaceData.scenario_config?.targets) {
-      workspaceData.scenario_config.targets.forEach(
-        (target: { name: string; latitude: number; longitude: number; priority?: number }) => {
-          sceneObjects.push({
-            id: `target_${target.name}`,
-            name: target.name,
-            type: 'target',
-            visible: true,
-            position: {
-              latitude: target.latitude,
-              longitude: target.longitude,
-            },
-            color: '#3B82F6',
-            createdAt: now,
-            updatedAt: now,
-          })
-        },
-      )
-    }
-
-    // Populate Object Tree via Zustand store
-    useSceneObjectStore.getState().setSceneObjects(sceneObjects)
-
-    // Set active workspace via Zustand store
-    useWorkspaceStore.getState().setActiveWorkspace(workspaceData.id)
-
-    // Restore full mission data if available (for Mission Results panel)
-    const storedMissionData = workspaceData.analysis_state?.mission_data
-    if (storedMissionData && workspaceData.czml_data && workspaceData.czml_data.length > 0) {
-      // Full mission data available - restore analysis results with CZML
-      dispatch({
-        type: 'SET_MISSION_DATA',
-        payload: {
-          missionData: storedMissionData,
-          czmlData: workspaceData.czml_data,
-        },
-      })
-    } else if (workspaceData.scenario_config?.targets) {
-      // No full mission data - just show preview targets on map
-      const previewTargets: TargetData[] = workspaceData.scenario_config.targets.map(
-        (target: {
-          name: string
-          latitude: number
-          longitude: number
-          priority?: number
-          color?: string
-        }) => ({
-          name: target.name,
-          latitude: target.latitude,
-          longitude: target.longitude,
-          priority: target.priority || 1,
-          color: target.color || '#3B82F6',
-        }),
-      )
-      setHidePreview(false) // Ensure preview is visible
-      setPreviewTargets(previewTargets)
-    }
-
-    // Restore planning results if available
-    console.log('[Workspace Load] planning_state:', workspaceData.planning_state)
-    console.log('[Workspace Load] orders_state:', workspaceData.orders_state)
-    if (workspaceData.planning_state?.algorithm_runs) {
-      console.log('[Workspace Load] Restoring planning results')
-      setPlanningResults(
-        workspaceData.planning_state.algorithm_runs as Record<string, AlgorithmResult>,
-      )
-      if (workspaceData.planning_state.selected_algorithm) {
-        setActiveAlgorithm(workspaceData.planning_state.selected_algorithm)
+      // Add satellites from scenario_config
+      if (workspaceData.scenario_config?.satellites) {
+        workspaceData.scenario_config.satellites.forEach(
+          (sat: { id?: string; name: string; color?: string }) => {
+            sceneObjects.push({
+              id: sat.id || `sat_${sat.name}`,
+              name: sat.name,
+              type: 'satellite',
+              visible: true,
+              color: sat.color || '#FFD700',
+              createdAt: now,
+              updatedAt: now,
+            })
+          },
+        )
       }
-    }
 
-    // Restore orders if available
-    if (workspaceData.orders_state?.orders && Array.isArray(workspaceData.orders_state.orders)) {
-      console.log('[Workspace Load] Restoring orders')
-      setOrders(workspaceData.orders_state.orders as AcceptedOrder[])
-    }
-  }
+      // Add targets from scenario_config
+      if (workspaceData.scenario_config?.targets) {
+        workspaceData.scenario_config.targets.forEach(
+          (target: { name: string; latitude: number; longitude: number; priority?: number }) => {
+            sceneObjects.push({
+              id: `target_${target.name}`,
+              name: target.name,
+              type: 'target',
+              visible: true,
+              position: {
+                latitude: target.latitude,
+                longitude: target.longitude,
+              },
+              color: '#3B82F6',
+              createdAt: now,
+              updatedAt: now,
+            })
+          },
+        )
+      }
+
+      // Populate Object Tree via Zustand store
+      useSceneObjectStore.getState().setSceneObjects(sceneObjects)
+
+      // Set active workspace via Zustand store
+      useWorkspaceStore.getState().setActiveWorkspace(workspaceData.id)
+
+      // Restore full mission data if available (for Mission Results panel)
+      const storedMissionData = workspaceData.analysis_state?.mission_data
+      if (storedMissionData && workspaceData.czml_data && workspaceData.czml_data.length > 0) {
+        // Full mission data available - restore analysis results with CZML
+        dispatch({
+          type: 'SET_MISSION_DATA',
+          payload: {
+            missionData: storedMissionData,
+            czmlData: workspaceData.czml_data,
+          },
+        })
+      } else if (workspaceData.scenario_config?.targets) {
+        // No full mission data - just show preview targets on map
+        const previewTargets: TargetData[] = workspaceData.scenario_config.targets.map(
+          (target: {
+            name: string
+            latitude: number
+            longitude: number
+            priority?: number
+            color?: string
+          }) => ({
+            name: target.name,
+            latitude: target.latitude,
+            longitude: target.longitude,
+            priority: target.priority || 1,
+            color: target.color || '#3B82F6',
+          }),
+        )
+        setHidePreview(false) // Ensure preview is visible
+        setPreviewTargets(previewTargets)
+      }
+
+      // Restore planning results if available
+      console.log('[Workspace Load] planning_state:', workspaceData.planning_state)
+      console.log('[Workspace Load] orders_state:', workspaceData.orders_state)
+      if (workspaceData.planning_state?.algorithm_runs) {
+        console.log('[Workspace Load] Restoring planning results')
+        setPlanningResults(
+          workspaceData.planning_state.algorithm_runs as Record<string, AlgorithmResult>,
+        )
+        if (workspaceData.planning_state.selected_algorithm) {
+          setActiveAlgorithm(workspaceData.planning_state.selected_algorithm)
+        }
+      }
+
+      // Restore orders if available
+      if (workspaceData.orders_state?.orders && Array.isArray(workspaceData.orders_state.orders)) {
+        console.log('[Workspace Load] Restoring orders')
+        setOrders(workspaceData.orders_state.orders as AcceptedOrder[])
+      }
+    },
+    [dispatch, setPreviewTargets, setHidePreview, setPlanningResults, setActiveAlgorithm],
+  )
 
   // Sync panel state to global store
   useEffect(() => {
@@ -188,106 +198,150 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
 
   // Handler for promoting schedule to orders
   // Now calls backend API to persist acquisitions to the database
-  const handlePromoteToOrders = async (algorithm: string, result: AlgorithmResult) => {
-    const timestamp = new Date().toISOString()
-    // Get existing order count for sequential naming
-    const existingCount = orders.length + 1
-    const dateFormatted = new Date().toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-    })
-
-    // Extract unique satellites and targets
-    const satellites = [...new Set(result.schedule.map((s) => s.satellite_id))]
-    const targets = [...new Set(result.schedule.map((s) => s.target_id))]
-
-    // Build items for direct commit API
-    const commitItems: DirectCommitItem[] = result.schedule.map((s) => ({
-      opportunity_id: s.opportunity_id,
-      satellite_id: s.satellite_id,
-      target_id: s.target_id,
-      start_time: s.start_time,
-      end_time: s.end_time,
-      roll_angle_deg: s.roll_angle || s.delta_roll || 0,
-      pitch_angle_deg: s.pitch_angle || 0,
-      value: s.value,
-      incidence_angle_deg: s.incidence_angle,
-      sar_mode: s.sar_mode,
-      look_side: s.look_side,
-      pass_direction: s.pass_direction,
-    }))
-
-    // Try to commit to backend first
-    let backendCommitSuccess = false
-    let planId: string | undefined
-
-    try {
-      console.log('[PromoteToOrders] Committing to backend...', {
-        algorithm,
-        itemCount: commitItems.length,
+  const handlePromoteToOrders = useCallback(
+    async (algorithm: string, result: AlgorithmResult) => {
+      const timestamp = new Date().toISOString()
+      // Get existing order count for sequential naming
+      const existingCount = orders.length + 1
+      const dateFormatted = new Date().toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
       })
 
-      const commitResponse = await commitScheduleDirect({
-        items: commitItems,
-        algorithm,
-        mode: result.schedule[0]?.sar_mode ? 'SAR' : 'OPTICAL',
-        lock_level: 'none',
-        workspace_id: state.activeWorkspace || undefined,
-      })
+      // Extract unique satellites and targets
+      const satellites = [...new Set(result.schedule.map((s) => s.satellite_id))]
+      const targets = [...new Set(result.schedule.map((s) => s.target_id))]
 
-      if (commitResponse.success) {
-        backendCommitSuccess = true
-        planId = commitResponse.plan_id
-        console.log('[PromoteToOrders] Backend commit successful:', {
-          planId,
-          committed: commitResponse.committed,
-          acquisitionIds: commitResponse.acquisition_ids,
-        })
-      }
-    } catch (error) {
-      console.warn('[PromoteToOrders] Backend commit failed, falling back to localStorage:', error)
-    }
-
-    // Create local AcceptedOrder for UI display (backward compatible)
-    const newOrder: AcceptedOrder = {
-      order_id: planId || `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      name: `Schedule #${existingCount} - ${dateFormatted}`,
-      created_at: timestamp,
-      algorithm: algorithm as 'first_fit' | 'best_fit' | 'optimal',
-      metrics: {
-        accepted: result.metrics.opportunities_accepted,
-        rejected: result.metrics.opportunities_rejected,
-        total_value: result.metrics.total_value,
-        mean_incidence_deg: result.metrics.mean_incidence_deg ?? 0,
-        imaging_time_s: result.metrics.total_imaging_time_s,
-        maneuver_time_s: result.metrics.total_maneuver_time_s,
-        utilization: result.metrics.utilization,
-        runtime_ms: result.metrics.runtime_ms,
-      },
-      schedule: result.schedule.map((s) => ({
+      // Build items for direct commit API
+      const commitItems: DirectCommitItem[] = result.schedule.map((s) => ({
         opportunity_id: s.opportunity_id,
         satellite_id: s.satellite_id,
         target_id: s.target_id,
         start_time: s.start_time,
         end_time: s.end_time,
-        droll_deg: s.delta_roll,
-        t_slew_s: s.maneuver_time,
-        slack_s: s.slack_time,
+        roll_angle_deg: s.roll_angle || s.delta_roll || 0,
+        pitch_angle_deg: s.pitch_angle || 0,
         value: s.value,
-        density: s.density,
-      })),
-      satellites_involved: satellites,
-      targets_covered: targets,
-    }
+        incidence_angle_deg: s.incidence_angle,
+        sar_mode: s.sar_mode,
+        look_side: s.look_side,
+        pass_direction: s.pass_direction,
+      }))
 
-    setOrders((prev) => [...prev, newOrder])
-    setActivePanel(LEFT_SIDEBAR_PANELS.SCHEDULE)
+      // Try to commit to backend first
+      let backendCommitSuccess = false
+      let planId: string | undefined
+      let backendAcqIds: string[] = []
+      const isRepairMode = !!result.repair_plan_id
 
-    // Show feedback to user
-    if (backendCommitSuccess) {
+      try {
+        if (isRepairMode) {
+          // Repair mode: use repair-specific commit endpoint
+          // This handles kept/dropped/added correctly without 409 on existing acquisitions
+          console.log('[PromoteToOrders] Repair commit...', {
+            planId: result.repair_plan_id,
+            droppedCount: result.repair_dropped_ids?.length ?? 0,
+          })
+
+          const repairResponse = await commitRepairPlan({
+            plan_id: result.repair_plan_id!,
+            workspace_id: state.activeWorkspace || 'default',
+            drop_acquisition_ids: result.repair_dropped_ids || [],
+            lock_level: 'none',
+            mode: result.schedule[0]?.sar_mode ? 'SAR' : 'OPTICAL',
+          })
+
+          if (repairResponse.success) {
+            backendCommitSuccess = true
+            planId = repairResponse.plan_id
+            // Collect all acquisition IDs: existing kept + newly created
+            // The kept ones are already in DB; new ones are returned by the commit
+            backendAcqIds = result.schedule
+              .filter((s) => s.opportunity_id.startsWith('acq_'))
+              .map((s) => s.opportunity_id)
+            console.log('[PromoteToOrders] Repair commit successful:', {
+              planId,
+              committed: repairResponse.committed,
+              dropped: repairResponse.dropped,
+            })
+          }
+        } else {
+          // Normal mode: use direct commit endpoint
+          console.log('[PromoteToOrders] Committing to backend...', {
+            algorithm,
+            itemCount: commitItems.length,
+          })
+
+          const commitResponse = await commitScheduleDirect({
+            items: commitItems,
+            algorithm,
+            mode: result.schedule[0]?.sar_mode ? 'SAR' : 'OPTICAL',
+            lock_level: 'none',
+            workspace_id: state.activeWorkspace || undefined,
+          })
+
+          if (commitResponse.success) {
+            backendCommitSuccess = true
+            planId = commitResponse.plan_id
+            backendAcqIds = commitResponse.acquisition_ids || []
+            console.log('[PromoteToOrders] Backend commit successful:', {
+              planId,
+              committed: commitResponse.committed,
+              acquisitionIds: backendAcqIds,
+            })
+          }
+        }
+      } catch (error) {
+        console.warn('[PromoteToOrders] Backend commit failed:', error)
+        // Don't create local order if backend rejected (e.g. 409 Conflict = duplicate)
+        return
+      }
+
+      if (!backendCommitSuccess) return
+
+      // Create local AcceptedOrder for UI display (backward compatible)
+      const newOrder: AcceptedOrder = {
+        order_id: planId || `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        name: `Schedule #${existingCount} - ${dateFormatted}`,
+        created_at: timestamp,
+        algorithm: algorithm as 'first_fit' | 'best_fit' | 'optimal',
+        metrics: {
+          accepted: result.metrics.opportunities_accepted,
+          rejected: result.metrics.opportunities_rejected,
+          total_value: result.metrics.total_value,
+          mean_incidence_deg: result.metrics.mean_incidence_deg ?? 0,
+          imaging_time_s: result.metrics.total_imaging_time_s,
+          maneuver_time_s: result.metrics.total_maneuver_time_s,
+          utilization: result.metrics.utilization,
+          runtime_ms: result.metrics.runtime_ms,
+        },
+        schedule: result.schedule.map((s) => ({
+          opportunity_id: s.opportunity_id,
+          satellite_id: s.satellite_id,
+          target_id: s.target_id,
+          start_time: s.start_time,
+          end_time: s.end_time,
+          droll_deg: s.delta_roll,
+          t_slew_s: s.maneuver_time,
+          slack_s: s.slack_time,
+          value: s.value,
+          density: s.density,
+        })),
+        satellites_involved: satellites,
+        targets_covered: targets,
+        backend_acquisition_ids: backendAcqIds,
+      }
+
+      // Dedup safety: never append if order_id already exists in state
+      setOrders((prev) => {
+        if (prev.some((o) => o.order_id === newOrder.order_id)) return prev
+        return [...prev, newOrder]
+      })
+      setActivePanel(LEFT_SIDEBAR_PANELS.SCHEDULE)
       console.log(`[PromoteToOrders] ✓ Schedule committed to database (plan: ${planId})`)
-    }
-  }
+    },
+    [orders.length, state.activeWorkspace],
+  )
 
   // Filter panels based on Simple Mode configuration
   const panels: SidebarPanel[] = useMemo(() => {

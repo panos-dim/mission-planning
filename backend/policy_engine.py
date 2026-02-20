@@ -7,7 +7,7 @@ Policies control how orders are selected, weighted, and planned.
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -171,7 +171,7 @@ def calculate_order_score(
         OrderScore with calculated scores
     """
     if reference_time is None:
-        reference_time = datetime.utcnow()
+        reference_time = datetime.now(timezone.utc)
 
     weights = policy.weights
     order_id = order.get("id", "unknown")

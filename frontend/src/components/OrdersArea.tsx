@@ -195,7 +195,7 @@ export default function OrdersArea({ workspaceId }: OrdersAreaProps): JSX.Elemen
   }
 
   const handleCommitBatch = async (batchId: string) => {
-    if (!confirm('Commit this batch? This will create acquisitions in the schedule.')) {
+    if (!confirm('Apply this batch? This will create acquisitions in the schedule.')) {
       return
     }
 
@@ -206,7 +206,7 @@ export default function OrdersArea({ workspaceId }: OrdersAreaProps): JSX.Elemen
       setSelectedBatch(null)
       loadBatches()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to commit batch')
+      setError(err instanceof Error ? err.message : 'Failed to apply batch')
     } finally {
       setLoading(false)
     }
@@ -635,9 +635,9 @@ function BatchesTab({
                   <button
                     onClick={() => onCommit(selectedBatch.id)}
                     disabled={loading}
-                    className="px-3 py-1 bg-green-600 hover:bg-green-500 rounded text-sm"
+                    className="px-3 py-1 bg-blue-600 hover:bg-blue-500 rounded text-sm text-white"
                   >
-                    Commit
+                    Apply
                   </button>
                 )}
                 {selectedBatch.status !== 'committed' && (
@@ -757,13 +757,328 @@ interface ScheduleTabProps {
   formatDate: (s: string) => string
 }
 
-function ScheduleTab({ workspaceId: _workspaceId, formatDate: _formatDate }: ScheduleTabProps) {
+function ScheduleTab({ workspaceId, formatDate }: ScheduleTabProps) {
+  const [orders, setOrders] = useState<
+    Array<{
+      id: string
+      target_id: string
+      priority: number
+      status: string
+      requested_window_start?: string
+      requested_window_end?: string
+    }>
+  >([])
+  const [acquisitions, setAcquisitions] = useState<
+    Array<{
+      id: string
+      satellite_id: string
+      target_id: string
+      start_time: string
+      end_time: string
+      state: string
+      lock_level: string
+      order_id?: string
+    }>
+  >([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set())
+
+  const loadSchedule = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const { getScheduleState } = await import('../api/scheduleApi')
+      const res = await getScheduleState(workspaceId)
+      setOrders(res.state.orders || [])
+      setAcquisitions(res.state.acquisitions || [])
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load schedule')
+    } finally {
+      setLoading(false)
+    }
+  }, [workspaceId])
+
+  useEffect(() => {
+    loadSchedule()
+  }, [loadSchedule])
+
+  const handleDeleteOrder = async (orderId: string) => {
+    const linkedAcqs = acquisitions.filter((a) => a.order_id === orderId)
+    const msg =
+      linkedAcqs.length > 0
+        ? `Delete order "${orderId}" and its ${linkedAcqs.length} acquisition(s)?`
+        : `Delete order "${orderId}"?`
+    if (!confirm(msg)) return
+
+    setError(null)
+    try {
+      const { deleteOrder } = await import('../api/scheduleApi')
+      await deleteOrder(orderId, true)
+      loadSchedule()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete order')
+    }
+  }
+
+  const handleDeleteAcquisition = async (acqId: string, lockLevel: string) => {
+    const isLocked = lockLevel === 'hard'
+    const msg = isLocked
+      ? 'This acquisition is hard-locked. Force delete it?'
+      : 'Delete this acquisition from the schedule?'
+    if (!confirm(msg)) return
+
+    setError(null)
+    try {
+      const { deleteAcquisition } = await import('../api/scheduleApi')
+      await deleteAcquisition(acqId, isLocked)
+      loadSchedule()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete acquisition')
+    }
+  }
+
+  const toggleOrderExpand = (orderId: string) => {
+    setExpandedOrders((prev) => {
+      const next = new Set(prev)
+      if (next.has(orderId)) next.delete(orderId)
+      else next.add(orderId)
+      return next
+    })
+  }
+
+  // Group acquisitions by order_id
+  const acqsByOrder: Record<string, typeof acquisitions> = {}
+  const unlinkedAcqs: typeof acquisitions = []
+  for (const acq of acquisitions) {
+    if (acq.order_id) {
+      if (!acqsByOrder[acq.order_id]) acqsByOrder[acq.order_id] = []
+      acqsByOrder[acq.order_id].push(acq)
+    } else {
+      unlinkedAcqs.push(acq)
+    }
+  }
+
+  const priorityColor = (p: number) => {
+    if (p <= 1) return 'text-red-400'
+    if (p <= 2) return 'text-orange-400'
+    if (p <= 3) return 'text-yellow-400'
+    return 'text-gray-400'
+  }
+
   return (
-    <div className="text-center py-8 text-gray-500">
-      <p>Schedule view - Shows committed acquisitions from batches</p>
-      <p className="text-sm mt-2">
-        Use the existing Schedule panel or integrate with the planning timeline view.
-      </p>
+    <div className="h-full flex flex-col">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
+        <div className="text-sm font-semibold text-white">
+          Schedule ({orders.length} orders, {acquisitions.length} acquisitions)
+        </div>
+        <button
+          onClick={loadSchedule}
+          disabled={loading}
+          className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 rounded disabled:opacity-50"
+        >
+          {loading ? 'Loading…' : 'Refresh'}
+        </button>
+      </div>
+
+      {error && (
+        <div className="px-4 py-2 bg-red-900/20 border-b border-red-800 text-xs text-red-400 flex items-center justify-between">
+          {error}
+          <button onClick={() => setError(null)} className="hover:text-red-300">
+            ×
+          </button>
+        </div>
+      )}
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {orders.length === 0 && acquisitions.length === 0 && !loading && (
+          <div className="text-center py-8 text-gray-500 text-sm">
+            No orders or acquisitions in the schedule yet.
+          </div>
+        )}
+
+        {/* Orders with their acquisitions */}
+        {orders.map((order) => {
+          const linkedAcqs = acqsByOrder[order.id] || []
+          const isExpanded = expandedOrders.has(order.id)
+
+          return (
+            <div key={order.id} className="bg-gray-800 rounded-lg border border-gray-700">
+              {/* Order header */}
+              <div className="flex items-center gap-3 px-4 py-3">
+                <button
+                  onClick={() => toggleOrderExpand(order.id)}
+                  className="text-gray-400 hover:text-white"
+                >
+                  {isExpanded ? '▾' : '▸'}
+                </button>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-white truncate">
+                      {order.target_id}
+                    </span>
+                    <span className={`text-xs font-bold ${priorityColor(order.priority)}`}>
+                      P{order.priority}
+                    </span>
+                    <span className="px-1.5 py-0.5 text-[10px] rounded bg-gray-700 text-gray-300">
+                      {order.status}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-gray-500 mt-0.5 truncate">
+                    {order.id} · {linkedAcqs.length} acquisition{linkedAcqs.length !== 1 ? 's' : ''}
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleDeleteOrder(order.id)}
+                  className="p-1.5 text-gray-500 hover:text-red-400 rounded hover:bg-red-900/20 transition-colors"
+                  title="Delete order and its acquisitions"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <polyline points="3 6 5 6 21 6" />
+                    <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+                    <line x1="10" y1="11" x2="10" y2="17" />
+                    <line x1="14" y1="11" x2="14" y2="17" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Expanded acquisitions */}
+              {isExpanded && linkedAcqs.length > 0 && (
+                <div className="border-t border-gray-700 bg-gray-900/50">
+                  {linkedAcqs.map((acq) => (
+                    <div
+                      key={acq.id}
+                      className="flex items-center gap-3 px-6 py-2 border-b border-gray-800 last:border-b-0 text-xs"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-white font-medium">{acq.satellite_id}</span>
+                          <span className="text-gray-500">→</span>
+                          <span className="text-white">{acq.target_id}</span>
+                          <span
+                            className={`${acq.state === 'committed' ? 'text-green-400' : 'text-yellow-400'}`}
+                          >
+                            {acq.state}
+                          </span>
+                          {acq.lock_level === 'hard' && (
+                            <span className="px-1 py-0.5 text-[9px] bg-red-900/40 text-red-400 rounded">
+                              LOCKED
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-gray-500 mt-0.5">
+                          {formatDate(acq.start_time)} → {formatDate(acq.end_time)}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteAcquisition(acq.id, acq.lock_level)}
+                        className="p-1 text-gray-500 hover:text-red-400 rounded hover:bg-red-900/20 transition-colors"
+                        title={
+                          acq.lock_level === 'hard' ? 'Force delete (locked)' : 'Delete acquisition'
+                        }
+                      >
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          width="12"
+                          height="12"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <polyline points="3 6 5 6 21 6" />
+                          <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {isExpanded && linkedAcqs.length === 0 && (
+                <div className="border-t border-gray-700 px-6 py-3 text-xs text-gray-500">
+                  No acquisitions linked to this order.
+                </div>
+              )}
+            </div>
+          )
+        })}
+
+        {/* Unlinked acquisitions (not tied to any order) */}
+        {unlinkedAcqs.length > 0 && (
+          <div className="bg-gray-800 rounded-lg border border-gray-700">
+            <div className="px-4 py-3 border-b border-gray-700">
+              <span className="text-sm font-medium text-gray-300">
+                Unlinked Acquisitions ({unlinkedAcqs.length})
+              </span>
+            </div>
+            <div className="bg-gray-900/50">
+              {unlinkedAcqs.map((acq) => (
+                <div
+                  key={acq.id}
+                  className="flex items-center gap-3 px-4 py-2 border-b border-gray-800 last:border-b-0 text-xs"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-white font-medium">{acq.satellite_id}</span>
+                      <span className="text-gray-500">→</span>
+                      <span className="text-white">{acq.target_id}</span>
+                      <span
+                        className={`${acq.state === 'committed' ? 'text-green-400' : 'text-yellow-400'}`}
+                      >
+                        {acq.state}
+                      </span>
+                      {acq.lock_level === 'hard' && (
+                        <span className="px-1 py-0.5 text-[9px] bg-red-900/40 text-red-400 rounded">
+                          LOCKED
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-gray-500 mt-0.5">
+                      {formatDate(acq.start_time)} → {formatDate(acq.end_time)}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleDeleteAcquisition(acq.id, acq.lock_level)}
+                    className="p-1 text-gray-500 hover:text-red-400 rounded hover:bg-red-900/20 transition-colors"
+                    title={
+                      acq.lock_level === 'hard' ? 'Force delete (locked)' : 'Delete acquisition'
+                    }
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="12"
+                      height="12"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <polyline points="3 6 5 6 21 6" />
+                      <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

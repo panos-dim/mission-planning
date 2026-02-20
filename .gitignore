@@ -72,6 +72,7 @@ htmlcov/
 
 # Demo runner generated artifacts (keep .gitkeep)
 artifacts/demo/RESHUFFLE_EVIDENCE.*
+artifacts/demo/SCALE_TEST_EVIDENCE.*
 
 # PDM
 .pdm-build/

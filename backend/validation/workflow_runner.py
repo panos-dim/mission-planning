@@ -20,7 +20,7 @@ import os
 import tempfile
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import backend._paths  # noqa: F401, E402  — centralised path setup
@@ -72,7 +72,7 @@ class WorkflowValidationRunner:
             WorkflowValidationReport with all results
         """
         report_id = f"wf_report_{uuid.uuid4().hex[:12]}"
-        timestamp = datetime.utcnow().isoformat() + "Z"
+        timestamp = datetime.now(timezone.utc).isoformat() + "Z"
         config_hash = compute_config_hash(scenario)
 
         stages: List[StageMetrics] = []

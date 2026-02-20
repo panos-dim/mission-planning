@@ -5,7 +5,7 @@ Handles CRUD operations for managed satellites with persistent storage
 
 import logging
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -39,9 +39,9 @@ class Satellite:
         if self.capabilities is None:
             self.capabilities = ["imaging"]
         if not self.created_at:
-            self.created_at = datetime.utcnow().isoformat() + "Z"
+            self.created_at = datetime.now(timezone.utc).isoformat() + "Z"
         if not self.tle_updated_at:
-            self.tle_updated_at = datetime.utcnow().isoformat() + "Z"
+            self.tle_updated_at = datetime.now(timezone.utc).isoformat() + "Z"
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -186,7 +186,7 @@ class SatelliteManager:
         # Ensure required fields
         if "id" not in satellite_data:
             satellite_data["id"] = (
-                f"{satellite_data['name']}-{int(datetime.utcnow().timestamp())}"
+                f"{satellite_data['name']}-{int(datetime.now(timezone.utc).timestamp())}"
             )
 
         satellite = Satellite(**satellite_data)
@@ -260,7 +260,7 @@ class SatelliteManager:
                 updates = {
                     "line1": tle_data["line1"],
                     "line2": tle_data["line2"],
-                    "tle_updated_at": datetime.utcnow().isoformat() + "Z",
+                    "tle_updated_at": datetime.now(timezone.utc).isoformat() + "Z",
                 }
                 return self.update_satellite(satellite_id, updates)
             else:
@@ -379,7 +379,7 @@ class SatelliteManager:
             tle_date = datetime.fromisoformat(
                 satellite.tle_updated_at.replace("Z", "+00:00")
             )
-            current_date = datetime.utcnow().replace(tzinfo=tle_date.tzinfo)
+            current_date = datetime.now(timezone.utc).replace(tzinfo=tle_date.tzinfo)
             age = (current_date - tle_date).days
             return age
         except Exception as e:

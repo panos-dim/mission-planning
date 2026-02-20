@@ -1,21 +1,12 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { useMission } from '../context/MissionContext'
-import {
-  Activity,
-  Calendar,
-  Clock,
-  BarChart2,
-  Target,
-  Download,
-  List,
-  ChevronDown,
-  ChevronRight,
-} from 'lucide-react'
+import { Calendar, Clock, BarChart2, Target, ChevronDown, ChevronRight, MapPin } from 'lucide-react'
 // PR-UI-013: Satellite color import removed — no satellite-based color coding
 import { useVisStore } from '../store/visStore'
 import { useSwathStore } from '../store/swathStore'
 import { LABELS } from '../constants/labels'
 import { formatDateTimeShort, formatDateTimeDDMMYYYY } from '../utils/date'
+import { fmt2 } from '../utils/format'
 import type { PassData } from '../types'
 
 type Section = 'overview' | 'schedule' | 'timeline'
@@ -24,20 +15,22 @@ interface SectionHeaderProps {
   section: Section
   icon: React.ElementType
   title: string
+  badge?: React.ReactNode
   isExpanded: boolean
   onToggle: (section: Section) => void
 }
 
 const SectionHeader: React.FC<SectionHeaderProps> = React.memo(
-  ({ section, icon: Icon, title, isExpanded, onToggle }) => (
+  ({ section, icon: Icon, title, badge, isExpanded, onToggle }) => (
     <button
       onClick={() => onToggle(section)}
-      className="w-full flex items-center justify-between p-3 bg-gray-800 hover:bg-gray-750 transition-colors cursor-pointer"
+      className="w-full flex items-center justify-between p-3 bg-gray-800 hover:bg-gray-700 transition-colors cursor-pointer"
       style={{ pointerEvents: 'auto', position: 'relative', zIndex: 10 }}
     >
       <div className="flex items-center space-x-2">
         <Icon className="w-4 h-4 text-blue-400" />
         <span className="text-sm font-semibold text-white">{title}</span>
+        {badge}
       </div>
       {isExpanded ? (
         <ChevronDown className="w-4 h-4 text-gray-400" />
@@ -49,9 +42,65 @@ const SectionHeader: React.FC<SectionHeaderProps> = React.memo(
 )
 
 // PR-UI-013: Opportunity color based on mode (not satellite)
-// Cyan for optical, purple for SAR — no satellite-based color coding
+// Brand blue for optical, purple for SAR — no satellite-based color coding
 const getOpportunityColor = (pass: PassData): string => {
-  return pass.sar_data ? '#a855f7' : '#06b6d4' // purple-500 : cyan-500
+  return pass.sar_data ? '#a855f7' : '#3b82f6' // purple-500 : blue-500 (brand blue)
+}
+
+// =============================================================================
+// PR-UI-021: Feasibility timeline constants & helpers (matches ScheduleTimeline)
+// =============================================================================
+
+const FT_LANE_HEIGHT = 32
+const FT_LANE_GAP = 4
+const FT_LABEL_WIDTH = 100
+const FT_MIN_BAR_PX = 4
+
+const ftFormatTick = (ts: number): string => {
+  const d = new Date(ts)
+  return `${d.getUTCHours().toString().padStart(2, '0')}:${d.getUTCMinutes().toString().padStart(2, '0')}`
+}
+
+const ftFormatDate = (ts: number): string => {
+  const d = new Date(ts)
+  return `${String(d.getUTCDate()).padStart(2, '0')}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${d.getUTCFullYear()}`
+}
+
+const ftGenerateTicks = (minTs: number, maxTs: number, maxTicks: number): number[] => {
+  const range = maxTs - minTs
+  if (range <= 0) return [minTs]
+  const niceSteps = [
+    5 * 60_000,
+    15 * 60_000,
+    30 * 60_000,
+    60 * 60_000,
+    2 * 3_600_000,
+    4 * 3_600_000,
+    6 * 3_600_000,
+    12 * 3_600_000,
+    24 * 3_600_000,
+  ]
+  let step = niceSteps[niceSteps.length - 1]
+  for (const s of niceSteps) {
+    if (range / s <= maxTicks) {
+      step = s
+      break
+    }
+  }
+  const start = Math.ceil(minTs / step) * step
+  const ticks: number[] = []
+  for (let t = start; t <= maxTs; t += step) ticks.push(t)
+  return ticks
+}
+
+// PR-UI-021: Build hover tooltip text for opportunity elements
+// Shows: satellite name + off-nadir angle (2dp) + off-nadir time (DD-MM-YYYY)
+// Excludes: target name, incidence angle, relative time
+const opportunityHoverTitle = (pass: PassData): string => {
+  const satName = pass.satellite_name || pass.satellite_id || 'Unknown'
+  const offNadir = pass.off_nadir_deg ?? 90 - pass.max_elevation
+  const time = formatDateTimeDDMMYYYY(pass.max_elevation_time || pass.start_time)
+  return `${satName}\nOff-nadir angle: ${fmt2(offNadir)}°\n${time}`
 }
 
 const MissionResultsPanel: React.FC = () => {
@@ -61,6 +110,26 @@ const MissionResultsPanel: React.FC = () => {
   // Cross-panel sync: selected opportunity highlighting
   const { selectedOpportunityId, setSelectedOpportunity } = useVisStore()
   const { selectSwath, setFilteredTarget, autoFilterEnabled } = useSwathStore()
+
+  // PR-UI-021: Styled hover tooltip state for timeline dots
+  const [timelineTooltip, setTimelineTooltip] = useState<{
+    pass: PassData
+    x: number
+    y: number
+  } | null>(null)
+
+  const handleDotHover = useCallback((pass: PassData, e: React.MouseEvent) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    setTimelineTooltip({
+      pass,
+      x: rect.left,
+      y: rect.top - 8,
+    })
+  }, [])
+
+  const handleDotLeave = useCallback(() => {
+    setTimelineTooltip(null)
+  }, [])
 
   // SAR filter state — exclude-first toggles (empty set = nothing hidden)
   const [hiddenLookSides, setHiddenLookSides] = useState<Set<string>>(new Set())
@@ -188,52 +257,6 @@ const MissionResultsPanel: React.FC = () => {
     return new Set<string>()
   }, [expandedTargets, targetDisplayOrder])
 
-  const downloadJSON = (data: unknown, filename: string) => {
-    const blob = new Blob([JSON.stringify(data, null, 2)], {
-      type: 'application/json',
-    })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = filename
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-  }
-
-  const downloadCSV = () => {
-    if (!state.missionData) return
-
-    const headers = [
-      'Opportunity #',
-      'Target',
-      'Type',
-      'Start Time (UTC)',
-      'End Time (UTC)',
-      'Max Elevation (°)',
-    ]
-    const rows = state.missionData.passes.map((pass, index) => [
-      index + 1,
-      pass.target,
-      pass.pass_type,
-      pass.start_time,
-      pass.end_time,
-      pass.max_elevation.toFixed(1),
-    ])
-
-    const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `mission_schedule_${state.missionData.satellite_name}.csv`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-  }
-
   if (!state.missionData) {
     return (
       <div className="h-full flex flex-col items-center justify-center p-6 text-center">
@@ -299,151 +322,30 @@ const MissionResultsPanel: React.FC = () => {
   })()
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Export Controls */}
-      <div className="p-3 border-b border-gray-700 flex justify-between items-center">
-        <span className="text-xs text-gray-400">{state.missionData.satellite_name}</span>
-        <div className="flex space-x-1">
-          <button
-            onClick={() =>
-              downloadJSON(state.missionData, `mission_${state.missionData?.satellite_name}.json`)
-            }
-            className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors"
-            title="Export JSON"
-          >
-            <List className="w-3 h-3" />
-          </button>
-          <button
-            onClick={downloadCSV}
-            className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors"
-            title="Export CSV"
-          >
-            <Download className="w-3 h-3" />
-          </button>
-        </div>
-      </div>
+    <div className="h-full flex flex-col bg-gray-900">
+      {/* Targets Summary Bar */}
+      {(() => {
+        const targetsWithOpportunities = state.missionData!.targets.filter((target) =>
+          state.missionData!.passes.some((pass) => pass.target === target.name),
+        )
+        const covered = targetsWithOpportunities.length
+        const total = state.missionData!.targets.length
+        const isPerfect = total > 0 && covered === total
+        return (
+          <div className="px-3 py-2 border-b border-gray-700 bg-gray-900/95 flex items-center space-x-2">
+            <span
+              className={`text-xs font-medium ${isPerfect ? 'text-green-400' : 'text-gray-300'}`}
+            >
+              {covered}/{total} targets
+            </span>
+            <span className="text-xs text-gray-500">·</span>
+            <span className="text-xs text-gray-400">{state.missionData.satellite_name}</span>
+          </div>
+        )
+      })()}
 
       {/* Collapsible Sections */}
       <div className="flex-1 overflow-y-auto" key={`sections-${expandedSections.join('-')}`}>
-        {/* Overview Section */}
-        <div className="border-b border-gray-700">
-          <SectionHeader
-            section="overview"
-            icon={Activity}
-            title="Overview"
-            isExpanded={expandedSections.includes('overview')}
-            onToggle={toggleSection}
-          />
-          {expandedSections.includes('overview') && (
-            <div className="p-3 bg-gray-850 space-y-3">
-              {/* Key metrics row */}
-              <div className="grid grid-cols-2 gap-2">
-                <div className="glass-panel rounded-lg p-2.5 text-center">
-                  <div className="text-lg font-bold text-white">
-                    {(() => {
-                      const start = new Date(state.missionData.start_time)
-                      const end = new Date(state.missionData.end_time)
-                      const hours = (end.getTime() - start.getTime()) / (1000 * 60 * 60)
-                      return `${hours % 1 === 0 ? hours.toFixed(0) : hours.toFixed(1)}h`
-                    })()}
-                  </div>
-                  <div className="text-[10px] text-gray-400">Time window</div>
-                </div>
-                {(() => {
-                  const targetsWithOpportunities = state.missionData!.targets.filter((target) =>
-                    state.missionData!.passes.some((pass) => pass.target === target.name),
-                  )
-                  const covered = targetsWithOpportunities.length
-                  const total = state.missionData!.targets.length
-                  const isPerfect = total > 0 && covered === total
-                  return (
-                    <div
-                      className={`glass-panel rounded-lg p-2.5 text-center ${
-                        isPerfect ? 'ring-1 ring-green-500/60 bg-green-900/20' : ''
-                      }`}
-                    >
-                      <div
-                        className={`text-lg font-bold ${isPerfect ? 'text-green-400' : 'text-white'}`}
-                      >
-                        {covered}/{total}
-                      </div>
-                      <div className="text-[10px] text-gray-400">
-                        Targets{isPerfect ? ' ✓' : ''}
-                      </div>
-                    </div>
-                  )
-                })()}
-              </div>
-
-              {/* Configuration details */}
-              <div className="glass-panel rounded-lg p-3">
-                <div className="space-y-1.5 text-xs">
-                  {state.missionData.mission_type === 'imaging' && (
-                    <div className="flex justify-between">
-                      <span className="text-gray-400">Imaging Type:</span>
-                      <span className="text-white capitalize">
-                        {state.missionData.imaging_type || 'optical'}
-                      </span>
-                    </div>
-                  )}
-                  {state.missionData.mission_type === 'imaging' ? (
-                    <>
-                      {state.missionData.imaging_type === 'sar' && state.missionData.sar ? (
-                        <>
-                          <div className="flex justify-between">
-                            <span className="text-gray-400">SAR Mode:</span>
-                            <span className="text-white capitalize">
-                              {state.missionData.sar.imaging_mode || 'strip'}
-                            </span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-400">Look Side:</span>
-                            <span className="text-white">
-                              {state.missionData.sar.look_side || 'ANY'}
-                            </span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-400">Pass Direction:</span>
-                            <span className="text-white">
-                              {state.missionData.sar.pass_direction || 'ANY'}
-                            </span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-400">Incidence Range:</span>
-                            <span className="text-white">
-                              {state.missionData.sar.incidence_min_deg || 15}° –{' '}
-                              {state.missionData.sar.incidence_max_deg || 45}°
-                            </span>
-                          </div>
-                        </>
-                      ) : null}
-                      <div className="flex justify-between">
-                        <span className="text-gray-400">{LABELS.MAX_OFF_NADIR_ANGLE_SHORT}:</span>
-                        <span className="text-white">
-                          {state.missionData.max_spacecraft_roll_deg || 'N/A'}°
-                        </span>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="flex justify-between">
-                      <span className="text-gray-400">Elevation Mask:</span>
-                      <span className="text-white">{state.missionData.elevation_mask}°</span>
-                    </div>
-                  )}
-                  {state.missionData.pass_statistics &&
-                    state.missionData.mission_type !== 'imaging' &&
-                    Object.entries(state.missionData.pass_statistics).map(([type, count]) => (
-                      <div key={type} className="flex justify-between">
-                        <span className="text-gray-400 capitalize">{type}:</span>
-                        <span className="text-white">{count as number}</span>
-                      </div>
-                    ))}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
         {/* Opportunities Section */}
         <div className="border-b border-gray-700">
           <SectionHeader
@@ -454,7 +356,7 @@ const MissionResultsPanel: React.FC = () => {
             onToggle={toggleSection}
           />
           {expandedSections.includes('schedule') && (
-            <div className="p-3 bg-gray-850 space-y-2 max-h-96 overflow-y-auto">
+            <div className="p-3 space-y-2 max-h-96 overflow-y-auto">
               {/* SAR Filters - only show for SAR missions */}
               {isSARMission && state.missionData.passes.some((p) => p.sar_data) && (
                 <div className="flex flex-wrap items-center gap-1.5 mb-2 pb-2 border-b border-gray-700">
@@ -557,14 +459,28 @@ const MissionResultsPanel: React.FC = () => {
                     ) : (
                       <div className="flex items-center justify-between px-2 py-1.5">
                         <div className="flex items-center space-x-2 min-w-0">
-                          <Target className="w-3 h-3 text-green-400 flex-shrink-0" />
-                          <span className="text-xs font-medium text-white truncate">
+                          <Target
+                            className={`w-3 h-3 flex-shrink-0 ${
+                              hasOpportunities ? 'text-green-400' : 'text-red-400'
+                            }`}
+                          />
+                          <span
+                            className={`text-xs font-medium truncate ${
+                              hasOpportunities ? 'text-white' : 'text-gray-500'
+                            }`}
+                          >
                             {targetName}
                           </span>
                         </div>
-                        <span className="text-[10px] text-green-400 font-semibold flex-shrink-0 ml-2">
-                          {targetPasses.length} opp{targetPasses.length !== 1 ? 's' : ''}
-                        </span>
+                        {hasOpportunities ? (
+                          <span className="text-[10px] text-green-400 font-semibold flex-shrink-0 ml-2">
+                            {targetPasses.length} opp{targetPasses.length !== 1 ? 's' : ''}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-red-400 font-semibold flex-shrink-0 ml-2">
+                            0 opps
+                          </span>
+                        )}
                       </div>
                     )}
 
@@ -588,10 +504,10 @@ const MissionResultsPanel: React.FC = () => {
                           return (
                             <div
                               key={`${targetName}-${localIndex}`}
-                              className={`glass-panel rounded-lg p-2 cursor-pointer transition-colors ${
+                              className={`rounded-lg p-2 cursor-pointer transition-colors border ${
                                 isSelected
-                                  ? 'bg-blue-900/50 ring-1 ring-blue-500'
-                                  : 'hover:bg-gray-800/50'
+                                  ? 'bg-blue-900/50 ring-1 ring-blue-500 border-blue-700/50'
+                                  : 'bg-gray-800/40 border-gray-700/40 hover:bg-gray-800/70'
                               }`}
                               onClick={() => {
                                 // Find original index in unsorted array
@@ -610,7 +526,7 @@ const MissionResultsPanel: React.FC = () => {
                                   setFilteredTarget(pass.target)
                                 }
                               }}
-                              title="Click to navigate to this pass"
+                              title={opportunityHoverTitle(pass)}
                             >
                               <div className="flex items-center justify-between mb-1">
                                 <div className="flex items-center space-x-1">
@@ -670,13 +586,13 @@ const MissionResultsPanel: React.FC = () => {
                                     <div className="flex justify-between">
                                       <span className="text-gray-500">Incidence:</span>
                                       <span className="text-gray-300">
-                                        {pass.sar_data.incidence_center_deg?.toFixed(1)}°
-                                        {pass.sar_data.incidence_near_deg &&
-                                          pass.sar_data.incidence_far_deg && (
+                                        {fmt2(pass.sar_data.incidence_center_deg)}°
+                                        {pass.sar_data.incidence_near_deg != null &&
+                                          pass.sar_data.incidence_far_deg != null && (
                                             <span className="text-gray-500 ml-1">
-                                              ({pass.sar_data.incidence_near_deg.toFixed(0)}
+                                              ({fmt2(pass.sar_data.incidence_near_deg)}
                                               °-
-                                              {pass.sar_data.incidence_far_deg.toFixed(0)}
+                                              {fmt2(pass.sar_data.incidence_far_deg)}
                                               °)
                                             </span>
                                           )}
@@ -685,7 +601,7 @@ const MissionResultsPanel: React.FC = () => {
                                     <div className="flex justify-between">
                                       <span className="text-gray-500">Swath:</span>
                                       <span className="text-gray-300">
-                                        {pass.sar_data.swath_width_km?.toFixed(1)} km
+                                        {fmt2(pass.sar_data.swath_width_km)} km
                                       </span>
                                     </div>
                                   </>
@@ -693,7 +609,7 @@ const MissionResultsPanel: React.FC = () => {
                                   <div className="flex justify-between">
                                     <span className="text-gray-500">Off-Nadir Angle:</span>
                                     <span className="text-gray-300">
-                                      {(pass.off_nadir_deg ?? 90 - pass.max_elevation).toFixed(1)}°
+                                      {fmt2(pass.off_nadir_deg ?? 90 - pass.max_elevation)}°
                                     </span>
                                   </div>
                                 )}
@@ -720,8 +636,8 @@ const MissionResultsPanel: React.FC = () => {
             onToggle={toggleSection}
           />
           {expandedSections.includes('timeline') && (
-            <div className="p-3 bg-gray-850">
-              <div className="glass-panel rounded-lg p-3">
+            <div className="p-3">
+              <div className="rounded-lg p-3">
                 <div className="space-y-3 text-xs">
                   <div className="flex justify-between mb-2">
                     <span className="text-gray-400">Mission Start:</span>
@@ -736,17 +652,14 @@ const MissionResultsPanel: React.FC = () => {
                     </span>
                   </div>
 
-                  {/* Timeline visualization */}
+                  {/* Timeline visualization — lane-based bars matching ScheduleTimeline */}
                   {(() => {
                     // Compute visible passes (only non-hidden targets)
                     const visiblePasses = sortedPasses.filter(
                       (p) => !hiddenTimelineTargets.has(p.target),
                     )
-                    const visiblePassTimes = visiblePasses.map((p) =>
-                      new Date(p.start_time.replace('+00:00', 'Z')).getTime(),
-                    )
 
-                    if (visiblePassTimes.length === 0) {
+                    if (visiblePasses.length === 0) {
                       return (
                         <div className="text-xs text-gray-500 text-center py-4">
                           No visible opportunities. Adjust the target filter above.
@@ -754,19 +667,27 @@ const MissionResultsPanel: React.FC = () => {
                       )
                     }
 
-                    const firstMs = Math.min(...visiblePassTimes)
-                    const lastMs = Math.max(...visiblePassTimes)
-                    const range = lastMs - firstMs
-                    const paddedStart = firstMs - (range * 0.05 || 60000)
-                    const paddedEnd = lastMs + (range * 0.05 || 60000)
-
-                    const formatTime = (d: Date) => {
-                      const day = String(d.getUTCDate()).padStart(2, '0')
-                      const month = String(d.getUTCMonth() + 1).padStart(2, '0')
-                      const hours = String(d.getUTCHours()).padStart(2, '0')
-                      const mins = String(d.getUTCMinutes()).padStart(2, '0')
-                      return `${day}-${month} ${hours}:${mins}`
+                    // Compute time bounds from all visible passes
+                    let minTs = Infinity
+                    let maxTs = -Infinity
+                    for (const p of visiblePasses) {
+                      const s = new Date(p.start_time.replace('+00:00', 'Z')).getTime()
+                      const e = new Date(p.end_time.replace('+00:00', 'Z')).getTime()
+                      if (s < minTs) minTs = s
+                      if (e > maxTs) maxTs = e
                     }
+                    const pad = (maxTs - minTs) * 0.02 || 60_000
+                    minTs -= pad
+                    maxTs += pad
+                    const timeRange = maxTs - minTs
+
+                    // Build per-target lane data
+                    const visibleTargets = state.missionData.targets.filter(
+                      (t) => !hiddenTimelineTargets.has(t.name),
+                    )
+
+                    // Tick generation
+                    const ticks = ftGenerateTicks(minTs, maxTs, 5)
 
                     return (
                       <div className="space-y-2">
@@ -774,7 +695,7 @@ const MissionResultsPanel: React.FC = () => {
                           Opportunity Windows ({visiblePasses.length})
                         </div>
 
-                        {/* Target filter pills — exclude-first, no 'All' option */}
+                        {/* Target filter pills */}
                         <div className="flex flex-wrap items-center gap-1.5">
                           {state.missionData.targets.map((t) => {
                             const isVisible = !hiddenTimelineTargets.has(t.name)
@@ -796,110 +717,108 @@ const MissionResultsPanel: React.FC = () => {
                           })}
                         </div>
 
-                        {/* Time scale header — auto-zoomed to visible passes */}
-                        <div className="relative h-6 mt-1">
-                          <div className="absolute bottom-0 left-0 right-0 h-px bg-gray-600"></div>
-                          <div className="absolute bottom-0 left-0 flex flex-col items-start">
-                            <span className="text-[9px] text-gray-500 mb-1">
-                              {formatTime(new Date(paddedStart))}
-                            </span>
-                            <div className="w-px h-2 bg-gray-600"></div>
-                          </div>
-                          <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 flex flex-col items-center">
-                            <span className="text-[9px] text-gray-500 mb-1">
-                              {formatTime(new Date((paddedStart + paddedEnd) / 2))}
-                            </span>
-                            <div className="w-px h-2 bg-gray-600"></div>
-                          </div>
-                          <div className="absolute bottom-0 right-0 flex flex-col items-end">
-                            <span className="text-[9px] text-gray-500 mb-1">
-                              {formatTime(new Date(paddedEnd))}
-                            </span>
-                            <div className="w-px h-2 bg-gray-600"></div>
+                        {/* Time axis with auto-ticks */}
+                        <div className="flex items-end" style={{ height: 28 }}>
+                          <div style={{ width: FT_LABEL_WIDTH }} className="flex-shrink-0" />
+                          <div className="flex-1 relative h-full">
+                            {ticks.map((ts) => {
+                              const pct = ((ts - minTs) / timeRange) * 100
+                              return (
+                                <div
+                                  key={ts}
+                                  className="absolute bottom-0 flex flex-col items-center"
+                                  style={{ left: `${pct}%`, transform: 'translateX(-50%)' }}
+                                >
+                                  <span className="text-[9px] text-gray-500 whitespace-nowrap mb-0.5">
+                                    {ftFormatTick(ts)}
+                                  </span>
+                                  <span className="text-[8px] text-gray-600 whitespace-nowrap">
+                                    {ftFormatDate(ts)}
+                                  </span>
+                                  <div className="w-px h-1.5 bg-gray-600 mt-0.5" />
+                                </div>
+                              )
+                            })}
                           </div>
                         </div>
 
-                        {/* Per-target timeline bars */}
-                        <div className="space-y-3">
-                          {state.missionData.targets.map((target, targetIdx) => {
-                            if (hiddenTimelineTargets.has(target.name)) return null
+                        {/* Grid lines + target lanes */}
+                        <div className="relative">
+                          {/* Faint vertical grid lines */}
+                          <div className="absolute inset-0" style={{ marginLeft: FT_LABEL_WIDTH }}>
+                            {ticks.map((ts) => {
+                              const pct = ((ts - minTs) / timeRange) * 100
+                              return (
+                                <div
+                                  key={`g-${ts}`}
+                                  className="absolute top-0 bottom-0 w-px bg-gray-800/60"
+                                  style={{ left: `${pct}%` }}
+                                />
+                              )
+                            })}
+                          </div>
 
-                            const targetPasses = visiblePasses.filter(
-                              (pass) => pass.target === target.name,
-                            )
-                            if (targetPasses.length === 0) return null
+                          {/* Per-target lanes */}
+                          <div className="pt-1 pb-2">
+                            {visibleTargets.map((target) => {
+                              const targetPasses = visiblePasses.filter(
+                                (p) => p.target === target.name,
+                              )
 
-                            // Calculate marker positions using the zoomed range
-                            const markerData = targetPasses
-                              .map((pass) => {
-                                const startMs = new Date(
-                                  pass.start_time.replace('+00:00', 'Z'),
-                                ).getTime()
-                                const position =
-                                  ((startMs - paddedStart) / (paddedEnd - paddedStart)) * 100
-                                return { pass, position, startMs }
-                              })
-                              .sort((a, b) => a.position - b.position)
-                            // Cluster overlapping markers (within 3% of each other)
-                            const OVERLAP_THRESHOLD = 3
-                            const clusters: (typeof markerData)[] = []
-                            let currentCluster: typeof markerData = []
+                              return (
+                                <div
+                                  key={target.name}
+                                  className="flex items-center"
+                                  style={{ height: FT_LANE_HEIGHT, marginBottom: FT_LANE_GAP }}
+                                >
+                                  {/* Lane label — pin icon + colored left border */}
+                                  <div
+                                    className="flex items-center gap-1 px-1.5 text-[10px] text-gray-300 truncate flex-shrink-0 border-l-2 border-green-500"
+                                    style={{ width: FT_LABEL_WIDTH }}
+                                    title={target.name}
+                                  >
+                                    <MapPin size={10} className="text-gray-500 flex-shrink-0" />
+                                    <span className="truncate">{target.name}</span>
+                                    <span className="text-[8px] text-gray-500 ml-auto flex-shrink-0">
+                                      ({targetPasses.length})
+                                    </span>
+                                  </div>
 
-                            markerData.forEach((marker, idx) => {
-                              if (currentCluster.length === 0) {
-                                currentCluster.push(marker)
-                              } else {
-                                const lastInCluster = currentCluster[currentCluster.length - 1]
-                                if (marker.position - lastInCluster.position < OVERLAP_THRESHOLD) {
-                                  currentCluster.push(marker)
-                                } else {
-                                  clusters.push(currentCluster)
-                                  currentCluster = [marker]
-                                }
-                              }
-                              if (idx === markerData.length - 1) {
-                                clusters.push(currentCluster)
-                              }
-                            })
+                                  {/* Lane track */}
+                                  <div className="flex-1 relative h-full bg-gray-800/30 rounded-sm border border-gray-800/50">
+                                    {targetPasses.length === 0 ? (
+                                      <div className="absolute inset-0 flex items-center justify-center">
+                                        <span className="text-[8px] text-gray-600">no windows</span>
+                                      </div>
+                                    ) : (
+                                      targetPasses.map((pass, pIdx) => {
+                                        const startTs = new Date(
+                                          pass.start_time.replace('+00:00', 'Z'),
+                                        ).getTime()
+                                        const endTs = new Date(
+                                          pass.end_time.replace('+00:00', 'Z'),
+                                        ).getTime()
+                                        const leftPct = Math.max(
+                                          0,
+                                          ((startTs - minTs) / timeRange) * 100,
+                                        )
+                                        const widthPct = Math.max(
+                                          0,
+                                          ((endTs - startTs) / timeRange) * 100,
+                                        )
+                                        const isSAR = !!pass.sar_data
+                                        const barColor = isSAR
+                                          ? 'bg-purple-500/70 hover:bg-purple-500/90 border-purple-400/50'
+                                          : 'bg-blue-500/70 hover:bg-blue-500/90 border-blue-400/50'
 
-                            return (
-                              <div key={targetIdx}>
-                                {/* Target label */}
-                                <div className="flex items-center gap-1.5 mb-1">
-                                  <span className="text-[10px] font-medium text-gray-400">
-                                    {target.name}
-                                  </span>
-                                  <span className="text-[9px] text-gray-500">
-                                    ({targetPasses.length})
-                                  </span>
-                                </div>
-
-                                {/* Timeline bar — compact, no labels above */}
-                                <div className="relative h-3">
-                                  <div className="absolute bottom-0 left-0 right-0 h-2 bg-gray-700 rounded-full"></div>
-
-                                  {clusters.map((cluster, clusterIdx) => {
-                                    const pos = Math.max(
-                                      2,
-                                      Math.min(
-                                        98,
-                                        cluster.reduce((s, m) => s + m.position, 0) /
-                                          cluster.length,
-                                      ),
-                                    )
-
-                                    if (cluster.length === 1) {
-                                      const { pass } = cluster[0]
-                                      const color = getOpportunityColor(pass)
-                                      return (
-                                        <div
-                                          key={clusterIdx}
-                                          className="absolute bottom-0 transform -translate-x-1/2"
-                                          style={{ left: `${pos}%` }}
-                                        >
+                                        return (
                                           <div
-                                            className="w-2.5 h-2.5 rounded-full cursor-pointer hover:scale-150 transition-transform"
-                                            style={{ backgroundColor: color, opacity: 0.9 }}
+                                            key={pIdx}
+                                            className={`absolute top-1 bottom-1 rounded-sm border cursor-pointer transition-all ${barColor}`}
+                                            style={{
+                                              left: `${leftPct}%`,
+                                              width: `max(${FT_MIN_BAR_PX}px, ${widthPct}%)`,
+                                            }}
                                             onClick={() => {
                                               const oi = state.missionData!.passes.findIndex(
                                                 (p) =>
@@ -908,61 +827,29 @@ const MissionResultsPanel: React.FC = () => {
                                               )
                                               navigateToPassWindow(oi)
                                             }}
-                                            title={formatDateTimeDDMMYYYY(
-                                              pass.max_elevation_time || pass.start_time,
-                                            )}
+                                            onMouseEnter={(e) => handleDotHover(pass, e)}
+                                            onMouseLeave={handleDotLeave}
                                           />
-                                        </div>
-                                      )
-                                    }
-
-                                    // Cluster: stacked dots, no labels
-                                    return (
-                                      <div
-                                        key={clusterIdx}
-                                        className="absolute bottom-0 transform -translate-x-1/2"
-                                        style={{ left: `${pos}%` }}
-                                      >
-                                        <div
-                                          className="flex items-center"
-                                          style={{
-                                            marginLeft: `-${(cluster.length - 1) * 3}px`,
-                                          }}
-                                        >
-                                          {cluster.map((marker, mIdx) => {
-                                            const color = getOpportunityColor(marker.pass)
-                                            return (
-                                              <div
-                                                key={mIdx}
-                                                className="w-2.5 h-2.5 rounded-full cursor-pointer hover:scale-150 transition-transform hover:z-10"
-                                                style={{
-                                                  backgroundColor: color,
-                                                  marginLeft: mIdx > 0 ? '-3px' : '0',
-                                                  zIndex: cluster.length - mIdx,
-                                                }}
-                                                onClick={() => {
-                                                  const oi = state.missionData!.passes.findIndex(
-                                                    (p) =>
-                                                      p.start_time === marker.pass.start_time &&
-                                                      p.target === marker.pass.target,
-                                                  )
-                                                  navigateToPassWindow(oi)
-                                                }}
-                                                title={formatDateTimeDDMMYYYY(
-                                                  marker.pass.max_elevation_time ||
-                                                    marker.pass.start_time,
-                                                )}
-                                              />
-                                            )
-                                          })}
-                                        </div>
-                                      </div>
-                                    )
-                                  })}
+                                        )
+                                      })
+                                    )}
+                                  </div>
                                 </div>
-                              </div>
-                            )
-                          })}
+                              )
+                            })}
+                          </div>
+                        </div>
+
+                        {/* Legend — matches ScheduleTimeline */}
+                        <div className="flex items-center gap-3 pt-1 border-t border-gray-800/50">
+                          <div className="flex items-center gap-1">
+                            <div className="w-3 h-1.5 rounded-sm bg-blue-500/70 border border-blue-400/50" />
+                            <span className="text-[9px] text-gray-400">Optical</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <div className="w-3 h-1.5 rounded-sm bg-purple-500/70 border border-purple-400/50" />
+                            <span className="text-[9px] text-gray-400">SAR</span>
+                          </div>
                         </div>
                       </div>
                     )
@@ -973,6 +860,31 @@ const MissionResultsPanel: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* PR-UI-021: Styled tooltip for timeline dots — matches ScheduleTimeline style */}
+      {timelineTooltip && (
+        <div
+          className="fixed z-[9999] pointer-events-none"
+          style={{ left: timelineTooltip.x, top: timelineTooltip.y }}
+        >
+          <div className="bg-gray-800 border border-gray-600 rounded-lg shadow-xl p-2.5 text-xs space-y-1 -translate-x-full -translate-y-full">
+            <div className="font-medium text-white">
+              {timelineTooltip.pass.satellite_name ||
+                timelineTooltip.pass.satellite_id ||
+                'Unknown'}
+            </div>
+            <div className="text-gray-300">
+              <span className="text-gray-500">Off-nadir angle: </span>
+              {fmt2(timelineTooltip.pass.off_nadir_deg ?? 90 - timelineTooltip.pass.max_elevation)}°
+            </div>
+            <div className="font-mono text-gray-400">
+              {formatDateTimeDDMMYYYY(
+                timelineTooltip.pass.max_elevation_time || timelineTooltip.pass.start_time,
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

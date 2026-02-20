@@ -10,7 +10,7 @@ Provides persistence for:
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -155,7 +155,7 @@ class ScenarioStorage:
         """
         try:
             # Create dated subdirectory
-            date_str = datetime.utcnow().strftime("%Y-%m-%d")
+            date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             report_subdir = self.reports_dir / date_str
             report_subdir.mkdir(parents=True, exist_ok=True)
 

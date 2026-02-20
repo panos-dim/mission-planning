@@ -14,7 +14,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -346,7 +346,7 @@ class ConfigResolver:
         self.load_configs()
         return {
             "config_hash": self._config_hash,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
             "satellites": self._satellites_config.get("satellites", []),
             "satellite_settings": self._satellites_config.get("satellite_settings", {}),
             "sar_modes": self._sar_modes_config.get("modes", {}),
@@ -428,7 +428,7 @@ class ConfigResolver:
         # Step 4: Build resolved config
         resolved_config = ResolvedConfig(
             config_hash=self._config_hash,
-            resolved_at=datetime.utcnow().isoformat() + "Z",
+            resolved_at=datetime.now(timezone.utc).isoformat() + "Z",
             start_time=mission_input.get("startTime", ""),
             end_time=mission_input.get("endTime", ""),
             targets=mission_input.get("targets", []),

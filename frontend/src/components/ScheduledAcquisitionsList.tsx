@@ -19,10 +19,17 @@ import {
   Shield,
   RefreshCw,
   AlertTriangle,
+  Trash2,
 } from 'lucide-react'
 import LockToggle, { BulkLockActions, LockBadge } from './LockToggle'
 import type { LockLevel, AcquisitionSummary } from '../api/scheduleApi'
-import { updateAcquisitionLock, bulkUpdateLocks, hardLockAllCommitted } from '../api/scheduleApi'
+import {
+  updateAcquisitionLock,
+  bulkUpdateLocks,
+  hardLockAllCommitted,
+  deleteAcquisition as apiDeleteAcquisition,
+  bulkDeleteAcquisitions,
+} from '../api/scheduleApi'
 import { useSelectionStore } from '../store/selectionStore'
 import { formatDateTimeShort } from '../utils/date'
 
@@ -183,6 +190,61 @@ export default function ScheduledAcquisitionsList({
     [selectedIds, onRefresh],
   )
 
+  // Handle single acquisition delete
+  const handleDeleteAcquisition = useCallback(
+    async (acquisitionId: string, lockLevel: string) => {
+      const isLocked = lockLevel === 'hard'
+      const msg = isLocked
+        ? 'This acquisition is hard-locked. Force delete it?'
+        : 'Delete this acquisition from the schedule?'
+      if (!confirm(msg)) return
+
+      setError(null)
+      try {
+        await apiDeleteAcquisition(acquisitionId, isLocked)
+        onRefresh?.()
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to delete acquisition')
+      }
+    },
+    [onRefresh],
+  )
+
+  // Handle bulk delete
+  const handleBulkDelete = useCallback(
+    async (force: boolean = false) => {
+      if (selectedIds.size === 0) return
+      if (!confirm(`Delete ${selectedIds.size} selected acquisition(s)?`)) return
+
+      setError(null)
+      setBulkLoading(true)
+      try {
+        const result = await bulkDeleteAcquisitions({
+          acquisition_ids: Array.from(selectedIds),
+          force,
+        })
+        if (result.skipped_hard_locked.length > 0 && !force) {
+          const retry = confirm(
+            `${result.deleted} deleted, but ${result.skipped_hard_locked.length} hard-locked acquisition(s) were skipped. Force delete them too?`,
+          )
+          if (retry) {
+            await bulkDeleteAcquisitions({
+              acquisition_ids: result.skipped_hard_locked,
+              force: true,
+            })
+          }
+        }
+        clearSelection()
+        onRefresh?.()
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to delete acquisitions')
+      } finally {
+        setBulkLoading(false)
+      }
+    },
+    [selectedIds, onRefresh],
+  )
+
   // Handle "Hard-lock all committed"
   const handleHardLockAllCommitted = useCallback(async () => {
     if (!workspaceId) return
@@ -194,7 +256,7 @@ export default function ScheduledAcquisitionsList({
         onRefresh?.()
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to hard-lock committed acquisitions')
+      setError(err instanceof Error ? err.message : 'Failed to hard-lock acquisitions')
     } finally {
       setBulkLoading(false)
     }
@@ -240,10 +302,10 @@ export default function ScheduledAcquisitionsList({
               onClick={handleHardLockAllCommitted}
               disabled={bulkLoading}
               className="px-2 py-1 text-xs bg-red-900/30 hover:bg-red-900/50 text-red-400 rounded flex items-center gap-1 disabled:opacity-50"
-              title="Hard-lock all committed acquisitions"
+              title="Hard-lock all acquisitions"
             >
               <Shield className="w-3 h-3" />
-              Lock Committed
+              Lock All
             </button>
           )}
           {onRefresh && (
@@ -284,6 +346,21 @@ export default function ScheduledAcquisitionsList({
         onBulkLock={handleBulkLock}
         disabled={bulkLoading}
       />
+
+      {/* Bulk delete bar */}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center gap-2 px-4 py-2 bg-red-900/10 border-b border-red-900/30 text-xs">
+          <Trash2 className="w-3 h-3 text-red-400" />
+          <span className="text-red-400">{selectedIds.size} selected</span>
+          <button
+            onClick={() => handleBulkDelete(false)}
+            disabled={bulkLoading}
+            className="px-2 py-1 bg-red-900/40 hover:bg-red-900/60 text-red-300 rounded disabled:opacity-50"
+          >
+            Delete Selected
+          </button>
+        </div>
+      )}
 
       {/* Error display */}
       {error && (
@@ -384,6 +461,22 @@ export default function ScheduledAcquisitionsList({
                               </span>
                             </div>
                           </div>
+
+                          {/* Delete button */}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleDeleteAcquisition(acq.id, acq.lock_level)
+                            }}
+                            className="p-1 text-gray-500 hover:text-red-400 rounded hover:bg-red-900/20 transition-colors"
+                            title={
+                              acq.lock_level === 'hard'
+                                ? 'Force delete (hard-locked)'
+                                : 'Delete acquisition'
+                            }
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
 
                           {/* Lock badge (small) */}
                           <LockBadge lockLevel={acq.lock_level as LockLevel} size="sm" />

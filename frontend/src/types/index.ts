@@ -552,7 +552,27 @@ export interface AlgorithmResult {
   metrics: ScheduleMetrics
   target_statistics?: TargetStatistics
   angle_statistics?: AngleStatistics
+  planner_summary?: {
+    target_acquisitions: Array<{
+      target_id: string
+      satellite_id: string
+      start_time: string
+      end_time: string
+      action: 'kept' | 'added'
+    }>
+    targets_not_scheduled: Array<{
+      target_id: string
+      reason: string
+    }>
+    horizon: { start: string; end: string }
+    satellites_used: string[]
+    total_targets_with_opportunities: number
+    total_targets_covered: number
+  }
   error?: string
+  // Repair mode metadata — used by commit handler to choose correct endpoint
+  repair_plan_id?: string
+  repair_dropped_ids?: string[]
 }
 
 export interface PlanningRequest {
@@ -644,4 +664,5 @@ export interface AcceptedOrder {
   }>
   satellites_involved?: string[]
   targets_covered?: string[]
+  backend_acquisition_ids?: string[]
 }

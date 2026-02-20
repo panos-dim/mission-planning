@@ -11,7 +11,7 @@ Provides endpoints for order batch planning:
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -244,7 +244,7 @@ async def create_batch(request: CreateBatchRequest) -> CreateBatchResponse:
 
     # Calculate horizon
     horizon_hours = request.horizon_hours or policy.selection_rules.horizon_hours
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     horizon_from = now.isoformat() + "Z"
     horizon_to = (now + timedelta(hours=horizon_hours)).isoformat() + "Z"
 

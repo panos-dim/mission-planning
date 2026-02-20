@@ -226,18 +226,22 @@ class TestGetCurrentUtc:
         assert isinstance(result, datetime)
 
     def test_is_recent(self) -> None:
-        before = datetime.utcnow()
+        from datetime import timezone
+
+        before = datetime.now(timezone.utc)
         result = get_current_utc()
-        after = datetime.utcnow()
+        after = datetime.now(timezone.utc)
 
         # Result should be between before and after
         assert before <= result <= after
 
-    def test_no_timezone(self) -> None:
+    def test_has_utc_timezone(self) -> None:
         result = get_current_utc()
 
-        # Should be naive datetime (no tzinfo)
-        assert result.tzinfo is None
+        # Should be timezone-aware UTC
+        from datetime import timezone
+
+        assert result.tzinfo == timezone.utc
 
 
 class TestDatetimeEdgeCases:

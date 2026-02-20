@@ -14,7 +14,7 @@ Key concepts:
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -1022,6 +1022,11 @@ def filter_opportunities_incremental(
         f"[IncrementalPlanning] Filtered opportunities: "
         f"{len(feasible)} feasible, {len(rejected)} rejected"
     )
+    for r in rejected:
+        logger.info(
+            f"[IncrementalPlanning]   REJECTED: {r.get('satellite_id')}→{r.get('target_id')} "
+            f"at {r.get('start_time', '?')[:19]} — {'; '.join(r.get('rejection_reasons', ['unknown']))}"
+        )
 
     return feasible, rejected
 
@@ -1077,8 +1082,8 @@ def predict_commit_conflicts(
     for idx, item in enumerate(new_items):
         pseudo = Acquisition(
             id=f"pseudo_{idx}",
-            created_at=datetime.utcnow().isoformat() + "Z",
-            updated_at=datetime.utcnow().isoformat() + "Z",
+            created_at=datetime.now(timezone.utc).isoformat() + "Z",
+            updated_at=datetime.now(timezone.utc).isoformat() + "Z",
             satellite_id=item.get("satellite_id", "unknown"),
             target_id=item.get("target_id", "unknown"),
             start_time=item.get("start_time", ""),
@@ -1418,19 +1423,24 @@ def execute_repair_planning(
         sorted_kept_flex = sorted(flex_to_keep, key=lambda f: f.value)
 
         # Try to replace low-value flex with high-value opportunities
+        # IMPORTANT: Only same-target replacement is allowed (quality upgrade).
+        # Cross-target replacement would drop existing coverage, violating user intent.
         for opp in sorted_opps:
             if changes_made >= max_changes:
                 break
 
             opp_value = opp.get("value", 1.0)
             opp_sat_id = opp.get("satellite_id", "")
+            opp_target = opp.get("target_id", "")
 
-            # Find lowest-value flex item on same satellite that this could replace
+            # Find lowest-value flex item on same satellite AND same target
             for flex in sorted_kept_flex:
                 if flex.action == "drop":
                     continue
                 if flex.satellite_id != opp_sat_id:
                     continue
+                if flex.target_id != opp_target:
+                    continue  # Only same-target replacement allowed
                 if flex.value >= opp_value:
                     continue  # No value improvement
 
@@ -1464,7 +1474,7 @@ def execute_repair_planning(
                     )
 
                     if is_feasible:
-                        # Replace flex with opp
+                        # Replace flex with better opportunity for same target
                         flex.action = "drop"
                         if flex.acquisition_id in kept_ids:
                             kept_ids.remove(flex.acquisition_id)
@@ -1484,13 +1494,36 @@ def execute_repair_planning(
     # Stage D: Fill remaining gaps with feasible opportunities not yet added
     # This handles the case where schedule is empty (nothing to replace) or
     # there are more feasible opportunities than flex items to replace.
+    #
+    # Per-target dedup: only add the best opportunity per target that doesn't
+    # already have an acquisition in the schedule (fixed + kept flex).
     already_added = set(added_ids)
+
+    # Build set of targets already covered by the current schedule
+    targets_covered: set[str] = set()
+    for interval in repair_context.fixed_set:
+        targets_covered.add(interval.target_id)
+    for flex in repair_context.flex_set:
+        if flex.action == "keep":
+            targets_covered.add(flex.target_id)
+    # Also track targets added during Stage C (replacement)
+    for opp_id in added_ids:
+        for opp in opportunities:
+            if opp.get("id", opp.get("opportunity_id", "")) == opp_id:
+                targets_covered.add(opp.get("target_id", ""))
+                break
+
     for opp in sorted(feasible_opps, key=lambda o: o.get("value", 1.0), reverse=True):
         if changes_made >= max_changes:
             break
         opp_id = opp.get("id", opp.get("opportunity_id", ""))
         if opp_id in already_added:
             continue  # Already added via replacement
+
+        # Per-target dedup: skip if this target already has an acquisition
+        opp_target = opp.get("target_id", "")
+        if opp_target and opp_target in targets_covered:
+            continue
 
         # Verify this opportunity doesn't conflict with anything already scheduled
         # (fixed items + kept flex + already-added opportunities)
@@ -1522,6 +1555,7 @@ def execute_repair_planning(
             added_ids.append(opp_id)
             already_added.add(opp_id)
             changes_made += 1
+            targets_covered.add(opp_target)
 
             # Also add to blocked intervals so subsequent opportunities check against it
             new_interval = BlockedInterval(
@@ -1554,6 +1588,7 @@ def execute_repair_planning(
                 "end_time": interval.end_time.isoformat() + "Z",
                 "roll_angle_deg": interval.roll_angle_deg,
                 "pitch_angle_deg": interval.pitch_angle_deg,
+                "value": getattr(interval, "value", 1.0) or 1.0,
                 "is_fixed": True,
                 "action": "kept",
             }
@@ -1571,6 +1606,7 @@ def execute_repair_planning(
                     "end_time": flex.original_end.isoformat() + "Z",
                     "roll_angle_deg": flex.roll_angle_deg,
                     "pitch_angle_deg": flex.pitch_angle_deg,
+                    "value": flex.value or 1.0,
                     "is_fixed": False,
                     "action": "kept",
                 }

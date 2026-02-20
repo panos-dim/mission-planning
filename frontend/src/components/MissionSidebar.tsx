@@ -1,8 +1,9 @@
 import React, { useState } from 'react'
 import { useMission } from '../context/MissionContext'
-import { Calendar, Clock, Download, Activity, List, BarChart2, Map, Target } from 'lucide-react'
+import { Calendar, Clock, Download, Activity, BarChart2, Map, Target } from 'lucide-react'
 import ObjectMapViewer from './ObjectMapViewer'
 import { formatDateTimeShort, formatDateDDMMYYYY } from '../utils/date'
+import { fmt2 } from '../utils/format'
 
 const MissionSidebar: React.FC = () => {
   const { state, navigateToPassWindow } = useMission()
@@ -18,36 +19,6 @@ const MissionSidebar: React.FC = () => {
     const a = document.createElement('a')
     a.href = url
     a.download = filename
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-  }
-
-  const downloadCSV = () => {
-    if (!state.missionData) return
-
-    const headers = [
-      'Target',
-      'Start Time (UTC)',
-      'End Time (UTC)',
-      'Max Elevation (°)',
-      'Opportunity Type',
-    ]
-    const rows = state.missionData.passes.map((pass) => [
-      pass.target,
-      pass.start_time,
-      pass.end_time,
-      pass.max_elevation.toFixed(1),
-      pass.pass_type,
-    ])
-
-    const csvContent = [headers, ...rows].map((row) => row.join(',')).join('\n')
-    const blob = new Blob([csvContent], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `mission_schedule_${state.missionData.satellite_name}.csv`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -86,13 +57,6 @@ const MissionSidebar: React.FC = () => {
                 }
                 className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors"
                 title="Download JSON"
-              >
-                <List className="w-4 h-4" />
-              </button>
-              <button
-                onClick={downloadCSV}
-                className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors"
-                title="Download CSV"
               >
                 <Download className="w-4 h-4" />
               </button>
@@ -163,7 +127,7 @@ const MissionSidebar: React.FC = () => {
                   state.missionData.elevation_mask !== undefined && (
                     <div className="flex justify-between">
                       <span className="text-gray-400">Elevation Mask:</span>
-                      <span className="text-white">{state.missionData.elevation_mask}°</span>
+                      <span className="text-white">{fmt2(state.missionData.elevation_mask)}°</span>
                     </div>
                   )}
               </div>
@@ -177,7 +141,7 @@ const MissionSidebar: React.FC = () => {
                     <Target className="w-3 h-3 text-red-400" />
                     <span className="text-white">{target.name}</span>
                     <span className="text-gray-400 text-xs">
-                      ({target.latitude.toFixed(2)}°, {target.longitude.toFixed(2)}°)
+                      ({fmt2(target.latitude)}°, {fmt2(target.longitude)}°)
                     </span>
                   </div>
                 ))}
@@ -232,7 +196,7 @@ const MissionSidebar: React.FC = () => {
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-400">Max Elev:</span>
-                      <span className="text-white">{pass.max_elevation.toFixed(1)}°</span>
+                      <span className="text-white">{fmt2(pass.max_elevation)}°</span>
                     </div>
                   </div>
                 </div>
@@ -315,7 +279,7 @@ const MissionSidebar: React.FC = () => {
                 </div>
                 <div>
                   <div className="text-2xl font-bold text-blue-400">
-                    {Math.max(...state.missionData.passes.map((p) => p.max_elevation)).toFixed(1)}°
+                    {fmt2(Math.max(...state.missionData.passes.map((p) => p.max_elevation)))}°
                   </div>
                   <div className="text-xs text-gray-400">Max Elevation</div>
                 </div>

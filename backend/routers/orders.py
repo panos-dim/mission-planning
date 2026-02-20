@@ -13,7 +13,7 @@ Provides endpoints for Order Inbox automation:
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -381,7 +381,7 @@ async def get_inbox(
     due_before = None
     if due_within_hours:
         due_before = (
-            datetime.utcnow() + timedelta(hours=due_within_hours)
+            datetime.now(timezone.utc) + timedelta(hours=due_within_hours)
         ).isoformat() + "Z"
 
     # Parse tags
@@ -487,6 +487,71 @@ async def update_order(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to update order {order_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class OrderDeleteResponse(BaseModel):
+    """Response for order deletion."""
+
+    success: bool
+    message: str
+    order_deleted: bool
+    acquisitions_deleted: int
+
+
+@router.delete("/{order_id}", response_model=OrderDeleteResponse)
+async def delete_order(
+    order_id: str,
+    cascade_acquisitions: bool = Query(
+        True, description="Also delete acquisitions linked to this order"
+    ),
+) -> OrderDeleteResponse:
+    """
+    Delete an order and optionally its associated acquisitions.
+
+    This permanently removes the order from the database.
+    If cascade_acquisitions is True (default), all acquisitions linked
+    to this order are also deleted.
+
+    Hard-locked acquisitions linked to the order will also be deleted
+    when cascade is enabled.
+    """
+    db = get_schedule_db()
+
+    # Check order exists
+    existing = db.get_order(order_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Order not found: {order_id}")
+
+    try:
+        result = db.delete_order(
+            order_id=order_id,
+            cascade_acquisitions=cascade_acquisitions,
+        )
+
+        if result["order_deleted"]:
+            logger.info(
+                f"Deleted order {order_id} "
+                f"(acquisitions_deleted={result['acquisitions_deleted']})"
+            )
+            return OrderDeleteResponse(
+                success=True,
+                message=f"Order {order_id} deleted"
+                + (
+                    f" ({result['acquisitions_deleted']} acquisitions removed)"
+                    if result["acquisitions_deleted"] > 0
+                    else ""
+                ),
+                order_deleted=True,
+                acquisitions_deleted=result["acquisitions_deleted"],
+            )
+        else:
+            raise HTTPException(status_code=500, detail="Failed to delete order")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete order {order_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -624,7 +689,7 @@ async def defer_order(order_id: str, request: DeferOrderRequest) -> OrderUpdateR
     if request.new_due_time:
         new_due_time = request.new_due_time
     elif request.defer_hours:
-        base_time = datetime.utcnow()
+        base_time = datetime.now(timezone.utc)
         if existing.due_time:
             try:
                 base_time = datetime.fromisoformat(

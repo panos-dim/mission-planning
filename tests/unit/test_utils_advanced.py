@@ -218,10 +218,12 @@ class TestGetCurrentUtc:
         assert isinstance(result, datetime)
 
     def test_returns_utc(self) -> None:
+        from datetime import timezone
+
         result = get_current_utc()
 
         # Should be close to now (within a second)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         diff = abs((result - now).total_seconds())
         assert diff < 2.0
 

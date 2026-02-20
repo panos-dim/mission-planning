@@ -1067,7 +1067,7 @@ const RepairChangeBadge: React.FC<RepairChangeBadgeProps> = ({ type, movedInfo, 
         </div>
       )}
 
-      <div className="mt-1 text-[10px] text-gray-500 italic">Preview only — not committed</div>
+      <div className="mt-1 text-[10px] text-gray-500 italic">Preview only — not applied</div>
     </div>
   )
 }
@@ -1702,11 +1702,9 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
                       <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-800/50 border border-gray-700/50">
                         <Lock size={14} className="text-gray-500" />
                         <div>
-                          <div className="text-xs text-gray-400">
-                            Locking available after commit
-                          </div>
+                          <div className="text-xs text-gray-400">Locking available after apply</div>
                           <div className="text-[10px] text-gray-500">
-                            Commit the repair plan first, then lock items
+                            Apply the repair plan first, then lock items
                           </div>
                         </div>
                       </div>

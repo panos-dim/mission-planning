@@ -12,7 +12,7 @@ Endpoints:
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -178,7 +178,7 @@ async def get_schedule_state(
     if acquisitions:
         start_times = [a.start_time for a in acquisitions]
         end_times = [a.end_time for a in acquisitions]
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         horizon = HorizonInfo(
             start=min(start_times),
             end=max(end_times),
@@ -245,7 +245,7 @@ async def get_schedule_horizon(
     db = get_schedule_db()
 
     # Parse or default times
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     if from_time:
         try:
@@ -447,7 +447,7 @@ async def get_schedule_conflicts(
 
     # If horizon specified, use horizon-based query
     if from_time or to_time:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         start_str = from_time or (now.isoformat() + "Z")
         end_str = to_time or ((now + timedelta(days=7)).isoformat() + "Z")
 
@@ -503,7 +503,7 @@ async def recompute_conflicts(
     db = get_schedule_db()
 
     # Parse or default times
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     start_str = request.from_time or (now.isoformat() + "Z")
     end_str = request.to_time or ((now + timedelta(days=7)).isoformat() + "Z")
 
@@ -733,6 +733,137 @@ async def hard_lock_all_committed(
 
 
 # =============================================================================
+# Acquisition Deletion Endpoints
+# =============================================================================
+
+
+class DeleteAcquisitionResponse(BaseModel):
+    """Response from acquisition deletion."""
+
+    success: bool
+    message: str
+    acquisition_id: str
+
+
+class BulkDeleteAcquisitionsRequest(BaseModel):
+    """Request for bulk acquisition deletion."""
+
+    acquisition_ids: List[str] = Field(..., description="Acquisition IDs to delete")
+    force: bool = Field(
+        default=False,
+        description="Force delete even hard-locked acquisitions",
+    )
+
+
+class BulkDeleteAcquisitionsResponse(BaseModel):
+    """Response from bulk acquisition deletion."""
+
+    success: bool
+    message: str
+    deleted: int
+    failed: List[str]
+    skipped_hard_locked: List[str] = Field(default_factory=list)
+
+
+@router.delete(
+    "/acquisition/{acquisition_id}", response_model=DeleteAcquisitionResponse
+)
+async def delete_acquisition(
+    acquisition_id: str,
+    force: bool = Query(False, description="Force delete even if hard-locked"),
+) -> DeleteAcquisitionResponse:
+    """
+    Delete a single acquisition from the schedule.
+
+    By default, hard-locked acquisitions cannot be deleted.
+    Use force=true to override this protection.
+    """
+    db = get_schedule_db()
+
+    # Check acquisition exists
+    acq = db.get_acquisition(acquisition_id)
+    if not acq:
+        raise HTTPException(
+            status_code=404, detail=f"Acquisition not found: {acquisition_id}"
+        )
+
+    # Protect hard-locked acquisitions unless force
+    if acq.lock_level == "hard" and not force:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Acquisition {acquisition_id} is hard-locked. "
+            f"Use force=true to delete it.",
+        )
+
+    success = db.delete_acquisition(acquisition_id)
+
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to delete acquisition")
+
+    logger.info(
+        f"Deleted acquisition {acquisition_id} "
+        f"(was {acq.state}, lock={acq.lock_level})"
+    )
+
+    return DeleteAcquisitionResponse(
+        success=True,
+        message=f"Acquisition {acquisition_id} deleted",
+        acquisition_id=acquisition_id,
+    )
+
+
+@router.post(
+    "/acquisitions/bulk-delete",
+    response_model=BulkDeleteAcquisitionsResponse,
+)
+async def bulk_delete_acquisitions(
+    request: BulkDeleteAcquisitionsRequest,
+) -> BulkDeleteAcquisitionsResponse:
+    """
+    Delete multiple acquisitions from the schedule.
+
+    By default, hard-locked acquisitions are skipped.
+    Use force=true to delete them as well.
+    """
+    db = get_schedule_db()
+
+    if not request.acquisition_ids:
+        raise HTTPException(status_code=400, detail="No acquisition IDs provided")
+
+    ids_to_delete = list(request.acquisition_ids)
+    skipped_hard_locked: List[str] = []
+
+    # Unless force, filter out hard-locked acquisitions
+    if not request.force:
+        filtered_ids: List[str] = []
+        for acq_id in ids_to_delete:
+            acq = db.get_acquisition(acq_id)
+            if acq and acq.lock_level == "hard":
+                skipped_hard_locked.append(acq_id)
+            else:
+                filtered_ids.append(acq_id)
+        ids_to_delete = filtered_ids
+
+    result = db.bulk_delete_acquisitions(ids_to_delete)
+
+    message = f"Deleted {result['deleted']} acquisitions"
+    if result["failed"]:
+        message += f" ({len(result['failed'])} not found)"
+    if skipped_hard_locked:
+        message += f" ({len(skipped_hard_locked)} hard-locked skipped)"
+
+    logger.info(message)
+
+    return BulkDeleteAcquisitionsResponse(
+        success=True,
+        message=message,
+        deleted=result["deleted"],
+        failed=result["failed"],
+        skipped_hard_locked=skipped_hard_locked,
+    )
+
+
+# =============================================================================
 # Commit Plan Endpoint
 # =============================================================================
 
@@ -838,7 +969,7 @@ async def commit_plan(request: CommitPlanRequest) -> CommitPlanResponse:
         conflict_ids: List[str] = []
 
         if request.recompute_conflicts and request.workspace_id:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             start_str = now.isoformat() + "Z"
             end_str = (now + timedelta(days=7)).isoformat() + "Z"
 
@@ -1042,9 +1173,7 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
 
     try:
         # Generate run_id and input hash
-        run_id = (
-            f"run_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
-        )
+        run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
         input_data = f"{request.algorithm}:{len(request.items)}:{request.workspace_id}"
         input_hash = f"sha256:{hashlib.sha256(input_data.encode()).hexdigest()[:16]}"
 
@@ -1052,7 +1181,7 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
         metrics = {
             "accepted": len(request.items),
             "algorithm": request.algorithm,
-            "committed_at": datetime.utcnow().isoformat() + "Z",
+            "committed_at": datetime.now(timezone.utc).isoformat() + "Z",
         }
 
         # Create plan record
@@ -1246,7 +1375,7 @@ async def create_incremental_plan(
     db = get_schedule_db()
 
     # Parse horizon times
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     if request.horizon_from:
         try:
@@ -1771,6 +1900,9 @@ class RepairPlanResponseModel(BaseModel):
     plan_id: Optional[str] = None
     schedule_context: Dict[str, Any] = Field(default_factory=dict)
 
+    # Planner-facing summary: per-target details for intelligent narrative
+    planner_summary: Dict[str, Any] = Field(default_factory=dict)
+
 
 @router.post("/repair", response_model=RepairPlanResponseModel)
 async def create_repair_plan(
@@ -1804,7 +1936,7 @@ async def create_repair_plan(
     db = get_schedule_db()
 
     # Parse horizon times
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     if request.horizon_from:
         try:
@@ -1918,13 +2050,22 @@ async def create_repair_plan(
                     if isinstance(p, dict):
                         sat = p["satellite_name"]
                         tgt = p["target_name"]
-                        st = _dt.fromisoformat(p["start_time"])
-                        et = _dt.fromisoformat(p["end_time"])
+                        # Use max_elevation_time as the imaging point (not full pass window)
+                        met = p.get("max_elevation_time")
+                        st = (
+                            _dt.fromisoformat(met)
+                            if met
+                            else _dt.fromisoformat(p["start_time"])
+                        )
+                        et = st  # Point-in-time imaging opportunity
+                        inc = p.get("incidence_angle_deg")
                     else:
                         sat = p.satellite_name
                         tgt = p.target_name
-                        st = p.start_time
-                        et = p.end_time
+                        # Use max_elevation_time as the imaging point (not full pass window)
+                        st = getattr(p, "max_elevation_time", None) or p.start_time
+                        et = st  # Point-in-time imaging opportunity
+                        inc = getattr(p, "incidence_angle_deg", None)
                     raw_opportunities.append(
                         {
                             "id": f"{sat}_{tgt}_{idx}",
@@ -1937,7 +2078,7 @@ async def create_repair_plan(
                             "end_time": (
                                 et.isoformat() if hasattr(et, "isoformat") else str(et)
                             ),
-                            "roll_angle_deg": 0.0,
+                            "roll_angle_deg": inc if inc is not None else 0.0,
                             "pitch_angle_deg": 0.0,
                             "value": 1.0,
                         }
@@ -2018,8 +2159,16 @@ async def create_repair_plan(
         )
 
     # Predict conflicts if committed
+    # Only check genuinely NEW items (added), not kept/moved items already in DB
     conflicts_if_committed: List[Dict[str, Any]] = []
-    if request.workspace_id and new_items:
+    added_ids = set(repair_diff.added)
+    truly_new_items = [
+        item
+        for item, sched in zip(new_items, proposed_schedule)
+        if sched.get("action") == "added"
+        or sched.get("acquisition_id", sched.get("opportunity_id", "")) in added_ids
+    ]
+    if request.workspace_id and truly_new_items:
         new_item_dicts = [
             {
                 "satellite_id": item.satellite_id,
@@ -2029,7 +2178,7 @@ async def create_repair_plan(
                 "roll_angle_deg": item.roll_angle_deg,
                 "pitch_angle_deg": item.pitch_angle_deg,
             }
-            for item in new_items
+            for item in truly_new_items
         ]
         conflicts_if_committed, _ = predict_commit_conflicts(
             db=db,
@@ -2116,6 +2265,61 @@ async def create_repair_plan(
 
     logger.info(f"[Repair Plan] {message}")
 
+    # ── Build planner_summary: per-target details for intelligent narrative ──
+    # Scheduled targets: which satellite, when, action (kept/added)
+    kept_ids = set(repair_diff.kept)
+    added_ids_set = set(repair_diff.added)
+
+    target_acquisitions: List[Dict[str, Any]] = []
+    scheduled_target_ids: set[str] = set()
+    satellites_used: set[str] = set()
+
+    for item in proposed_schedule:
+        tid = item.get("target_id", "")
+        sid = item.get("satellite_id", "")
+        acq_id = item.get("acquisition_id", item.get("opportunity_id", ""))
+
+        action = "kept" if acq_id in kept_ids else "added"
+        scheduled_target_ids.add(tid)
+        satellites_used.add(sid)
+
+        target_acquisitions.append(
+            {
+                "target_id": tid,
+                "satellite_id": sid,
+                "start_time": item.get("start_time", ""),
+                "end_time": item.get("end_time", ""),
+                "action": action,
+            }
+        )
+
+    # All targets that had opportunities (from feasibility)
+    all_opp_targets: set[str] = set()
+    for opp in raw_opportunities:
+        all_opp_targets.add(opp.get("target_id", ""))
+
+    # Targets with opportunities but not scheduled
+    targets_not_scheduled: List[Dict[str, str]] = []
+    for tid in sorted(all_opp_targets - scheduled_target_ids):
+        targets_not_scheduled.append(
+            {
+                "target_id": tid,
+                "reason": "Lower priority or no feasible slot after scheduling constraints",
+            }
+        )
+
+    planner_summary = {
+        "target_acquisitions": target_acquisitions,
+        "targets_not_scheduled": targets_not_scheduled,
+        "horizon": {
+            "start": horizon_start.isoformat() + "Z",
+            "end": horizon_end.isoformat() + "Z",
+        },
+        "satellites_used": sorted(satellites_used),
+        "total_targets_with_opportunities": len(all_opp_targets),
+        "total_targets_covered": len(scheduled_target_ids),
+    }
+
     return RepairPlanResponseModel(
         success=True,
         message=message,
@@ -2136,6 +2340,7 @@ async def create_repair_plan(
         algorithm_metrics=metrics,
         plan_id=plan.id,
         schedule_context=schedule_context,
+        planner_summary=planner_summary,
     )
 
 
@@ -2264,7 +2469,7 @@ async def commit_repair_plan(request: RepairCommitRequest) -> RepairCommitRespon
         )
 
         # Recompute conflicts
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         start_str = now.isoformat() + "Z"
         end_str = (now + timedelta(days=7)).isoformat() + "Z"
 

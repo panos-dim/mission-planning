@@ -215,17 +215,21 @@ class TestGetCurrentUtc:
 
         assert isinstance(result, datetime)
 
-    def test_no_timezone(self) -> None:
+    def test_has_utc_timezone(self) -> None:
         result = get_current_utc()
 
-        # Should be timezone-naive UTC
-        assert result.tzinfo is None
+        # Should be timezone-aware UTC
+        from datetime import timezone
+
+        assert result.tzinfo == timezone.utc
 
     def test_reasonable_time(self) -> None:
+        from datetime import timezone
+
         result = get_current_utc()
 
         # Should be recent (within last hour)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         diff = abs((now - result).total_seconds())
 
         assert diff < 3600  # Within 1 hour

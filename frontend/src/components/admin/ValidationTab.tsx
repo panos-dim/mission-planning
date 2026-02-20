@@ -1,53 +1,53 @@
-import React, { useState, useEffect } from "react";
-import { FlaskConical, RefreshCw, Play, CheckCircle, XCircle } from "lucide-react";
+import React, { useState, useEffect } from 'react'
+import { FlaskConical, RefreshCw, Play, CheckCircle, XCircle } from 'lucide-react'
 import {
   listWorkflowScenarios,
   runWorkflowValidation,
   WorkflowScenario,
   WorkflowValidationReport,
-} from "../../api/workflowValidation";
+} from '../../api/workflowValidation'
 
 const ValidationTab: React.FC = () => {
-  const [scenarios, setScenarios] = useState<WorkflowScenario[]>([]);
-  const [selectedScenarioId, setSelectedScenarioId] = useState<string>("");
-  const [isRunning, setIsRunning] = useState(false);
-  const [report, setReport] = useState<WorkflowValidationReport | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [scenarios, setScenarios] = useState<WorkflowScenario[]>([])
+  const [selectedScenarioId, setSelectedScenarioId] = useState<string>('')
+  const [isRunning, setIsRunning] = useState(false)
+  const [report, setReport] = useState<WorkflowValidationReport | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     const fetchScenarios = async () => {
       try {
-        const data = await listWorkflowScenarios();
-        setScenarios(data);
+        const data = await listWorkflowScenarios()
+        setScenarios(data)
         if (data.length > 0 && !selectedScenarioId) {
-          setSelectedScenarioId(data[0].id);
+          setSelectedScenarioId(data[0].id)
         }
       } catch (err) {
-        console.error("Error fetching validation scenarios:", err);
+        console.error('Error fetching validation scenarios:', err)
       }
-    };
-    fetchScenarios();
+    }
+    fetchScenarios()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [])
 
   const handleRunValidation = async () => {
-    if (!selectedScenarioId) return;
-    setIsRunning(true);
-    setError(null);
-    setReport(null);
+    if (!selectedScenarioId) return
+    setIsRunning(true)
+    setError(null)
+    setReport(null)
 
     try {
       const result = await runWorkflowValidation({
         scenario_id: selectedScenarioId,
         dry_run: true,
-      });
-      setReport(result);
+      })
+      setReport(result)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Validation failed");
+      setError(err instanceof Error ? err.message : 'Validation failed')
     } finally {
-      setIsRunning(false);
+      setIsRunning(false)
     }
-  };
+  }
 
   return (
     <div className="space-y-4">
@@ -60,16 +60,14 @@ const ValidationTab: React.FC = () => {
       </div>
 
       <p className="text-gray-400 text-sm">
-        Run deterministic validation scenarios to verify mission analysis →
-        planning → commit workflows.
+        Run deterministic validation scenarios to verify mission analysis → planning → apply
+        workflows.
       </p>
 
       {/* Scenario Selection */}
       <div className="bg-gray-800 p-4 rounded-lg space-y-4">
         <div>
-          <label className="block text-sm text-gray-400 mb-2">
-            Select Scenario
-          </label>
+          <label className="block text-sm text-gray-400 mb-2">Select Scenario</label>
           <select
             value={selectedScenarioId}
             onChange={(e) => setSelectedScenarioId(e.target.value)}
@@ -80,8 +78,8 @@ const ValidationTab: React.FC = () => {
             ) : (
               scenarios.map((scenario) => (
                 <option key={scenario.id} value={scenario.id}>
-                  {scenario.name} ({scenario.num_satellites} satellites,{" "}
-                  {scenario.num_targets} targets)
+                  {scenario.name} ({scenario.num_satellites} satellites, {scenario.num_targets}{' '}
+                  targets)
                 </option>
               ))
             )}
@@ -122,9 +120,7 @@ const ValidationTab: React.FC = () => {
       {report && (
         <div
           className={`border rounded-lg p-4 ${
-            report.passed
-              ? "bg-green-900/30 border-green-600"
-              : "bg-red-900/30 border-red-600"
+            report.passed ? 'bg-green-900/30 border-green-600' : 'bg-red-900/30 border-red-600'
           }`}
         >
           <div className="flex items-center space-x-3 mb-4">
@@ -134,11 +130,9 @@ const ValidationTab: React.FC = () => {
               <XCircle className="w-6 h-6 text-red-400" />
             )}
             <h4
-              className={`text-lg font-medium ${
-                report.passed ? "text-green-200" : "text-red-200"
-              }`}
+              className={`text-lg font-medium ${report.passed ? 'text-green-200' : 'text-red-200'}`}
             >
-              {report.passed ? "Validation Passed" : "Validation Failed"}
+              {report.passed ? 'Validation Passed' : 'Validation Failed'}
             </h4>
           </div>
 
@@ -149,9 +143,7 @@ const ValidationTab: React.FC = () => {
             </div>
             <div>
               <span className="text-gray-400">Runtime:</span>
-              <span className="text-white ml-2">
-                {report.total_runtime_ms.toFixed(0)}ms
-              </span>
+              <span className="text-white ml-2">{report.total_runtime_ms.toFixed(0)}ms</span>
             </div>
             <div>
               <span className="text-gray-400">Invariants:</span>
@@ -161,9 +153,7 @@ const ValidationTab: React.FC = () => {
             </div>
             <div>
               <span className="text-gray-400">Report Hash:</span>
-              <span className="text-white ml-2 font-mono text-xs">
-                {report.report_hash}
-              </span>
+              <span className="text-white ml-2 font-mono text-xs">{report.report_hash}</span>
             </div>
           </div>
 
@@ -172,27 +162,19 @@ const ValidationTab: React.FC = () => {
             <h5 className="text-gray-300 text-sm font-medium mb-2">Counts</h5>
             <div className="grid grid-cols-4 gap-2 text-sm">
               <div className="bg-gray-800 rounded p-2 text-center">
-                <div className="text-xl font-bold text-white">
-                  {report.counts.opportunities}
-                </div>
+                <div className="text-xl font-bold text-white">{report.counts.opportunities}</div>
                 <div className="text-gray-400 text-xs">Opportunities</div>
               </div>
               <div className="bg-gray-800 rounded p-2 text-center">
-                <div className="text-xl font-bold text-white">
-                  {report.counts.planned}
-                </div>
+                <div className="text-xl font-bold text-white">{report.counts.planned}</div>
                 <div className="text-gray-400 text-xs">Planned</div>
               </div>
               <div className="bg-gray-800 rounded p-2 text-center">
-                <div className="text-xl font-bold text-white">
-                  {report.counts.committed}
-                </div>
-                <div className="text-gray-400 text-xs">Committed</div>
+                <div className="text-xl font-bold text-white">{report.counts.committed}</div>
+                <div className="text-gray-400 text-xs">Applied</div>
               </div>
               <div className="bg-gray-800 rounded p-2 text-center">
-                <div className="text-xl font-bold text-white">
-                  {report.counts.conflicts}
-                </div>
+                <div className="text-xl font-bold text-white">{report.counts.conflicts}</div>
                 <div className="text-gray-400 text-xs">Conflicts</div>
               </div>
             </div>
@@ -201,15 +183,13 @@ const ValidationTab: React.FC = () => {
           {/* Invariants */}
           {report.invariants.length > 0 && (
             <div className="mt-4 pt-4 border-t border-gray-700">
-              <h5 className="text-gray-300 text-sm font-medium mb-2">
-                Invariant Checks
-              </h5>
+              <h5 className="text-gray-300 text-sm font-medium mb-2">Invariant Checks</h5>
               <div className="space-y-2">
                 {report.invariants.map((inv, idx) => (
                   <div
                     key={idx}
                     className={`flex items-center space-x-2 text-sm ${
-                      inv.passed ? "text-green-300" : "text-red-300"
+                      inv.passed ? 'text-green-300' : 'text-red-300'
                     }`}
                   >
                     {inv.passed ? (
@@ -233,7 +213,7 @@ const ValidationTab: React.FC = () => {
         </div>
       )}
     </div>
-  );
-};
+  )
+}
 
-export default ValidationTab;
+export default ValidationTab
