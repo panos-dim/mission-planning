@@ -6,25 +6,14 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react'
-import { Save, RotateCcw, X, Palette, AlertCircle } from 'lucide-react'
+import { Save, RotateCcw, X, AlertCircle } from 'lucide-react'
 import { useTargetAddStore } from '../../store/targetAddStore'
 import { usePreFeasibilityOrdersStore } from '../../store/preFeasibilityOrdersStore'
 import { TargetData } from '../../types'
 import { formatCoordinates } from '../../utils/coordinateUtils'
 
-// Color presets for target markers
-const TARGET_COLORS = [
-  { value: '#EF4444', label: 'Red' },
-  { value: '#F97316', label: 'Orange' },
-  { value: '#EAB308', label: 'Yellow' },
-  { value: '#84CC16', label: 'Lime' },
-  { value: '#22C55E', label: 'Green' },
-  { value: '#06B6D4', label: 'Cyan' },
-  { value: '#3B82F6', label: 'Blue' },
-  { value: '#8B5CF6', label: 'Purple' },
-]
-
-const DEFAULT_COLOR = '#EF4444'
+// PR-UI-022: All targets use brand blue — no manual color coding
+const BRAND_BLUE = '#3B82F6'
 
 const TargetConfirmPanel: React.FC = () => {
   const { pendingTarget, isAddMode, clearPendingTarget, setPendingPreview } = useTargetAddStore()
@@ -32,7 +21,7 @@ const TargetConfirmPanel: React.FC = () => {
 
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
-  const [color, setColor] = useState(DEFAULT_COLOR)
+  const color = BRAND_BLUE
   const [priority, setPriority] = useState(5)
 
   // Reset form when pending target changes (new click on map)
@@ -40,23 +29,23 @@ const TargetConfirmPanel: React.FC = () => {
     if (pendingTarget) {
       setName(pendingTarget.name || '')
       setDescription(pendingTarget.description || '')
-      setColor(DEFAULT_COLOR)
+      // color is always BRAND_BLUE (PR-UI-022)
       setPriority(5)
     }
   }, [pendingTarget])
 
-  // Sync name + color to store so GlobeViewport can live-preview the marker
+  // Sync name to store so GlobeViewport can live-preview the marker
   const syncPreview = useCallback(
-    (newName: string, newColor: string) => {
-      setPendingPreview(newName, newColor)
+    (newName: string) => {
+      setPendingPreview(newName, BRAND_BLUE)
     },
     [setPendingPreview],
   )
 
-  // Push preview on every name or color change
+  // Push preview on every name change
   useEffect(() => {
-    syncPreview(name, color)
-  }, [name, color, syncPreview])
+    syncPreview(name)
+  }, [name, syncPreview])
 
   if (!pendingTarget) {
     return (
@@ -95,9 +84,8 @@ const TargetConfirmPanel: React.FC = () => {
   const handleDiscard = () => {
     setName('')
     setDescription('')
-    setColor(DEFAULT_COLOR)
     setPriority(5)
-    setPendingPreview('', DEFAULT_COLOR)
+    setPendingPreview('', BRAND_BLUE)
   }
 
   // Cancel: close everything (remove marker, close panel)
@@ -183,49 +171,23 @@ const TargetConfirmPanel: React.FC = () => {
           />
         </div>
 
-        {/* Color & Priority */}
-        <div className="grid grid-cols-2 gap-4">
-          {/* Color Picker */}
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
-              <Palette className="w-3 h-3 inline mr-1" />
-              Marker Color
-            </label>
-            <div className="flex flex-wrap gap-2">
-              {TARGET_COLORS.map((c) => (
-                <button
-                  key={c.value}
-                  onClick={() => setColor(c.value)}
-                  className={`w-7 h-7 rounded-full border-2 transition-all ${
-                    color === c.value
-                      ? 'border-white scale-110'
-                      : 'border-transparent hover:border-gray-500'
-                  }`}
-                  style={{ backgroundColor: c.value }}
-                  title={c.label}
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* Priority */}
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
-              Priority
-              <span className="text-[10px] text-gray-500 ml-1">1 best → 5 lowest</span>
-            </label>
-            <select
-              value={priority}
-              onChange={(e) => setPriority(parseInt(e.target.value))}
-              className="input-field w-full"
-            >
-              <option value="1">1 (Best)</option>
-              <option value="2">2</option>
-              <option value="3">3 (Medium)</option>
-              <option value="4">4</option>
-              <option value="5">5 (Lowest)</option>
-            </select>
-          </div>
+        {/* Priority */}
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-2">
+            Priority
+            <span className="text-[10px] text-gray-500 ml-1">1 best → 5 lowest</span>
+          </label>
+          <select
+            value={priority}
+            onChange={(e) => setPriority(parseInt(e.target.value))}
+            className="input-field w-full"
+          >
+            <option value="1">1 (Best)</option>
+            <option value="2">2</option>
+            <option value="3">3 (Medium)</option>
+            <option value="4">4</option>
+            <option value="5">5 (Lowest)</option>
+          </select>
         </div>
 
         {/* Help Text */}

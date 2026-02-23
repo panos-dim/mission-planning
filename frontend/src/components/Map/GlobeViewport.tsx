@@ -19,6 +19,8 @@ import {
   HorizontalOrigin,
   LabelStyle,
   ColorMaterialProperty,
+  DataSource,
+  Property,
 } from 'cesium'
 import { useMission } from '../../context/MissionContext'
 import { SceneObject } from '../../types'
@@ -121,7 +123,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
   const [isUsingFallback, setIsUsingFallback] = useState(false)
   const imageryReplacedRef = useRef(false)
   // Loaded CZML DataSource — set from onLoad callback to guarantee availability
-  const [loadedDataSource, setLoadedDataSource] = useState<any>(null)
+  const [loadedDataSource, setLoadedDataSource] = useState<DataSource | null>(null)
 
   // Create OSM provider immediately (needed as emergency fallback)
   const [osmProvider] = useState(() => {
@@ -269,7 +271,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
       const entityId = `preview_target_${index}`
 
       // Calculate darker stroke color (same as backend)
-      const hexColor = (target.color || '#EF4444').replace('#', '')
+      const hexColor = (target.color || '#3B82F6').replace('#', '')
       const r = Math.max(0, parseInt(hexColor.substring(0, 2), 16) - 40)
       const g = Math.max(0, parseInt(hexColor.substring(2, 4), 16) - 40)
       const b = Math.max(0, parseInt(hexColor.substring(4, 6), 16) - 40)
@@ -280,7 +282,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
       // Create SVG billboard matching backend exactly
       const svgPin = `<svg width="32" height="40" viewBox="0 0 32 40" xmlns="http://www.w3.org/2000/svg">
         <path d="M16 0C9.4 0 4 5.4 4 12c0 8 12 28 12 28s12-20 12-28c0-6.6-5.4-12-12-12z"
-              fill="${target.color || '#EF4444'}" stroke="${strokeColor}" stroke-width="2"/>
+              fill="${target.color || '#3B82F6'}" stroke="${strokeColor}" stroke-width="2"/>
         <circle cx="16" cy="12" r="5" fill="#FFF"/>
       </svg>`
       const svgBase64 = 'data:image/svg+xml;base64,' + btoa(svgPin)
@@ -500,10 +502,13 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
         let currentImage: string | null = null
         if (typeof imgProp === 'string') {
           currentImage = imgProp
-        } else if (imgProp && typeof (imgProp as any).getValue === 'function') {
-          currentImage = (imgProp as any).getValue(JulianDate.now())
-        } else if (imgProp && typeof (imgProp as any).valueOf === 'function') {
-          const val = (imgProp as any).valueOf()
+        } else if (imgProp && typeof (imgProp as Property).getValue === 'function') {
+          currentImage = (imgProp as Property).getValue(JulianDate.now())
+        } else if (
+          imgProp &&
+          typeof (imgProp as { valueOf: () => unknown }).valueOf === 'function'
+        ) {
+          const val = (imgProp as { valueOf: () => unknown }).valueOf()
           if (typeof val === 'string') currentImage = val
         }
         if (currentImage) {
@@ -514,9 +519,19 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
       const targetName = entity.name || entity.id?.replace(/^(preview_)?target_/, '') || ''
       const isAcquired = hasResults && scheduledTargets.has(targetName)
 
-      // Gray for unscheduled/no-results, blue for acquired
-      const fillColor = isAcquired ? '#3B82F6' : '#6B7280' // blue-500 : gray-500
-      const strokeColor = isAcquired ? '#2563EB' : '#4B5563' // blue-600 : gray-600
+      // PR-UI-022: gray when no scheduler has run, blue/red after scheduling
+      let fillColor: string
+      let strokeColor: string
+      if (!hasResults) {
+        fillColor = '#6B7280' // gray-500 — scheduler not yet run
+        strokeColor = '#4B5563' // gray-600
+      } else if (isAcquired) {
+        fillColor = '#3B82F6' // blue-500 — scheduled
+        strokeColor = '#2563EB' // blue-600
+      } else {
+        fillColor = '#EF4444' // red-500 — not scheduled
+        strokeColor = '#DC2626' // red-600
+      }
 
       const svgPin = `<svg width="32" height="40" viewBox="0 0 32 40" xmlns="http://www.w3.org/2000/svg">
         <path d="M16 0C9.4 0 4 5.4 4 12c0 8 12 28 12 28s12-20 12-28c0-6.6-5.4-12-12-12z"
@@ -561,9 +576,9 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
       const targetName = entity.name || entity.id?.replace('target_', '') || ''
       const isAcquired = acquiredTargetIds.has(targetName)
 
-      // Build SVG pin with status color
-      const fillColor = isAcquired ? '#22c55e' : '#ef4444' // green-500 : red-500
-      const strokeColor = isAcquired ? '#16a34a' : '#dc2626' // green-600 : red-600
+      // PR-UI-022: blue for acquired, red for not-acquired (no green)
+      const fillColor = isAcquired ? '#3B82F6' : '#ef4444' // blue-500 : red-500
+      const strokeColor = isAcquired ? '#2563EB' : '#dc2626' // blue-600 : red-600
 
       const svgPin = `<svg width="32" height="40" viewBox="0 0 32 40" xmlns="http://www.w3.org/2000/svg">
         <path d="M16 0C9.4 0 4 5.4 4 12c0 8 12 28 12 28s12-20 12-28c0-6.6-5.4-12-12-12z"

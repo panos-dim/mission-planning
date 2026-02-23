@@ -42,7 +42,7 @@ export const useTargetAddStore = create<TargetAddState>()(
       pendingTarget: null,
       isDetailsSheetOpen: false,
       pendingLabel: '',
-      pendingColor: '#06B6D4',
+      pendingColor: '#3B82F6',
 
       // Actions
       enableAddMode: () => {
@@ -56,7 +56,7 @@ export const useTargetAddStore = create<TargetAddState>()(
           pendingTarget: null,
           isDetailsSheetOpen: false,
           pendingLabel: '',
-          pendingColor: '#06B6D4',
+          pendingColor: '#3B82F6',
         })
       },
 
@@ -70,7 +70,7 @@ export const useTargetAddStore = create<TargetAddState>()(
       },
 
       setPendingTarget: (target: PendingTarget | null) => {
-        set({ pendingTarget: target, pendingLabel: '', pendingColor: '#06B6D4' })
+        set({ pendingTarget: target, pendingLabel: '', pendingColor: '#3B82F6' })
       },
 
       setPendingPreview: (label: string, color: string) => {
@@ -90,7 +90,7 @@ export const useTargetAddStore = create<TargetAddState>()(
           pendingTarget: null,
           isDetailsSheetOpen: false,
           pendingLabel: '',
-          pendingColor: '#06B6D4',
+          pendingColor: '#3B82F6',
         })
       },
     }),

@@ -4,7 +4,9 @@ interface OpportunityMetricsCardProps {
   opportunity: ScheduledOpportunity | null
 }
 
-export default function OpportunityMetricsCard({ opportunity }: OpportunityMetricsCardProps): JSX.Element | null {
+export default function OpportunityMetricsCard({
+  opportunity,
+}: OpportunityMetricsCardProps): JSX.Element | null {
   if (!opportunity) return null
 
   const formatTime = (timeStr: string) => {
@@ -23,9 +25,9 @@ export default function OpportunityMetricsCard({ opportunity }: OpportunityMetri
         <div className="flex items-center gap-2 border-b border-gray-700 pb-1.5 mb-1.5">
           <span className="font-semibold text-blue-400">{opportunity.satellite_id}</span>
           <span className="text-gray-500">→</span>
-          <span className="font-semibold text-green-400">{opportunity.target_id}</span>
+          <span className="font-semibold text-blue-400">{opportunity.target_id}</span>
         </div>
-        
+
         <div className="grid grid-cols-2 gap-x-3 gap-y-1">
           <div>
             <span className="text-gray-400">Start:</span>
@@ -35,7 +37,7 @@ export default function OpportunityMetricsCard({ opportunity }: OpportunityMetri
             <span className="text-gray-400">End:</span>
             <span className="ml-1 text-white">{formatTime(opportunity.end_time)}</span>
           </div>
-          
+
           <div>
             <span className="text-gray-400">Δroll:</span>
             <span className="ml-1 text-white">{opportunity.delta_roll.toFixed(2)}°</span>
@@ -44,24 +46,24 @@ export default function OpportunityMetricsCard({ opportunity }: OpportunityMetri
             <span className="text-gray-400">t_slew:</span>
             <span className="ml-1 text-white">{opportunity.maneuver_time.toFixed(2)}s</span>
           </div>
-          
+
           {opportunity.incidence_angle !== undefined && (
             <div>
               <span className="text-gray-400">Off-Nadir:</span>
               <span className="ml-1 text-white">{opportunity.incidence_angle.toFixed(1)}°</span>
             </div>
           )}
-          
+
           <div>
             <span className="text-gray-400">Value:</span>
             <span className="ml-1 text-white">{opportunity.value.toFixed(2)}</span>
           </div>
-          
+
           <div>
             <span className="text-gray-400">Density:</span>
             <span className="ml-1 text-white">{formatDensity(opportunity.density)}</span>
           </div>
-          
+
           <div>
             <span className="text-gray-400">Slack:</span>
             <span className="ml-1 text-white">{opportunity.slack_time.toFixed(2)}s</span>

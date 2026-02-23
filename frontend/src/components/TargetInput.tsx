@@ -9,20 +9,14 @@ import {
   AlertCircle,
   CheckCircle,
   Map,
-  Shuffle,
 } from 'lucide-react'
 import { TargetData } from '../types'
 import { useTargetAddStore } from '../store/targetAddStore'
 import { usePreviewTargetsStore } from '../store/previewTargetsStore'
 import { TargetDetailsSheet } from './Targets/TargetDetailsSheet'
 
-// Color presets for target markers (gradient from green to red)
-const TARGET_COLORS = [
-  { value: '#EF4444', label: 'Red', tailwind: 'bg-red-500' },
-  { value: '#F97316', label: 'Orange', tailwind: 'bg-orange-500' },
-  { value: '#EAB308', label: 'Yellow', tailwind: 'bg-yellow-500' },
-  { value: '#22C55E', label: 'Green', tailwind: 'bg-green-500' },
-]
+// PR-UI-022: All targets use brand blue — no manual color coding
+const BRAND_BLUE = '#3B82F6'
 
 interface TargetInputProps {
   targets: TargetData[]
@@ -37,7 +31,7 @@ const TargetInput: React.FC<TargetInputProps> = ({ targets, onChange, disabled =
     longitude: 0,
     description: '',
     priority: 5,
-    color: '#EF4444', // Default red
+    color: BRAND_BLUE, // PR-UI-022: brand blue default
   })
   const [coordinateInput, setCoordinateInput] = useState('')
   const [isUploading, setIsUploading] = useState(false)
@@ -77,7 +71,7 @@ const TargetInput: React.FC<TargetInputProps> = ({ targets, onChange, disabled =
       longitude: 0,
       description: '',
       priority: 5,
-      color: '#EF4444',
+      color: BRAND_BLUE,
     })
     setCoordinateInput('')
   }
@@ -254,38 +248,6 @@ const TargetInput: React.FC<TargetInputProps> = ({ targets, onChange, disabled =
     })
   }
 
-  // Randomize all target colors (for testing)
-  // Pattern: First 40 = Green, remaining split ~evenly among Red, Orange, Yellow
-  const randomizeColors = () => {
-    const greenCount = 40
-    const remaining = Math.max(0, targets.length - greenCount)
-    const perColor = Math.ceil(remaining / 3)
-
-    const updated = targets.map((target, index) => {
-      let color: string
-      if (index < greenCount) {
-        // First 40 are always green
-        color = '#22C55E'
-      } else {
-        // Remaining split among Red, Orange, Yellow
-        const remainingIndex = index - greenCount
-        if (remainingIndex < perColor) {
-          color = '#F97316' // Orange
-        } else if (remainingIndex < perColor * 2) {
-          color = '#EAB308' // Yellow
-        } else {
-          color = '#EF4444' // Red
-        }
-      }
-      return { ...target, color }
-    })
-    onChange(updated)
-    setUploadStatus({
-      type: 'success',
-      message: `Colored ${targets.length} targets: ${greenCount} green, rest split among orange/yellow/red`,
-    })
-  }
-
   return (
     <div className={`space-y-4 ${disabled ? 'opacity-60' : ''}`}>
       {!disabled && (
@@ -326,18 +288,6 @@ const TargetInput: React.FC<TargetInputProps> = ({ targets, onChange, disabled =
             className="hidden"
           />
         </div>
-      )}
-
-      {/* Randomize Colors Button - Testing Only */}
-      {!disabled && targets.length > 0 && (
-        <button
-          onClick={randomizeColors}
-          className="w-full px-3 py-1.5 bg-purple-700/50 hover:bg-purple-600/50 text-purple-200 rounded-md text-xs font-medium transition-colors flex items-center justify-center space-x-2 border border-purple-600/50"
-          title="Randomize all target colors (testing)"
-        >
-          <Shuffle className="w-3.5 h-3.5" />
-          <span>🎨 Randomize Colors (Testing)</span>
-        </button>
       )}
 
       {/* Map Add Mode Helper */}
@@ -392,10 +342,7 @@ const TargetInput: React.FC<TargetInputProps> = ({ targets, onChange, disabled =
               <div className="flex items-center justify-between gap-3">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center space-x-2 mb-1">
-                    <Target
-                      className="w-3 h-3 flex-shrink-0"
-                      style={{ color: target.color || '#EF4444' }}
-                    />
+                    <Target className="w-3 h-3 flex-shrink-0" style={{ color: BRAND_BLUE }} />
                     <span className="text-sm font-medium text-white">{target.name}</span>
                   </div>
                   <div className="text-xs text-gray-400 mb-1">
@@ -409,12 +356,6 @@ const TargetInput: React.FC<TargetInputProps> = ({ targets, onChange, disabled =
                 <div className="flex items-center gap-1.5">
                   {disabled ? (
                     <>
-                      {/* Read-only: Color indicator */}
-                      <div
-                        className="w-4 h-4 rounded-full border border-gray-600 shadow-sm flex-shrink-0"
-                        style={{ backgroundColor: target.color || '#EF4444' }}
-                        title={target.color || 'Red'}
-                      />
                       {/* Read-only: Priority indicator */}
                       <span className="text-[10px] text-gray-400" title="Priority">
                         P{target.priority || 5}
@@ -422,42 +363,6 @@ const TargetInput: React.FC<TargetInputProps> = ({ targets, onChange, disabled =
                     </>
                   ) : (
                     <>
-                      {/* Color Picker - Compact color dots */}
-                      <div className="relative group">
-                        <button
-                          className="w-5 h-5 rounded-full border-2 border-gray-600 hover:border-gray-400 transition-colors shadow-sm"
-                          style={{ backgroundColor: target.color || '#EF4444' }}
-                          title="Change color"
-                        />
-                        {/* Dropdown on hover - using pt-1 padding-top to bridge the gap */}
-                        <div
-                          className="absolute right-0 top-5 pt-2 hidden group-hover:block"
-                          style={{ zIndex: 9999 }}
-                        >
-                          <div className="flex flex-wrap gap-1 p-2 bg-gray-900 border border-gray-700 rounded-lg shadow-2xl w-[100px]">
-                            {TARGET_COLORS.map((c) => (
-                              <button
-                                key={c.value}
-                                onClick={() => {
-                                  const updated = [...targets]
-                                  updated[index] = {
-                                    ...target,
-                                    color: c.value,
-                                  }
-                                  onChange(updated)
-                                }}
-                                className={`w-5 h-5 rounded-full border-2 transition-all hover:scale-110 ${
-                                  target.color === c.value
-                                    ? 'border-white'
-                                    : 'border-transparent hover:border-gray-500'
-                                }`}
-                                style={{ backgroundColor: c.value }}
-                                title={c.label}
-                              />
-                            ))}
-                          </div>
-                        </div>
-                      </div>
                       {/* Priority */}
                       <select
                         value={target.priority || 5}

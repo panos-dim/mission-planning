@@ -111,7 +111,7 @@ describe('UI-010 Default Priority = 5', () => {
         latitude: 25 + i,
         longitude: 50 + i,
         priority: 5,
-        color: '#EF4444',
+        color: '#3B82F6',
       }))
 
       usePreFeasibilityOrdersStore.getState().addTargets(orderId, sampleTargets)

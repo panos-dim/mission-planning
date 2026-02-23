@@ -579,7 +579,9 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
       {/* Status Bar */}
       {!hasOpportunities && (
         <div className="bg-gray-800 border-b border-gray-700 px-4 py-3">
-          <p className="text-xs text-gray-400">Run Feasibility Analysis first</p>
+          <p className="text-xs text-gray-400">
+            Run Feasibility Analysis first to enable scheduling.
+          </p>
         </div>
       )}
 
@@ -606,34 +608,6 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
 
       {/* Main Content (hidden during confirmation) */}
       <div className={`flex-1 overflow-auto p-4 space-y-4 ${showCommitModal ? 'hidden' : ''}`}>
-        {/* No Opportunities Warning */}
-        {!hasOpportunities && (
-          <div className="bg-yellow-900/30 border border-yellow-700/50 rounded-lg p-4">
-            <div className="flex items-start gap-3">
-              <div className="text-yellow-500 text-2xl">⚠️</div>
-              <div>
-                <h3 className="text-sm font-semibold text-yellow-200 mb-1">
-                  No Opportunities Available
-                </h3>
-                <p className="text-xs text-yellow-300/80 mb-3">
-                  Mission Planning requires opportunities from Feasibility Analysis. Please complete
-                  these steps:
-                </p>
-                <ol className="text-xs text-yellow-300/80 space-y-1 list-decimal list-inside">
-                  <li>
-                    Go to <strong>Feasibility Analysis</strong> panel (left sidebar)
-                  </li>
-                  <li>Configure targets and mission parameters</li>
-                  <li>
-                    Click <strong>Analyze Mission</strong> to generate opportunities
-                  </li>
-                  <li>Return here to schedule opportunities with algorithms</li>
-                </ol>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Error Display */}
         {error && (
           <div className="bg-red-900/50 border border-red-700 rounded-lg p-4">
@@ -1119,7 +1093,7 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
 
                         <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
                           <h4 className="font-semibold">
-                            Schedule ({totalRows} opportunities
+                            Schedule ({totalRows} acquisition{totalRows !== 1 ? 's' : ''}
                             {isFiltered ? ` of ${rawSchedule.length}` : ''})
                             {showPagination && (
                               <span className="text-gray-400 font-normal ml-2 text-xs">

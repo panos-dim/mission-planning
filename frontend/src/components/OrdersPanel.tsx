@@ -43,7 +43,7 @@ const GULF_SAMPLE_TARGETS: TargetData[] = [
     longitude: 55.2708,
     description: 'UAE - Major City',
     priority: 5,
-    color: '#22C55E',
+    color: '#3B82F6',
   },
   {
     name: 'Abu Dhabi',
@@ -51,7 +51,7 @@ const GULF_SAMPLE_TARGETS: TargetData[] = [
     longitude: 54.3773,
     description: 'UAE - Capital (~130km from Dubai)',
     priority: 5,
-    color: '#22C55E',
+    color: '#3B82F6',
   },
   {
     name: 'Doha',
@@ -75,7 +75,7 @@ const GULF_SAMPLE_TARGETS: TargetData[] = [
     longitude: 47.9774,
     description: 'Kuwait - Capital (~870km from Dubai)',
     priority: 5,
-    color: '#F97316',
+    color: '#3B82F6',
   },
   {
     name: 'Muscat',
@@ -83,7 +83,7 @@ const GULF_SAMPLE_TARGETS: TargetData[] = [
     longitude: 58.3829,
     description: 'Oman - Capital (~350km from Dubai)',
     priority: 5,
-    color: '#F97316',
+    color: '#3B82F6',
   },
   {
     name: 'Riyadh',
@@ -91,7 +91,7 @@ const GULF_SAMPLE_TARGETS: TargetData[] = [
     longitude: 46.6753,
     description: 'Saudi Arabia - Capital (~870km from Dubai)',
     priority: 5,
-    color: '#EAB308',
+    color: '#3B82F6',
   },
   {
     name: 'Jeddah',
@@ -99,7 +99,7 @@ const GULF_SAMPLE_TARGETS: TargetData[] = [
     longitude: 39.1925,
     description: 'Saudi Arabia - Red Sea (~1800km from Dubai)',
     priority: 5,
-    color: '#EAB308',
+    color: '#3B82F6',
   },
   {
     name: 'Bandar Abbas',
@@ -107,7 +107,7 @@ const GULF_SAMPLE_TARGETS: TargetData[] = [
     longitude: 56.2808,
     description: 'Iran - Strait of Hormuz (~220km from Dubai)',
     priority: 5,
-    color: '#EF4444',
+    color: '#3B82F6',
   },
   {
     name: 'Salalah',
@@ -115,7 +115,7 @@ const GULF_SAMPLE_TARGETS: TargetData[] = [
     longitude: 54.0924,
     description: 'Oman - Southern coast (~1000km from Dubai)',
     priority: 5,
-    color: '#EF4444',
+    color: '#3B82F6',
   },
 ]
 
@@ -138,7 +138,7 @@ const OrderTargetRow: React.FC<OrderTargetRowProps> = ({
 }) => {
   return (
     <div className="flex items-center gap-2 py-1.5 px-2 bg-gray-800/50 rounded text-xs group">
-      <Target className="w-3 h-3 flex-shrink-0" style={{ color: target.color || '#EF4444' }} />
+      <Target className="w-3 h-3 flex-shrink-0 text-blue-500" />
       <span className="font-medium text-white truncate flex-1 min-w-0">{target.name}</span>
       <span className="text-gray-500 flex-shrink-0">
         {target.latitude.toFixed(2)}°, {target.longitude.toFixed(2)}°
@@ -205,7 +205,7 @@ const InlineTargetAdd: React.FC<InlineTargetAddProps> = ({ onAdd }) => {
       latitude: latNum,
       longitude: lonNum,
       priority: 5,
-      color: '#EF4444',
+      color: '#3B82F6',
     })
     setName('')
     setLat('')
@@ -332,7 +332,7 @@ const OrderCard: React.FC<OrderCardProps> = ({ order, isMapActive, onToggleMap, 
           longitude: t.longitude as number,
           description: (t.description as string) || '',
           priority: (t.priority as number) || 5,
-          color: '#EF4444',
+          color: '#3B82F6',
         }))
         addTargets(order.id, newTargets)
         setUploadStatus({

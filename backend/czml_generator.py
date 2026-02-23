@@ -921,8 +921,8 @@ class CZMLGenerator:
         """Create target marker packet with customizable color"""
         import base64
 
-        # Get target color (default red if not specified)
-        target_color = getattr(target, "color", None) or "#EF4444"
+        # PR-UI-022: All targets use brand blue by default
+        target_color = getattr(target, "color", None) or "#3B82F6"
 
         # Convert hex color to RGB for SVG
         hex_color = target_color.lstrip("#")
