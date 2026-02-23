@@ -12,17 +12,17 @@ interface DateTimePickerProps {
   disabled?: boolean
 }
 
-const DateTimePicker: React.FC<DateTimePickerProps> = ({ 
-  label, 
-  value, 
-  onChange, 
+const DateTimePicker: React.FC<DateTimePickerProps> = ({
+  label,
+  value,
+  onChange,
   minDate,
   icon,
-  disabled = false 
+  disabled = false,
 }) => {
   // Convert ISO string to Date object
   const dateValue = value ? new Date(value) : new Date()
-  
+
   // Convert minDate string to Date object if provided
   const minDateObj = minDate ? new Date(minDate) : undefined
 
@@ -40,7 +40,7 @@ const DateTimePicker: React.FC<DateTimePickerProps> = ({
       const day = String(date.getDate()).padStart(2, '0')
       const hours = String(date.getHours()).padStart(2, '0')
       const minutes = String(date.getMinutes()).padStart(2, '0')
-      
+
       const formatted = `${year}-${month}-${day}T${hours}:${minutes}`
       onChange(formatted)
     }
@@ -49,35 +49,37 @@ const DateTimePicker: React.FC<DateTimePickerProps> = ({
   // Filter time to only allow times after minDate on the same day
   const filterTime = (time: Date) => {
     if (!minDateObj) return true
-    
+
     // Get the date components (without time) for comparison
     const timeDate = new Date(time)
     const minDate = new Date(minDateObj)
-    
+
     // Reset hours/minutes/seconds for date-only comparison
     const timeDateOnly = new Date(timeDate.getFullYear(), timeDate.getMonth(), timeDate.getDate())
     const minDateOnly = new Date(minDate.getFullYear(), minDate.getMonth(), minDate.getDate())
-    
+
     // If selected date is AFTER minDate (future day), allow all times
     if (timeDateOnly.getTime() > minDateOnly.getTime()) {
       return true
     }
-    
+
     // If selected date is BEFORE minDate (past day), block all times
     if (timeDateOnly.getTime() < minDateOnly.getTime()) {
       return false
     }
-    
+
     // Same day - only allow times after the minimum time
     return timeDate.getTime() >= minDate.getTime()
   }
 
   return (
     <div>
-      <label className="block text-xs font-medium text-gray-400 mb-1">
-        {icon || <Calendar className="w-3 h-3 inline mr-1" />}
-        {label}
-      </label>
+      {label && (
+        <label className="block text-xs font-medium text-gray-400 mb-1">
+          {icon === undefined ? <Calendar className="w-3 h-3 inline mr-1" /> : icon}
+          {label}
+        </label>
+      )}
       <div className="relative">
         <DatePicker
           selected={dateValue}
@@ -85,11 +87,11 @@ const DateTimePicker: React.FC<DateTimePickerProps> = ({
           showTimeSelect
           timeFormat="HH:mm"
           timeIntervals={15}
-          dateFormat="yyyy-MM-dd HH:mm"
+          dateFormat="dd-MM-yyyy HH:mm"
           minDate={minDateObj}
           {...(minDateObj && {
             minTime: minDateObj,
-            maxTime: new Date(new Date().setHours(23, 45, 0, 0))
+            maxTime: new Date(new Date().setHours(23, 45, 0, 0)),
           })}
           filterTime={filterTime}
           className={`input-field w-full text-sm ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}

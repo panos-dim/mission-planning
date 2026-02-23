@@ -5,12 +5,12 @@
  * Replaces the previous card-stack layout.
  */
 
-import React, { useMemo, useCallback, useRef, useState, memo } from 'react'
-import { Clock, MapPin, X, Lock, Filter, Shield } from 'lucide-react'
+import React, { useMemo, useCallback, useRef, useState, useEffect, memo } from 'react'
+import { Clock, MapPin, X, Lock, Filter, Shield, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
 import { useSelectionStore } from '../store/selectionStore'
 import { useLockStore } from '../store/lockStore'
 import type { LockLevel } from '../api/scheduleApi'
-import { fmt2 } from '../utils/format'
+import { fmt1 } from '../utils/format'
 
 // =============================================================================
 // Types
@@ -68,6 +68,8 @@ const LANE_GAP = 4
 const LANE_LABEL_WIDTH = 120
 const TIME_AXIS_HEIGHT = 36
 const MIN_BAR_WIDTH_PX = 4
+const ZOOM_FACTOR = 0.15
+const MIN_VIEW_RANGE_MS = 5 * 60_000 // 5 minutes minimum zoom
 
 // =============================================================================
 // Helpers
@@ -274,11 +276,11 @@ const AcquisitionTooltip: React.FC<{ data: TooltipData }> = memo(({ data }) => {
         <div className="font-medium text-white">
           {acquisition.satellite_name || acquisition.satellite_id}
         </div>
-        {/* PR-UI-021: Off-nadir angle (2dp) */}
+        {/* PR-UI-021/028: Off-nadir angle (1dp) */}
         {acquisition.off_nadir_deg != null && (
           <div className="text-gray-300">
             <span className="text-gray-500">Off-nadir angle: </span>
-            {fmt2(acquisition.off_nadir_deg)}°
+            {fmt1(acquisition.off_nadir_deg)}°
           </div>
         )}
         {/* PR-UI-021: Off-nadir time (DD-MM-YYYY HH:MM:SS UTC) */}
@@ -345,6 +347,62 @@ const TimeAxis: React.FC<TimeAxisProps> = memo(({ minTs, maxTs, width }) => {
 TimeAxis.displayName = 'TimeAxis'
 
 // =============================================================================
+// NowLine Component — isolated state so 1s tick doesn't re-render parent
+// =============================================================================
+
+interface NowLineProps {
+  viewMin: number
+  viewMax: number
+  laneCount: number
+}
+
+const NowLine: React.FC<NowLineProps> = memo(({ viewMin, viewMax, laneCount }) => {
+  const lineRef = useRef<HTMLDivElement>(null)
+  const labelRef = useRef<HTMLSpanElement>(null)
+
+  useEffect(() => {
+    let rafId: number
+    const update = () => {
+      const now = Date.now()
+      if (lineRef.current) {
+        const range = viewMax - viewMin
+        if (range > 0 && now >= viewMin && now <= viewMax) {
+          const pct = ((now - viewMin) / range) * 100
+          lineRef.current.style.left = `${pct}%`
+          lineRef.current.style.display = ''
+        } else {
+          lineRef.current.style.display = 'none'
+        }
+      }
+      if (labelRef.current) {
+        labelRef.current.textContent = new Date().toISOString().slice(11, 19) + ' UTC'
+      }
+      rafId = requestAnimationFrame(update)
+    }
+    rafId = requestAnimationFrame(update)
+    return () => cancelAnimationFrame(rafId)
+  }, [viewMin, viewMax])
+
+  const laneAreaHeight = laneCount * (LANE_HEIGHT + LANE_GAP)
+
+  return (
+    <div
+      ref={lineRef}
+      className="absolute z-20 pointer-events-none -translate-x-1/2 flex flex-col items-center"
+      style={{ top: 0, height: laneAreaHeight }}
+    >
+      <span
+        ref={labelRef}
+        className="text-[9px] font-mono font-medium text-blue-400 bg-gray-800/90 border border-gray-700/60 px-1.5 py-px rounded whitespace-nowrap mb-0.5"
+      />
+      <div className="w-px flex-1 bg-blue-500/60" />
+      <div className="w-1.5 h-1.5 rounded-full bg-blue-400 flex-shrink-0" />
+    </div>
+  )
+})
+NowLine.displayName = 'NowLine'
+
+// =============================================================================
 // TargetLane Component — a single horizontal lane for one target
 // =============================================================================
 
@@ -352,6 +410,7 @@ interface TargetLaneProps {
   lane: TargetLaneData
   minTs: number
   maxTs: number
+  nowTs: number
   selectedId: string | null
   onSelect: (id: string) => void
   onHover: (data: TooltipData | null) => void
@@ -365,6 +424,7 @@ const TargetLane: React.FC<TargetLaneProps> = memo(
     lane,
     minTs,
     maxTs,
+    nowTs,
     selectedId,
     onSelect,
     onHover,
@@ -413,10 +473,13 @@ const TargetLane: React.FC<TargetLaneProps> = memo(
             const isSelected = selectedId === acq.id
             const isLocked = acq.lock_level === 'hard'
             const isSAR = acq.mode === 'SAR'
+            const isPast = endTs < nowTs
 
-            const barColor = isSAR
-              ? 'bg-purple-500/70 hover:bg-purple-500/90 border-purple-400/50'
-              : 'bg-blue-500/70 hover:bg-blue-500/90 border-blue-400/50'
+            const barColor = isPast
+              ? 'bg-gray-600/40 hover:bg-gray-500/50 border-gray-600/30'
+              : isSAR
+                ? 'bg-purple-500/70 hover:bg-purple-500/90 border-purple-400/50'
+                : 'bg-blue-500/70 hover:bg-blue-500/90 border-blue-400/50'
 
             const selectedRing = isSelected
               ? 'ring-2 ring-blue-400 ring-offset-1 ring-offset-gray-900'
@@ -509,13 +572,17 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
   }, [acquisitions, filters])
 
   // Time axis bounds: use mission time window if provided, else derive from data
+  // Always include current time so the NowLine is visible
   const { minTs, maxTs } = useMemo(() => {
+    const now = Date.now()
     if (filteredAcquisitions.length === 0) {
-      const now = Date.now()
       return { minTs: now, maxTs: now + 86_400_000 }
     }
     let min = missionStartTime ? new Date(missionStartTime).getTime() : Infinity
     let max = missionEndTime ? new Date(missionEndTime).getTime() : -Infinity
+    // Ensure "now" is always within the visible range
+    if (now < min) min = now
+    if (now > max) max = now
     for (const acq of filteredAcquisitions) {
       const s = new Date(acq.start_time).getTime()
       const e = new Date(acq.end_time).getTime()
@@ -561,6 +628,91 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
     }
     return names
   }, [targetLanes])
+
+  // ── Zoom & Pan state (single object to avoid double renders) ──
+  const [viewRange, setViewRange] = useState({ min: minTs, max: maxTs })
+  const isPanning = useRef(false)
+  const panStartX = useRef(0)
+  const panStartRange = useRef({ min: minTs, max: maxTs })
+  const trackRef = useRef<HTMLDivElement>(null)
+
+  // Reset view when data bounds change
+  useEffect(() => {
+    setViewRange({ min: minTs, max: maxTs })
+  }, [minTs, maxTs])
+
+  const zoomAt = useCallback(
+    (centerFraction: number, direction: number) => {
+      setViewRange((prev) => {
+        const range = prev.max - prev.min
+        const delta = range * ZOOM_FACTOR * direction
+        const newMin = prev.min + delta * centerFraction
+        const newMax = prev.max - delta * (1 - centerFraction)
+        if (newMax - newMin < MIN_VIEW_RANGE_MS) return prev
+        const extent = (maxTs - minTs) * 3
+        return {
+          min: Math.max(minTs - extent, newMin),
+          max: Math.min(maxTs + extent, newMax),
+        }
+      })
+    },
+    [minTs, maxTs],
+  )
+
+  // Native wheel listener registered with { passive: false } to allow preventDefault
+  const zoomAtRef = useRef(zoomAt)
+  zoomAtRef.current = zoomAt
+
+  useEffect(() => {
+    const el = trackRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return // plain scroll = vertical scroll
+      e.preventDefault()
+      const rect = el.getBoundingClientRect()
+      const fraction = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
+      const direction = e.deltaY > 0 ? -1 : 1
+      zoomAtRef.current(fraction, direction)
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, []) // trackRef is stable; zoomAt accessed via ref
+
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button !== 0) return
+      isPanning.current = true
+      panStartX.current = e.clientX
+      panStartRange.current = viewRange
+      ;(e.currentTarget as HTMLElement).style.cursor = 'grabbing'
+    },
+    [viewRange],
+  )
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!isPanning.current || !trackRef.current) return
+    const rect = trackRef.current.getBoundingClientRect()
+    const dxFraction = (e.clientX - panStartX.current) / rect.width
+    const range = panStartRange.current.max - panStartRange.current.min
+    const shift = -dxFraction * range
+    setViewRange({
+      min: panStartRange.current.min + shift,
+      max: panStartRange.current.max + shift,
+    })
+  }, [])
+
+  const handleMouseUp = useCallback((e: React.MouseEvent) => {
+    isPanning.current = false
+    ;(e.currentTarget as HTMLElement).style.cursor = ''
+  }, [])
+
+  const resetZoom = useCallback(() => {
+    setViewRange({ min: minTs, max: maxTs })
+  }, [minTs, maxTs])
+
+  const viewMinTs = viewRange.min
+  const viewMaxTs = viewRange.max
+  const isZoomed = viewMinTs !== minTs || viewMaxTs !== maxTs
 
   // Measure container width for axis ticks
   const [containerWidth, setContainerWidth] = useState(600)
@@ -621,7 +773,7 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
 
   // ---- Main render ----
   return (
-    <div className="h-full flex flex-col bg-gray-900" ref={containerRef}>
+    <div className="h-full flex flex-col min-h-0 bg-gray-900" ref={containerRef}>
       {/* Quick filter chips */}
       <FilterChips
         filters={filters}
@@ -644,31 +796,75 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
         </div>
       ) : (
         <>
-          {/* Scrollable timeline area */}
+          {/* Zoom controls */}
+          <div className="flex items-center gap-1 px-3 py-1.5 border-b border-gray-700/50 bg-gray-900/50">
+            <button
+              onClick={() => zoomAt(0.5, 1)}
+              className="p-1 rounded text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
+              title="Zoom in"
+            >
+              <ZoomIn size={14} />
+            </button>
+            <button
+              onClick={() => zoomAt(0.5, -1)}
+              className="p-1 rounded text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
+              title="Zoom out"
+            >
+              <ZoomOut size={14} />
+            </button>
+            {isZoomed && (
+              <button
+                onClick={resetZoom}
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium text-blue-400 hover:text-white hover:bg-gray-700 transition-colors"
+                title="Reset zoom"
+              >
+                <Maximize2 size={12} />
+                Reset
+              </button>
+            )}
+            <span className="ml-auto text-[9px] text-gray-500">
+              ⌘/Ctrl+Scroll to zoom · Drag to pan
+            </span>
+          </div>
+
+          {/* Scrollable timeline area with zoom/pan */}
           <div
-            ref={containerCallbackRef}
-            className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent px-2 pt-1"
+            ref={(node) => {
+              containerCallbackRef(node)
+              ;(trackRef as React.MutableRefObject<HTMLDivElement | null>).current = node
+            }}
+            className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent px-2 pt-1 select-none"
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp}
+            style={{ cursor: 'grab' }}
           >
             {/* Time Axis */}
-            <TimeAxis minTs={minTs} maxTs={maxTs} width={containerWidth} />
+            <TimeAxis minTs={viewMinTs} maxTs={viewMaxTs} width={containerWidth} />
 
-            {/* Grid lines (faint vertical) */}
+            {/* Grid lines + live now-line (share same relative container for correct % positioning) */}
             <div className="relative" style={{ marginLeft: LANE_LABEL_WIDTH }}>
-              {generateTicks(minTs, maxTs, Math.max(3, Math.floor(containerWidth / 80))).map(
-                (ts) => {
-                  const pct = ((ts - minTs) / (maxTs - minTs)) * 100
-                  return (
-                    <div
-                      key={`grid-${ts}`}
-                      className="absolute top-0 bottom-0 w-px bg-gray-800/60"
-                      style={{
-                        left: `${pct}%`,
-                        height: targetLanes.length * (LANE_HEIGHT + LANE_GAP),
-                      }}
-                    />
-                  )
-                },
-              )}
+              {generateTicks(
+                viewMinTs,
+                viewMaxTs,
+                Math.max(3, Math.floor(containerWidth / 80)),
+              ).map((ts) => {
+                const pct = ((ts - viewMinTs) / (viewMaxTs - viewMinTs)) * 100
+                return (
+                  <div
+                    key={`grid-${ts}`}
+                    className="absolute top-0 bottom-0 w-px bg-gray-800/60"
+                    style={{
+                      left: `${pct}%`,
+                      height: targetLanes.length * (LANE_HEIGHT + LANE_GAP),
+                    }}
+                  />
+                )
+              })}
+
+              {/* Live current-time line (isolated component — no parent re-renders) */}
+              <NowLine viewMin={viewMinTs} viewMax={viewMaxTs} laneCount={targetLanes.length} />
             </div>
 
             {/* Target Lanes */}
@@ -677,8 +873,9 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
                 <TargetLane
                   key={lane.targetId}
                   lane={lane}
-                  minTs={minTs}
-                  maxTs={maxTs}
+                  minTs={viewMinTs}
+                  maxTs={viewMaxTs}
+                  nowTs={Date.now()}
                   selectedId={selectedAcquisitionId}
                   onSelect={handleSelectAcquisition}
                   onHover={handleHover}

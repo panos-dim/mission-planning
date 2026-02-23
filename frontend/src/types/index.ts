@@ -665,4 +665,5 @@ export interface AcceptedOrder {
   satellites_involved?: string[]
   targets_covered?: string[]
   backend_acquisition_ids?: string[]
+  target_positions?: Array<{ target_id: string; latitude: number; longitude: number }>
 }

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { PlanningRequest, PlanningResponse, AlgorithmResult } from '../types'
 import { useMission } from '../context/MissionContext'
-import { useSlewVisStore, type ColorByMode } from '../store/slewVisStore'
+import { useSlewVisStore } from '../store/slewVisStore'
 import { useVisStore } from '../store/visStore'
 import { usePlanningStore } from '../store/planningStore'
 import { useExplorerStore } from '../store/explorerStore'
@@ -14,10 +14,11 @@ import { ApiError, NetworkError, TimeoutError } from '../api/errors'
 import { createRepairPlan, type PlanningMode, type RepairPlanResponse } from '../api/scheduleApi'
 import { useOpportunities, useScheduleContext } from '../hooks/queries'
 import { planningApi } from '../api'
+import { queryClient, queryKeys } from '../lib/queryClient'
 import { type CommitPreview } from './ConflictWarningModal'
 import ApplyConfirmationPanel from './ApplyConfirmationPanel'
 import { RepairDiffPanel } from './RepairDiffPanel'
-import { LABELS } from '../constants/labels'
+
 import { isDebugMode } from '../constants/simpleMode'
 
 interface MissionPlanningProps {
@@ -34,14 +35,6 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
     setEnabled: setSlewVisEnabled,
     setActiveSchedule,
     setHoveredOpportunity,
-    showFootprints,
-    setShowFootprints,
-    showSlewArcs,
-    setShowSlewArcs,
-    showSlewLabels,
-    setShowSlewLabels,
-    colorBy,
-    setColorBy,
   } = useSlewVisStore()
 
   // Selection store for unified selection sync
@@ -221,14 +214,47 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
     try {
       const workspaceId = state.activeWorkspace || 'default'
 
-      // Auto-detect planning mode based on existing schedule
-      const existingCount = scheduleContext.count
-      const autoMode: PlanningMode = existingCount > 0 ? 'repair' : 'from_scratch'
+      // Refetch schedule context from DB to guarantee fresh data
+      // (cache may be stale after commit/delete operations)
+      await queryClient.invalidateQueries({ queryKey: queryKeys.schedule.all })
+      const freshContext = await queryClient.fetchQuery({
+        queryKey: queryKeys.schedule.context({
+          workspace_id: workspaceId,
+          include_tentative: includeTentative,
+        }),
+        queryFn: () =>
+          import('../api/scheduleApi').then((m) =>
+            m.getScheduleContext({
+              workspace_id: workspaceId,
+              from: scheduleContextParams.from,
+              to: scheduleContextParams.to,
+              include_tentative: includeTentative,
+            }),
+          ),
+        staleTime: 0,
+      })
 
-      if (existingCount > 0) {
+      // Auto-detect planning mode based on existing schedule
+      const existingCount = freshContext?.count ?? 0
+      const scheduledTargetIds = new Set(freshContext?.target_ids ?? [])
+      const currentTargetNames = (state.missionData?.targets ?? []).map((t) => t.name)
+      const newTargets = currentTargetNames.filter((name) => !scheduledTargetIds.has(name))
+      const hasNewTargets = newTargets.length > 0
+
+      // Force from_scratch when new targets exist — repair can only work with
+      // cached opportunities from the last analysis, which won't include new targets.
+      const autoMode: PlanningMode = existingCount > 0 && !hasNewTargets ? 'repair' : 'from_scratch'
+
+      if (autoMode === 'repair') {
         setSchedulingReasoning({
           mode: 'repair',
           reason: `Found ${existingCount} existing acquisition${existingCount > 1 ? 's' : ''} in the schedule. Locked items are preserved, unlocked items may be adjusted to improve the schedule.`,
+          existingCount,
+        })
+      } else if (hasNewTargets && existingCount > 0) {
+        setSchedulingReasoning({
+          mode: 'from_scratch',
+          reason: `${newTargets.length} new target${newTargets.length > 1 ? 's' : ''} detected (${newTargets.join(', ')}). Running full analysis to include new targets alongside ${existingCount} existing acquisition${existingCount > 1 ? 's' : ''}.`,
           existingCount,
         })
       } else {
@@ -241,13 +267,23 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
       }
 
       debug.section('SCHEDULING')
+      let gotResults = false
 
       if (autoMode === 'repair') {
         // ── Repair path: adjust existing schedule around locked items ──
+        // Build per-target priority map from current mission targets
+        const targetPriorities: Record<string, number> = {}
+        if (state.missionData?.targets) {
+          for (const t of state.missionData.targets) {
+            targetPriorities[t.name] = t.priority ?? 5
+          }
+        }
+
         const repairRequest = {
           planning_mode: 'repair' as const,
           workspace_id: workspaceId,
           include_tentative: includeTentative,
+          target_priorities: targetPriorities,
           ...weightConfig,
         }
 
@@ -260,7 +296,23 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
             : `❌ ${repairResponse.message}`,
         })
 
-        if (repairResponse.success) {
+        // Fallback: if repair fails or produces 0 items, retry with from_scratch
+        const repairUsable = repairResponse.success && repairResponse.new_plan_items.length > 0
+
+        if (!repairUsable) {
+          console.log(
+            `[Planning] Repair produced ${repairResponse.new_plan_items?.length ?? 0} items — falling back to from_scratch`,
+          )
+          setSchedulingReasoning({
+            mode: 'from_scratch',
+            reason:
+              'Repair mode produced no usable results. Building a new schedule from all available opportunities.',
+            existingCount,
+          })
+          // Fall through to from_scratch path below
+        }
+
+        if (repairUsable) {
           setRepairResult(repairResponse)
 
           const algoResult: AlgorithmResult = {
@@ -275,8 +327,8 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
               pitch_angle_deg: item.pitch_angle_deg,
               roll_angle: item.roll_angle_deg,
               pitch_angle: item.pitch_angle_deg,
-              delta_roll: 0,
-              delta_pitch: 0,
+              delta_roll: item.roll_angle_deg,
+              delta_pitch: item.pitch_angle_deg,
               slew_time_s: 0,
               total_maneuver_s: 0,
               imaging_time_s: 1.0,
@@ -340,10 +392,12 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
             accepted: repairResponse.new_plan_items.length,
             totalValue: repairResponse.metrics_comparison.score_after,
           })
-        } else {
-          setError(repairResponse.message || 'Repair scheduling failed')
+          gotResults = true
         }
-      } else {
+      }
+
+      // ── From-scratch path (also used as fallback when repair produces 0 items) ──
+      if (autoMode === 'from_scratch' || (autoMode === 'repair' && !gotResults)) {
         // ── From-scratch path: full roll_pitch_best_fit algorithm ──
         const request: PlanningRequest = {
           algorithms: ['roll_pitch_best_fit'],
@@ -351,12 +405,8 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
           ...weightConfig,
         }
 
-        debug.apiRequest('POST /api/v1/planning/schedule', request)
+        // Note: apiClient.post already logs request/response via debug.apiRequest/apiResponse
         const data: PlanningResponse = await planningApi.schedule(request)
-
-        debug.apiResponse('POST /api/v1/planning/schedule', data, {
-          summary: data.success ? '✅ Planning completed' : `❌ ${data.message}`,
-        })
 
         if (data.success && data.results) {
           setResults(data.results)
@@ -427,13 +477,21 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
     }
 
     // Note: repair mode with 0 drops is just incremental addition — no warning needed.
-    // Only warn if the repair actually drops acquisitions.
+    // Only warn if the repair actually drops acquisitions, with specific details.
     if (schedulingReasoning?.mode === 'repair' && scheduleContext.count > 0) {
       const rd = repairResult?.repair_diff
       if (rd && rd.dropped.length > 0) {
-        preview.warnings.push(
-          `${rd.dropped.length} existing acquisition${rd.dropped.length !== 1 ? 's' : ''} will be replaced`,
-        )
+        const droppedEntries = rd.change_log?.dropped ?? []
+        if (droppedEntries.length > 0) {
+          for (const entry of droppedEntries) {
+            const reason = entry.reason_text || 'Replaced by higher-value alternative'
+            preview.warnings.push(`${entry.target_id} (${entry.satellite_id}) dropped — ${reason}`)
+          }
+        } else {
+          preview.warnings.push(
+            `${rd.dropped.length} existing acquisition${rd.dropped.length !== 1 ? 's' : ''} will be replaced`,
+          )
+        }
       }
     }
 
@@ -680,7 +738,7 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
             </div>
             <div className="flex justify-between text-[9px] text-gray-500">
               <span>Priority {getNormalizedWeights().priority.toFixed(0)}%</span>
-              <span>Geometry {getNormalizedWeights().geometry.toFixed(0)}%</span>
+              <span>Quality {getNormalizedWeights().geometry.toFixed(0)}%</span>
               <span>Timing {getNormalizedWeights().timing.toFixed(0)}%</span>
             </div>
           </div>
@@ -971,49 +1029,7 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
                     {slewVisEnabled ? <Eye size={11} /> : <EyeOff size={11} />}
                     Visualization
                   </button>
-                  {slewVisEnabled && (
-                    <>
-                      <button
-                        onClick={() => setShowFootprints(!showFootprints)}
-                        className={`px-2 py-1 rounded text-[11px] border transition-colors ${
-                          showFootprints
-                            ? 'bg-blue-600/20 text-blue-400 border-blue-600/40'
-                            : 'bg-gray-700/50 text-gray-500 border-gray-600/40 hover:text-gray-300'
-                        }`}
-                      >
-                        Footprints
-                      </button>
-                      <button
-                        onClick={() => setShowSlewArcs(!showSlewArcs)}
-                        className={`px-2 py-1 rounded text-[11px] border transition-colors ${
-                          showSlewArcs
-                            ? 'bg-blue-600/20 text-blue-400 border-blue-600/40'
-                            : 'bg-gray-700/50 text-gray-500 border-gray-600/40 hover:text-gray-300'
-                        }`}
-                      >
-                        Arcs
-                      </button>
-                      <button
-                        onClick={() => setShowSlewLabels(!showSlewLabels)}
-                        className={`px-2 py-1 rounded text-[11px] border transition-colors ${
-                          showSlewLabels
-                            ? 'bg-blue-600/20 text-blue-400 border-blue-600/40'
-                            : 'bg-gray-700/50 text-gray-500 border-gray-600/40 hover:text-gray-300'
-                        }`}
-                      >
-                        Labels
-                      </button>
-                      <select
-                        value={colorBy}
-                        onChange={(e) => setColorBy(e.target.value as ColorByMode)}
-                        className="px-2 py-1 bg-gray-700/50 border border-gray-600/40 rounded text-[11px] text-gray-300"
-                      >
-                        <option value="quality">Color: Quality</option>
-                        <option value="density">Color: Density</option>
-                        <option value="none">Color: None</option>
-                      </select>
-                    </>
-                  )}
+                  {/* PR-UI-024: Footprints/Arcs/Labels/Color-by controls removed — path only */}
                 </div>
 
                 {/* Key Metrics — dev only */}
@@ -1372,9 +1388,9 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
               <button
                 onClick={handleAcceptPlan}
                 className="w-full px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm font-semibold text-white"
-                title="Apply plan to schedule"
+                title="Proceed to apply confirmation"
               >
-                {LABELS.APPLY}
+                Next
               </button>
               <button
                 onClick={handleClearResults}
@@ -1389,7 +1405,7 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
               disabled={isPlanning || isDisabled}
               className="w-full px-3 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-semibold text-white"
             >
-              {isPlanning ? 'Optimizing...' : '▶ Run Scheduler'}
+              {isPlanning ? 'Optimizing...' : '▶ Generate Mission Plan'}
             </button>
           )}
         </div>

@@ -4,7 +4,7 @@
  */
 
 import { apiClient } from './client'
-import { API_ENDPOINTS, TIMEOUTS } from './config'
+import { API_ENDPOINTS } from './config'
 import type { Opportunity, PlanningRequest, PlanningResponse } from '../types'
 
 // Response types
@@ -34,13 +34,10 @@ export const planningApi = {
   /**
    * Get opportunities from last mission analysis
    */
-  async getOpportunities(
-    options?: { signal?: AbortSignal },
-  ): Promise<OpportunitiesResponse> {
-    return apiClient.get<OpportunitiesResponse>(
-      API_ENDPOINTS.PLANNING_OPPORTUNITIES,
-      { signal: options?.signal }
-    )
+  async getOpportunities(options?: { signal?: AbortSignal }): Promise<OpportunitiesResponse> {
+    return apiClient.get<OpportunitiesResponse>(API_ENDPOINTS.PLANNING_OPPORTUNITIES, {
+      signal: options?.signal,
+    })
   },
 
   /**
@@ -54,22 +51,20 @@ export const planningApi = {
       API_ENDPOINTS.PLANNING_SCHEDULE,
       request,
       {
-        timeout: TIMEOUTS.MISSION_ANALYSIS,
+        timeout: 180_000, // 3 minutes — scheduling is CPU-heavy with many opportunities
+        retries: 0, // No retries — retries spawn zombie backend threads that can't be cancelled
         signal: options?.signal,
-      }
+      },
     )
   },
 
   /**
    * Get planning configuration defaults
    */
-  async getConfig(
-    options?: { signal?: AbortSignal },
-  ): Promise<PlanningConfigResponse> {
-    return apiClient.get<PlanningConfigResponse>(
-      API_ENDPOINTS.PLANNING_CONFIG,
-      { signal: options?.signal }
-    )
+  async getConfig(options?: { signal?: AbortSignal }): Promise<PlanningConfigResponse> {
+    return apiClient.get<PlanningConfigResponse>(API_ENDPOINTS.PLANNING_CONFIG, {
+      signal: options?.signal,
+    })
   },
 }
 

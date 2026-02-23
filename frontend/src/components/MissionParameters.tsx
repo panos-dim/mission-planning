@@ -1,8 +1,18 @@
-import React from 'react'
-import { Calendar, Clock, Eye, Radar, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react'
+import React, { useCallback, useEffect } from 'react'
+import {
+  Calendar,
+  Clock,
+  Eye,
+  Radar,
+  ChevronDown,
+  ChevronUp,
+  AlertCircle,
+  Timer,
+} from 'lucide-react'
 import DateTimePicker from './DateTimePicker'
 import type { SARImagingMode, SARLookSide, SARPassDirection } from '../types'
 import { LABELS } from '../constants/labels'
+import { formatDateTimeShort } from '../utils/date'
 import { useSarModes } from '../hooks/queries'
 
 interface SARParams {
@@ -40,6 +50,41 @@ const FALLBACK_SAR_DEFAULTS: Record<
   dwell: { incMin: 20, incMax: 40, desc: 'Extended dwell, change detection' },
 }
 
+type TimeRangeMode = 'absolute' | 'duration'
+
+interface DurationPreset {
+  label: string
+  hours: number
+}
+
+const DURATION_PRESETS: DurationPreset[] = [
+  { label: '+6h', hours: 6 },
+  { label: '+12h', hours: 12 },
+  { label: '+1d', hours: 24 },
+  { label: '+2d', hours: 48 },
+  { label: '+3d', hours: 72 },
+  { label: '+1w', hours: 168 },
+]
+
+const computeEndTime = (startTime: string, durationHours: number): string => {
+  const start = new Date(startTime)
+  if (isNaN(start.getTime())) return startTime
+  const end = new Date(start.getTime() + durationHours * 3600_000)
+  const y = end.getFullYear()
+  const mo = String(end.getMonth() + 1).padStart(2, '0')
+  const d = String(end.getDate()).padStart(2, '0')
+  const h = String(end.getHours()).padStart(2, '0')
+  const mi = String(end.getMinutes()).padStart(2, '0')
+  return `${y}-${mo}-${d}T${h}:${mi}`
+}
+
+const formatDurationSummary = (hours: number): string => {
+  if (hours < 24) return `${hours}h`
+  const days = hours / 24
+  if (Number.isInteger(days)) return days === 7 ? '1 week' : `${days}d`
+  return `${hours}h (~${days.toFixed(1)}d)`
+}
+
 const MissionParameters: React.FC<MissionParametersProps> = ({
   parameters,
   onChange,
@@ -47,6 +92,58 @@ const MissionParameters: React.FC<MissionParametersProps> = ({
   maxSatelliteRoll = 45, // Default if not provided
 }) => {
   const [showAdvancedSAR, setShowAdvancedSAR] = React.useState(false)
+  const [timeRangeMode, setTimeRangeMode] = React.useState<TimeRangeMode>('absolute')
+  const [durationHours, setDurationHours] = React.useState(24)
+  const [customDuration, setCustomDuration] = React.useState('')
+
+  // Re-compute endTime whenever startTime or durationHours change in duration mode
+  useEffect(() => {
+    if (timeRangeMode === 'duration' && parameters.startTime) {
+      const newEnd = computeEndTime(parameters.startTime, durationHours)
+      if (newEnd !== parameters.endTime) {
+        onChange({ endTime: newEnd })
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeRangeMode, parameters.startTime, durationHours])
+
+  const handlePresetClick = useCallback((hours: number) => {
+    setDurationHours(hours)
+    setCustomDuration('')
+  }, [])
+
+  const handleCustomDurationChange = useCallback((value: string) => {
+    setCustomDuration(value)
+    const parsed = parseFloat(value)
+    if (!isNaN(parsed) && parsed > 0) {
+      setDurationHours(parsed)
+    }
+  }, [])
+
+  const handleModeSwitch = useCallback(
+    (mode: TimeRangeMode) => {
+      setTimeRangeMode(mode)
+      if (mode === 'duration') {
+        // Infer duration from current start/end
+        const start = new Date(parameters.startTime)
+        const end = new Date(parameters.endTime)
+        if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+          const diffH = (end.getTime() - start.getTime()) / 3600_000
+          if (diffH > 0) {
+            setDurationHours(diffH)
+            // Set custom field only if it doesn't match a preset
+            if (!DURATION_PRESETS.some((p) => p.hours === diffH)) {
+              setCustomDuration(String(diffH))
+            } else {
+              setCustomDuration('')
+            }
+          }
+        }
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    },
+    [parameters.startTime, parameters.endTime],
+  )
 
   // SAR modes from backend (React Query — cached, deduped, StrictMode-safe)
   const { data: sarModesData } = useSarModes()
@@ -143,25 +240,112 @@ const MissionParameters: React.FC<MissionParametersProps> = ({
         </div>
 
         {/* Start + End Time — same row, responsive wrap */}
-        <div className="flex flex-wrap gap-3">
-          <div className="flex-1 min-w-[180px]">
-            <DateTimePicker
-              label="Start Time (UTC)"
-              value={parameters.startTime}
-              onChange={(value) => onChange({ startTime: value })}
-              icon={<Calendar className="w-3 h-3 inline mr-1" />}
-              disabled={disabled}
-            />
+        <div className="space-y-1">
+          {/* Shared label row */}
+          <div className="flex items-center">
+            <label className="flex-1 min-w-[180px] text-xs font-medium text-gray-400">
+              <Calendar className="w-3 h-3 inline mr-1" />
+              Start Time (UTC)
+            </label>
+            <div className="flex-1 min-w-[180px] flex items-center justify-between">
+              <label className="text-xs font-medium text-gray-400">
+                {timeRangeMode === 'absolute' ? (
+                  <>
+                    <Clock className="w-3 h-3 inline mr-1" />
+                    End Time (UTC)
+                  </>
+                ) : (
+                  <>
+                    <Timer className="w-3 h-3 inline mr-1" />
+                    Duration
+                  </>
+                )}
+              </label>
+              <div className="flex rounded-md overflow-hidden border border-gray-600">
+                <button
+                  onClick={() => handleModeSwitch('duration')}
+                  disabled={disabled}
+                  className={`px-1.5 py-0.5 text-[9px] font-medium transition-colors ${
+                    timeRangeMode === 'duration'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-800 text-gray-400 hover:text-gray-200'
+                  } ${disabled ? 'cursor-not-allowed' : ''}`}
+                >
+                  +Δt
+                </button>
+                <button
+                  onClick={() => handleModeSwitch('absolute')}
+                  disabled={disabled}
+                  className={`px-1.5 py-0.5 text-[9px] font-medium transition-colors ${
+                    timeRangeMode === 'absolute'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-800 text-gray-400 hover:text-gray-200'
+                  } ${disabled ? 'cursor-not-allowed' : ''}`}
+                >
+                  Date
+                </button>
+              </div>
+            </div>
           </div>
-          <div className="flex-1 min-w-[180px]">
-            <DateTimePicker
-              label="End Time (UTC)"
-              value={parameters.endTime}
-              onChange={(value) => onChange({ endTime: value })}
-              minDate={parameters.startTime}
-              icon={<Clock className="w-3 h-3 inline mr-1" />}
-              disabled={disabled}
-            />
+          {/* Input row */}
+          <div className="flex items-start gap-3">
+            <div className="flex-1 min-w-[180px]">
+              <DateTimePicker
+                label=""
+                value={parameters.startTime}
+                onChange={(value) => onChange({ startTime: value })}
+                disabled={disabled}
+              />
+            </div>
+            <div className="flex-1 min-w-[180px]">
+              {timeRangeMode === 'absolute' ? (
+                <DateTimePicker
+                  label=""
+                  value={parameters.endTime}
+                  onChange={(value) => onChange({ endTime: value })}
+                  minDate={parameters.startTime}
+                  disabled={disabled}
+                />
+              ) : (
+                <div className="space-y-1.5">
+                  <div className="grid grid-cols-3 gap-1">
+                    {DURATION_PRESETS.map((preset) => (
+                      <button
+                        key={preset.hours}
+                        onClick={() => handlePresetClick(preset.hours)}
+                        disabled={disabled}
+                        className={`py-1 rounded text-[11px] font-medium text-center transition-colors ${
+                          durationHours === preset.hours && customDuration === ''
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                        } ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-1.5 mt-1">
+                    <input
+                      type="number"
+                      min="0.5"
+                      step="0.5"
+                      placeholder="Custom hrs"
+                      value={customDuration}
+                      onChange={(e) => handleCustomDurationChange(e.target.value)}
+                      className="input-field flex-1 py-1 text-[11px] text-center rounded"
+                      disabled={disabled}
+                    />
+                    <span className="text-[10px] text-gray-400 whitespace-nowrap">
+                      = {formatDurationSummary(durationHours)}
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-gray-500 flex items-center gap-1 mt-1">
+                    <Clock className="w-2.5 h-2.5" />
+                    End: {parameters.endTime ? formatDateTimeShort(parameters.endTime) : '—'}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 

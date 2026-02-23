@@ -31,7 +31,7 @@ export const WEIGHT_PRESETS: Record<
     geometry: 40,
     timing: 20,
     label: 'Balanced',
-    desc: 'Equal priority & geometry',
+    desc: 'Equal priority & quality',
   },
   priority_first: {
     priority: 70,
@@ -45,7 +45,7 @@ export const WEIGHT_PRESETS: Record<
     geometry: 70,
     timing: 10,
     label: 'Quality',
-    desc: 'Best imaging geometry',
+    desc: 'Best imaging quality',
   },
   urgent: {
     priority: 60,

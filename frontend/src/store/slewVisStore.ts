@@ -41,9 +41,9 @@ interface SlewVisStore {
 const initialState = {
   enabled: false,
   activeSchedule: null,
-  showFootprints: true,
+  showFootprints: false,
   showSlewArcs: true,
-  showSlewLabels: false,
+  showSlewLabels: true,
   showRejected: false,
   colorBy: 'quality' as ColorByMode,
   filterMode: 'accepted' as FilterMode,

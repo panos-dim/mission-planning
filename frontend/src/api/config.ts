@@ -3,8 +3,10 @@
  * Centralized configuration for all API endpoints
  */
 
-// Base URL from environment variable with fallback
-export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+// Base URL from environment variable with fallback.
+// Default to '' (same-origin) so requests use the Vite dev proxy (/api → localhost:8000)
+// and avoid CORS preflight overhead. Set VITE_API_URL explicitly for production builds.
+export const API_BASE_URL = import.meta.env.VITE_API_URL ?? ''
 
 // API Endpoints
 export const API_ENDPOINTS = {
@@ -49,6 +51,8 @@ export const API_ENDPOINTS = {
   SCHEDULE_BULK_LOCK: '/api/v1/schedule/acquisitions/bulk-lock',
   SCHEDULE_BULK_DELETE: '/api/v1/schedule/acquisitions/bulk-delete',
   SCHEDULE_HARD_LOCK_COMMITTED: '/api/v1/schedule/acquisitions/hard-lock-committed',
+  SCHEDULE_TARGET_LOCATIONS: '/api/v1/schedule/target-locations',
+  SCHEDULE_MASTER: '/api/v1/schedule/master',
 
   // Orders endpoints
   ORDERS: '/api/v1/orders',

@@ -115,7 +115,9 @@ export interface ScheduleStateResponse {
 export async function commitScheduleDirect(
   request: DirectCommitRequest,
 ): Promise<DirectCommitResponse> {
-  return apiClient.post<DirectCommitResponse>(API_ENDPOINTS.SCHEDULE_COMMIT_DIRECT, request)
+  return apiClient.post<DirectCommitResponse>(API_ENDPOINTS.SCHEDULE_COMMIT_DIRECT, request, {
+    retries: 0, // Write operation — never retry to avoid duplicate commits
+  })
 }
 
 /**
@@ -143,6 +145,94 @@ export async function getScheduleHorizon(params?: {
 export async function getScheduleState(workspace_id?: string): Promise<ScheduleStateResponse> {
   const qs = buildQuery({ workspace_id })
   return apiClient.get<ScheduleStateResponse>(`${API_ENDPOINTS.SCHEDULE_STATE}${qs}`)
+}
+
+/**
+ * Get geographic positions for all targets with scheduled acquisitions.
+ * When workspace_id is provided, results are scoped to that workspace only.
+ */
+export async function getScheduleTargetLocations(workspace_id?: string): Promise<{
+  success: boolean
+  targets: Array<{ target_id: string; latitude: number; longitude: number }>
+}> {
+  const qs = buildQuery({ workspace_id })
+  return apiClient.get<{
+    success: boolean
+    targets: Array<{ target_id: string; latitude: number; longitude: number }>
+  }>(`${API_ENDPOINTS.SCHEDULE_TARGET_LOCATIONS}${qs}`)
+}
+
+// =============================================================================
+// Master Schedule API (v2.5)
+// =============================================================================
+
+export interface MasterScheduleBucket {
+  target_id: string
+  satellite_id: string
+  mode: string
+  bucket_start: string
+  bucket_end: string
+  count: number
+  target_lat?: number
+  target_lon?: number
+  avg_off_nadir_deg?: number
+}
+
+export interface MasterScheduleItem {
+  id: string
+  satellite_id: string
+  target_id: string
+  start_time: string
+  end_time: string
+  mode: string
+  state: string
+  lock_level: string
+  order_id?: string
+  plan_id?: string
+  workspace_id?: string
+  target_lat?: number
+  target_lon?: number
+  satellite_display_name?: string
+  off_nadir_deg?: number
+  geometry?: {
+    roll_deg: number
+    pitch_deg: number
+    incidence_deg?: number
+  }
+}
+
+export interface MasterScheduleResponse {
+  success: boolean
+  zoom: 'detail' | 'aggregate'
+  total: number
+  items: MasterScheduleItem[]
+  buckets: MasterScheduleBucket[]
+  t_start: string
+  t_end: string
+  fetch_ms?: number
+}
+
+/**
+ * Get master schedule for the timeline view.
+ * Returns acquisitions in the visible time range with full geo fields.
+ */
+export async function getMasterSchedule(params: {
+  workspace_id: string
+  t_start?: string
+  t_end?: string
+  zoom?: 'detail' | 'aggregate'
+  limit?: number
+  offset?: number
+}): Promise<MasterScheduleResponse> {
+  const qs = buildQuery({
+    workspace_id: params.workspace_id,
+    t_start: params.t_start,
+    t_end: params.t_end,
+    zoom: params.zoom,
+    limit: params.limit,
+    offset: params.offset,
+  })
+  return apiClient.get<MasterScheduleResponse>(`${API_ENDPOINTS.SCHEDULE_MASTER}${qs}`)
 }
 
 // =============================================================================
@@ -420,6 +510,7 @@ export async function getScheduleContext(params: {
   count: number
   by_state: Record<string, number>
   by_satellite: Record<string, number>
+  target_ids: string[]
   horizon: { start: string; end: string }
 }> {
   const horizonResponse = await getScheduleHorizon({
@@ -429,11 +520,14 @@ export async function getScheduleContext(params: {
     include_tentative: params.include_tentative,
   })
 
+  const scheduledTargetIds = [...new Set(horizonResponse.acquisitions.map((a) => a.target_id))]
+
   return {
     success: horizonResponse.success,
     count: horizonResponse.statistics.total_acquisitions || 0,
     by_state: horizonResponse.statistics.by_state || {},
     by_satellite: horizonResponse.statistics.by_satellite || {},
+    target_ids: scheduledTargetIds,
     horizon: {
       start: horizonResponse.horizon.start || '',
       end: horizonResponse.horizon.end || '',
@@ -451,6 +545,12 @@ export interface RepairPlanRequest {
   horizon_to?: string
   workspace_id?: string
   include_tentative?: boolean
+  // Per-target priorities (target_name → priority 1-5, 1=highest)
+  target_priorities?: Record<string, number>
+  // Scoring weights
+  weight_priority?: number
+  weight_geometry?: number
+  weight_timing?: number
   // Planning parameters
   imaging_time_s?: number
   max_roll_rate_dps?: number
@@ -600,7 +700,9 @@ export interface RepairPlanResponse {
  * Repair mode modifies existing schedule: keeps hard locks, replaces unlocked items with better opportunities.
  */
 export async function createRepairPlan(request: RepairPlanRequest): Promise<RepairPlanResponse> {
-  return apiClient.post<RepairPlanResponse>(API_ENDPOINTS.SCHEDULE_REPAIR, request)
+  return apiClient.post<RepairPlanResponse>(API_ENDPOINTS.SCHEDULE_REPAIR, request, {
+    retries: 0, // Heavy computation — never retry to avoid duplicate plans
+  })
 }
 
 // =============================================================================
@@ -643,7 +745,7 @@ export async function updateAcquisitionLock(
   acquisitionId: string,
   lockLevel: LockLevel,
 ): Promise<UpdateLockResponse> {
-  return apiClient.put<UpdateLockResponse>(
+  return apiClient.patch<UpdateLockResponse>(
     `${API_ENDPOINTS.SCHEDULE_ACQUISITION_LOCK(acquisitionId)}?lock_level=${lockLevel}`,
     {},
   )
@@ -762,6 +864,7 @@ export interface RepairCommitResponse {
   audit_log_id: string
   conflicts_after: number
   warnings: string[]
+  acquisition_ids: string[]
 }
 
 /**
@@ -770,7 +873,9 @@ export interface RepairCommitResponse {
 export async function commitRepairPlan(
   request: RepairCommitRequest,
 ): Promise<RepairCommitResponse> {
-  return apiClient.post<RepairCommitResponse>(API_ENDPOINTS.SCHEDULE_REPAIR_COMMIT, request)
+  return apiClient.post<RepairCommitResponse>(API_ENDPOINTS.SCHEDULE_REPAIR_COMMIT, request, {
+    retries: 0, // Write operation — never retry to avoid duplicate commits
+  })
 }
 
 // =============================================================================

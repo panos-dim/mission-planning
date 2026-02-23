@@ -481,7 +481,7 @@ const RightSidebar: React.FC = () => {
             </div>
 
             {/* Panel Body */}
-            <div className="flex-1 overflow-y-auto">{activeContent.component}</div>
+            <div className="flex-1 min-h-0 overflow-hidden">{activeContent.component}</div>
           </div>
         )}
 

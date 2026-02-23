@@ -8,6 +8,7 @@
 
 import React, { useEffect, useRef } from 'react'
 import { SceneTransforms, Cartesian2, defined, Viewer } from 'cesium'
+import { getSatCssColor } from '../../utils/satelliteColors'
 
 interface SelectionIndicatorProps {
   viewerRef: React.RefObject<{ cesiumElement: Viewer | undefined } | null>
@@ -15,25 +16,38 @@ interface SelectionIndicatorProps {
 
 const scratchCartesian2 = new Cartesian2()
 
-// Web Animations API keyframes for the two rings
-const outerKeyframes: Keyframe[] = [
-  { transform: 'translate(-50%, -50%) scale(1)', opacity: 1, borderColor: 'rgba(59, 130, 246, 1)' },
-  {
-    transform: 'translate(-50%, -50%) scale(1.15)',
-    opacity: 0.7,
-    borderColor: 'rgba(59, 130, 246, 0.8)',
-  },
-  { transform: 'translate(-50%, -50%) scale(1)', opacity: 1, borderColor: 'rgba(59, 130, 246, 1)' },
-]
-const innerKeyframes: Keyframe[] = [
-  { transform: 'translate(-50%, -50%) scale(1)', opacity: 1, borderColor: 'rgba(96, 165, 250, 1)' },
-  {
-    transform: 'translate(-50%, -50%) scale(1.1)',
-    opacity: 0.65,
-    borderColor: 'rgba(96, 165, 250, 0.7)',
-  },
-  { transform: 'translate(-50%, -50%) scale(1)', opacity: 1, borderColor: 'rgba(96, 165, 250, 1)' },
-]
+// Default blue keyframes (non-satellite entities)
+const DEFAULT_BLUE = 'rgba(59, 130, 246, 1)'
+const DEFAULT_BLUE_DIM = 'rgba(59, 130, 246, 0.8)'
+const DEFAULT_LIGHT = 'rgba(96, 165, 250, 1)'
+const DEFAULT_LIGHT_DIM = 'rgba(96, 165, 250, 0.7)'
+
+function makeOuterKeyframes(color: string, colorDim: string): Keyframe[] {
+  return [
+    { transform: 'translate(-50%, -50%) scale(1)', opacity: 1, borderColor: color },
+    { transform: 'translate(-50%, -50%) scale(1.15)', opacity: 0.7, borderColor: colorDim },
+    { transform: 'translate(-50%, -50%) scale(1)', opacity: 1, borderColor: color },
+  ]
+}
+function makeInnerKeyframes(color: string, colorDim: string): Keyframe[] {
+  return [
+    { transform: 'translate(-50%, -50%) scale(1)', opacity: 1, borderColor: color },
+    { transform: 'translate(-50%, -50%) scale(1.1)', opacity: 0.65, borderColor: colorDim },
+    { transform: 'translate(-50%, -50%) scale(1)', opacity: 1, borderColor: color },
+  ]
+}
+
+/**
+ * Convert a hex CSS color to rgba strings at two opacity levels for keyframes.
+ */
+function hexToRgbaStrings(hex: string): [string, string] {
+  const h = hex.replace('#', '')
+  const r = parseInt(h.substring(0, 2), 16)
+  const g = parseInt(h.substring(2, 4), 16)
+  const b = parseInt(h.substring(4, 6), 16)
+  return [`rgba(${r}, ${g}, ${b}, 1)`, `rgba(${r}, ${g}, ${b}, 0.75)`]
+}
+
 const animOpts: KeyframeAnimationOptions = {
   duration: 2000,
   iterations: Infinity,
@@ -55,9 +69,15 @@ const SelectionIndicator: React.FC<SelectionIndicatorProps> = ({ viewerRef }) =>
     const innerEl = innerRef.current
     if (!el || !outerEl || !innerEl) return
 
-    // Start Web Animations (paused initially)
-    outerAnimRef.current = outerEl.animate(outerKeyframes, animOpts)
-    innerAnimRef.current = innerEl.animate(innerKeyframes, { ...animOpts, delay: 300 })
+    // Start Web Animations with default blue (paused initially)
+    outerAnimRef.current = outerEl.animate(
+      makeOuterKeyframes(DEFAULT_BLUE, DEFAULT_BLUE_DIM),
+      animOpts,
+    )
+    innerAnimRef.current = innerEl.animate(
+      makeInnerKeyframes(DEFAULT_LIGHT, DEFAULT_LIGHT_DIM),
+      { ...animOpts, delay: 300 },
+    )
     outerAnimRef.current.pause()
     innerAnimRef.current.pause()
 
@@ -70,16 +90,32 @@ const SelectionIndicator: React.FC<SelectionIndicatorProps> = ({ viewerRef }) =>
       el.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`
     }
 
-    const restartAnimations = () => {
-      // Reset to frame 0 and play — instant smooth start
-      if (outerAnimRef.current) {
-        outerAnimRef.current.currentTime = 0
-        outerAnimRef.current.play()
+    const restartAnimations = (entityId?: string) => {
+      // Determine color: satellite entities use their registered color
+      let outerColor = DEFAULT_BLUE
+      let outerDim = DEFAULT_BLUE_DIM
+      let innerColor = DEFAULT_LIGHT
+      let innerDim = DEFAULT_LIGHT_DIM
+
+      if (entityId?.startsWith('sat_') && !entityId.includes('ground_track')) {
+        const [full, dim] = hexToRgbaStrings(getSatCssColor(entityId))
+        outerColor = full
+        outerDim = dim
+        innerColor = full
+        innerDim = dim
       }
-      if (innerAnimRef.current) {
-        innerAnimRef.current.currentTime = 0
-        innerAnimRef.current.play()
-      }
+
+      // Cancel old animations and create new ones with updated colors
+      outerAnimRef.current?.cancel()
+      innerAnimRef.current?.cancel()
+      outerAnimRef.current = outerEl.animate(
+        makeOuterKeyframes(outerColor, outerDim),
+        animOpts,
+      )
+      innerAnimRef.current = innerEl.animate(
+        makeInnerKeyframes(innerColor, innerDim),
+        { ...animOpts, delay: 300 },
+      )
     }
 
     const tick = () => {
@@ -93,10 +129,11 @@ const SelectionIndicator: React.FC<SelectionIndicatorProps> = ({ viewerRef }) =>
         return
       }
 
-      // Detect target change → restart animations cleanly
+      // Detect target change → restart animations with entity-appropriate color
       if (viewer.selectedEntity !== lastEntityRef.current) {
         lastEntityRef.current = viewer.selectedEntity
-        restartAnimations()
+        const eid = (viewer.selectedEntity as { id?: string }).id
+        restartAnimations(eid)
       }
 
       try {

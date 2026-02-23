@@ -661,7 +661,7 @@ const DemoScenarioRunner: React.FC = () => {
       if (abortRef.current) return null
 
       // Step 2: Schedule
-      const schedIdx = addStep(`[${scenario.label}] Run Scheduler`)
+      const schedIdx = addStep(`[${scenario.label}] Generate Mission Plan`)
       await new Promise((r) => setTimeout(r, 0))
 
       let scheduleItems: Array<{

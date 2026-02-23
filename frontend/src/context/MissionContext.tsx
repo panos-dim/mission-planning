@@ -2,10 +2,11 @@ import React, {
   createContext,
   useContext,
   useReducer,
+  useEffect,
   ReactNode,
   useRef,
   useCallback,
-} from "react";
+} from 'react'
 import {
   Color,
   Cartesian3,
@@ -17,7 +18,7 @@ import {
   HeadingPitchRange,
   Viewer,
   Entity,
-} from "cesium";
+} from 'cesium'
 import {
   MissionState,
   MissionData,
@@ -26,14 +27,15 @@ import {
   SceneObject,
   CZMLPacket,
   TargetData,
-} from "../types";
-import { useVisStore } from "../store/visStore";
-import { useExplorerStore } from "../store/explorerStore";
-import { useSceneObjectStore } from "../store/sceneObjectStore";
-import { useWorkspaceStore } from "../store/workspaceStore";
-import debug from "../utils/debug";
-import { missionApi, tleApi, configApi, getErrorMessage } from "../api";
-import type { GroundStation } from "../api";
+} from '../types'
+import { useVisStore } from '../store/visStore'
+import { useExplorerStore } from '../store/explorerStore'
+import { useSceneObjectStore } from '../store/sceneObjectStore'
+import { useWorkspaceStore } from '../store/workspaceStore'
+import { useSessionStore } from '../store/sessionStore'
+import debug from '../utils/debug'
+import { missionApi, tleApi, configApi, getErrorMessage } from '../api'
+import type { GroundStation } from '../api'
 
 // Core mission state (scene objects & workspaces now in Zustand stores)
 const initialState: MissionState = {
@@ -46,95 +48,86 @@ const initialState: MissionState = {
   selectedObjectId: null, // Kept for backward compat — populated from sceneObjectStore
   workspaces: [], // Kept for backward compat — populated from workspaceStore
   activeWorkspace: null, // Kept for backward compat — populated from workspaceStore
-};
+}
 
 // Action types (scene object & workspace actions removed — now in Zustand stores)
 type MissionAction =
-  | { type: "SET_LOADING"; payload: boolean }
+  | { type: 'SET_LOADING'; payload: boolean }
   | {
-      type: "SET_MISSION_DATA";
-      payload: { missionData: MissionData; czmlData: CZMLPacket[] };
+      type: 'SET_MISSION_DATA'
+      payload: { missionData: MissionData; czmlData: CZMLPacket[] }
     }
-  | { type: "SET_ERROR"; payload: string | null }
-  | { type: "SET_VALIDATION_RESULT"; payload: ValidationResponse | null }
-  | { type: "CLEAR_MISSION" };
+  | { type: 'SET_ERROR'; payload: string | null }
+  | { type: 'SET_VALIDATION_RESULT'; payload: ValidationResponse | null }
+  | { type: 'CLEAR_MISSION' }
 
 // Reducer (scene object & workspace actions moved to Zustand stores)
-function missionReducer(
-  state: MissionState,
-  action: MissionAction,
-): MissionState {
+function missionReducer(state: MissionState, action: MissionAction): MissionState {
   switch (action.type) {
-    case "SET_LOADING":
-      return { ...state, isLoading: action.payload };
-    case "SET_MISSION_DATA":
+    case 'SET_LOADING':
+      return { ...state, isLoading: action.payload }
+    case 'SET_MISSION_DATA':
       return {
         ...state,
         missionData: action.payload.missionData,
         czmlData: action.payload.czmlData,
         isLoading: false,
         error: null,
-      };
-    case "SET_ERROR":
-      return { ...state, error: action.payload, isLoading: false };
-    case "SET_VALIDATION_RESULT":
-      return { ...state, validationResult: action.payload };
-    case "CLEAR_MISSION":
-      return { ...initialState };
+      }
+    case 'SET_ERROR':
+      return { ...state, error: action.payload, isLoading: false }
+    case 'SET_VALIDATION_RESULT':
+      return { ...state, validationResult: action.payload }
+    case 'CLEAR_MISSION':
+      return { ...initialState }
     default:
-      return state;
+      return state
   }
 }
 
 // Context type
 interface MissionContextType {
-  state: MissionState;
-  dispatch: React.Dispatch<MissionAction>;
-  validateTLE: (tle: {
-    name: string;
-    line1: string;
-    line2: string;
-  }) => Promise<void>;
-  analyzeMission: (formData: FormData) => Promise<void>;
-  clearMission: () => void;
-  navigateToPassWindow: (passIndex: number) => void; // Mission Results: jump to pass start
-  navigateToImagingTime: (passIndex: number) => void; // Mission Planning: jump to optimal imaging time
-  setCesiumViewer: (viewer: Viewer | null) => void;
-  addSceneObject: (object: SceneObject) => void;
-  updateSceneObject: (id: string, updates: Partial<SceneObject>) => void;
-  removeSceneObject: (id: string) => void;
-  setSelectedObject: (id: string | null) => void;
-  selectObject: (id: string | null) => void;
-  updateObject: (id: string, updates: Partial<SceneObject>) => void;
-  removeObject: (id: string) => void;
-  saveWorkspace: (name: string) => void;
-  loadWorkspace: (id: string) => void;
-  deleteWorkspace: (id: string) => void;
-  flyToObject: (objectId: string) => void;
-  toggleEntityVisibility: (entityType: string, isVisible: boolean) => void;
+  state: MissionState
+  dispatch: React.Dispatch<MissionAction>
+  validateTLE: (tle: { name: string; line1: string; line2: string }) => Promise<void>
+  analyzeMission: (formData: FormData) => Promise<void>
+  clearMission: () => void
+  navigateToPassWindow: (passIndex: number) => void // Mission Results: jump to pass start
+  navigateToImagingTime: (passIndex: number) => void // Mission Planning: jump to optimal imaging time
+  setCesiumViewer: (viewer: Viewer | null) => void
+  addSceneObject: (object: SceneObject) => void
+  updateSceneObject: (id: string, updates: Partial<SceneObject>) => void
+  removeSceneObject: (id: string) => void
+  setSelectedObject: (id: string | null) => void
+  selectObject: (id: string | null) => void
+  updateObject: (id: string, updates: Partial<SceneObject>) => void
+  removeObject: (id: string) => void
+  saveWorkspace: (name: string) => void
+  loadWorkspace: (id: string) => void
+  deleteWorkspace: (id: string) => void
+  flyToObject: (objectId: string) => void
+  toggleEntityVisibility: (entityType: string, isVisible: boolean) => void
 }
 
 // Create context
-const MissionContext = createContext<MissionContextType | undefined>(undefined);
+const MissionContext = createContext<MissionContextType | undefined>(undefined)
 
 // Provider component
 interface MissionProviderProps {
-  children: ReactNode;
+  children: ReactNode
 }
 
-export function MissionProvider({
-  children,
-}: MissionProviderProps): JSX.Element {
-  const [reducerState, dispatch] = useReducer(missionReducer, initialState);
+export function MissionProvider({ children }: MissionProviderProps): JSX.Element {
+  const [reducerState, dispatch] = useReducer(missionReducer, initialState)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [cesiumViewer, setCesiumViewer] = React.useState<any>(null);
-  const { setClockTime } = useVisStore();
+  const [cesiumViewer, setCesiumViewer] = React.useState<any>(null)
+  const { setClockTime } = useVisStore()
 
   // Read from Zustand stores reactively for backward-compatible composed state
-  const sceneObjects = useSceneObjectStore((s) => s.sceneObjects);
-  const selectedObjectId = useSceneObjectStore((s) => s.selectedObjectId);
-  const workspaces = useWorkspaceStore((s) => s.workspaces);
-  const activeWorkspace = useWorkspaceStore((s) => s.activeWorkspace);
+  const sceneObjects = useSceneObjectStore((s) => s.sceneObjects)
+  const selectedObjectId = useSceneObjectStore((s) => s.selectedObjectId)
+  const workspaces = useWorkspaceStore((s) => s.workspaces)
+  const activeWorkspace = useWorkspaceStore((s) => s.activeWorkspace)
 
   // Compose state: reducer (mission-only) + Zustand stores (scene objects, workspaces)
   const state: MissionState = React.useMemo(
@@ -146,191 +139,212 @@ export function MissionProvider({
       activeWorkspace,
     }),
     [reducerState, sceneObjects, selectedObjectId, workspaces, activeWorkspace],
-  );
+  )
+
+  // Session persistence: save missionData + czmlData to localStorage on change
+  const saveMissionSession = useSessionStore((s) => s.saveMissionSession)
+  const sessionRestoreRef = useRef(false)
+
+  useEffect(() => {
+    if (reducerState.missionData && reducerState.czmlData.length > 0) {
+      saveMissionSession(reducerState.missionData, reducerState.czmlData)
+    } else if (!reducerState.missionData) {
+      // When mission is cleared (CLEAR_MISSION), ensure session store is also cleared.
+      // This prevents stale data from being restored on next page refresh.
+      useSessionStore.getState().clearSession()
+    }
+  }, [reducerState.missionData, reducerState.czmlData, saveMissionSession])
+
+  // Session persistence: restore from localStorage on mount (one-time)
+  useEffect(() => {
+    if (sessionRestoreRef.current) return
+    sessionRestoreRef.current = true
+
+    // Skip if mission data already exists (e.g. workspace load beat us)
+    if (reducerState.missionData) return
+
+    const { lastMissionData, lastCzmlData } = useSessionStore.getState()
+    if (lastMissionData && lastCzmlData && lastCzmlData.length > 0) {
+      console.log('[SessionRestore] Restoring mission data from last session')
+      dispatch({
+        type: 'SET_MISSION_DATA',
+        payload: { missionData: lastMissionData, czmlData: lastCzmlData },
+      })
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // AbortController refs for cancellable requests
-  const analyzeAbortRef = useRef<AbortController | null>(null);
-  const validateAbortRef = useRef<AbortController | null>(null);
+  const analyzeAbortRef = useRef<AbortController | null>(null)
+  const validateAbortRef = useRef<AbortController | null>(null)
 
-  const validateTLE = useCallback(
-    async (tle: { name: string; line1: string; line2: string }) => {
-      // Cancel any pending validation
-      validateAbortRef.current?.abort();
-      validateAbortRef.current = new AbortController();
+  const validateTLE = useCallback(async (tle: { name: string; line1: string; line2: string }) => {
+    // Cancel any pending validation
+    validateAbortRef.current?.abort()
+    validateAbortRef.current = new AbortController()
 
-      dispatch({ type: "SET_LOADING", payload: true });
-      try {
-        const result = await tleApi.validate(tle, {
-          signal: validateAbortRef.current.signal,
-        });
+    dispatch({ type: 'SET_LOADING', payload: true })
+    try {
+      const result = await tleApi.validate(tle, {
+        signal: validateAbortRef.current.signal,
+      })
 
-        dispatch({ type: "SET_VALIDATION_RESULT", payload: result });
+      dispatch({ type: 'SET_VALIDATION_RESULT', payload: result })
 
-        if (!result.valid && result.error) {
-          dispatch({ type: "SET_ERROR", payload: result.error });
-        }
-      } catch (error) {
-        // Don't report aborted requests as errors
-        if (error instanceof Error && error.name === "AbortError") {
-          return;
-        }
-        dispatch({
-          type: "SET_ERROR",
-          payload: `TLE validation failed: ${getErrorMessage(error)}`,
-        });
-      } finally {
-        dispatch({ type: "SET_LOADING", payload: false });
+      if (!result.valid && result.error) {
+        dispatch({ type: 'SET_ERROR', payload: result.error })
       }
-    },
-    [],
-  );
+    } catch (error) {
+      // Don't report aborted requests as errors
+      if (error instanceof Error && error.name === 'AbortError') {
+        return
+      }
+      dispatch({
+        type: 'SET_ERROR',
+        payload: `TLE validation failed: ${getErrorMessage(error)}`,
+      })
+    } finally {
+      dispatch({ type: 'SET_LOADING', payload: false })
+    }
+  }, [])
 
   const analyzeMission = useCallback(async (formData: FormData) => {
     // Cancel any pending analysis
-    analyzeAbortRef.current?.abort();
-    analyzeAbortRef.current = new AbortController();
+    analyzeAbortRef.current?.abort()
+    analyzeAbortRef.current = new AbortController()
 
-    dispatch({ type: "SET_LOADING", payload: true });
+    dispatch({ type: 'SET_LOADING', payload: true })
     try {
       // Handle the datetime-local format and ensure it's treated as UTC
-      let startTimeUTC: string;
-      let endTimeUTC: string;
+      let startTimeUTC: string
+      let endTimeUTC: string
 
-      if (formData.startTime && formData.startTime.includes("T")) {
+      if (formData.startTime && formData.startTime.includes('T')) {
         // The datetime-local input gives us YYYY-MM-DDTHH:mm format
         // Append seconds and Z to make it a valid ISO string for UTC
-        startTimeUTC = formData.startTime + ":00Z";
+        startTimeUTC = formData.startTime + ':00Z'
       } else {
         // Fallback to current time if invalid format
-        console.warn("Invalid start time format, using current time");
-        startTimeUTC = new Date().toISOString();
+        console.warn('Invalid start time format, using current time')
+        startTimeUTC = new Date().toISOString()
       }
 
-      if (formData.endTime && formData.endTime.includes("T")) {
+      if (formData.endTime && formData.endTime.includes('T')) {
         // Same format handling for end time
-        endTimeUTC = formData.endTime + ":00Z";
+        endTimeUTC = formData.endTime + ':00Z'
       } else {
         // Fallback to 24 hours after start time
-        console.warn("Invalid end time format, using 24 hours after start");
-        const start = new Date(startTimeUTC);
-        endTimeUTC = new Date(
-          start.getTime() + 24 * 60 * 60 * 1000,
-        ).toISOString();
+        console.warn('Invalid end time format, using 24 hours after start')
+        const start = new Date(startTimeUTC)
+        endTimeUTC = new Date(start.getTime() + 24 * 60 * 60 * 1000).toISOString()
       }
 
       // Build mission request with constellation support (2025 best practice)
       // Use satellites array for multiple satellites, fall back to tle for single satellite
-      const hasSatellitesArray =
-        formData.satellites && formData.satellites.length > 0;
+      const hasSatellitesArray = formData.satellites && formData.satellites.length > 0
 
       const missionRequest = {
         // NEW: Constellation support - use satellites array if available
-        ...(hasSatellitesArray
-          ? { satellites: formData.satellites }
-          : { tle: formData.tle }),
+        ...(hasSatellitesArray ? { satellites: formData.satellites } : { tle: formData.tle }),
         targets: formData.targets,
         start_time: startTimeUTC,
         end_time: endTimeUTC,
         mission_type: formData.missionType,
         // Only include elevation_mask for communication missions
-        ...(formData.missionType === "communication" && {
+        ...(formData.missionType === 'communication' && {
           elevation_mask: formData.elevationMask,
         }),
-        max_spacecraft_roll_deg:
-          formData.pointingAngle > 0 ? formData.pointingAngle : undefined,
+        max_spacecraft_roll_deg: formData.pointingAngle > 0 ? formData.pointingAngle : undefined,
         ground_station_name: formData.groundStationName,
         imaging_type: formData.imagingType,
         // Map frontend SAR mode names to backend API names
         // Frontend: spot, strip, scan, dwell → Backend: spotlight, stripmap, scan
         sar_mode: (() => {
-          const mode = formData.sar?.imaging_mode || formData.sarMode;
+          const mode = formData.sar?.imaging_mode || formData.sarMode
           const modeMap: Record<string, string> = {
-            spot: "spotlight",
-            strip: "stripmap",
-            scan: "scan",
-            dwell: "scan", // dwell maps to scan for backend
-            stripmap: "stripmap",
-            spotlight: "spotlight",
-          };
-          return modeMap[mode || "stripmap"] || "stripmap";
-        })() as "stripmap" | "spotlight" | "scan",
-      };
+            spot: 'spotlight',
+            strip: 'stripmap',
+            scan: 'scan',
+            dwell: 'scan', // dwell maps to scan for backend
+            stripmap: 'stripmap',
+            spotlight: 'spotlight',
+          }
+          return modeMap[mode || 'stripmap'] || 'stripmap'
+        })() as 'stripmap' | 'spotlight' | 'scan',
+      }
 
-      debug.section("MISSION ANALYSIS");
+      debug.section('MISSION ANALYSIS')
 
       const result = await missionApi.analyze(missionRequest, {
         signal: analyzeAbortRef.current.signal,
-      });
+      })
 
       if (result.success && result.data) {
         // Log response with summary
-        const passes = result.data.mission_data?.passes || [];
-        debug.apiResponse("POST /api/v1/mission/analyze", result.data, {
+        const passes = result.data.mission_data?.passes || []
+        debug.apiResponse('POST /api/v1/mission/analyze', result.data, {
           summary: `✅ ${passes.length} opportunities found, ${
             result.data.czml_data?.length || 0
           } CZML packets`,
-        });
+        })
 
         // Log opportunities in clean table format
         if (passes.length > 0) {
-          debug.opportunities(passes);
+          debug.opportunities(passes)
         }
 
         dispatch({
-          type: "SET_MISSION_DATA",
+          type: 'SET_MISSION_DATA',
           payload: {
             missionData: result.data.mission_data,
             czmlData: result.data.czml_data,
           },
-        });
+        })
 
         // Track analysis run in explorer store
         useExplorerStore.getState().addAnalysisRun({
           id: `analysis_${Date.now()}`,
           timestamp: new Date().toISOString(),
           opportunitiesCount: passes.length,
-          missionMode:
-            result.data.mission_data?.mission_type?.toUpperCase() || "UNKNOWN",
-        });
+          missionMode: result.data.mission_data?.mission_type?.toUpperCase() || 'UNKNOWN',
+        })
 
         // Auto-populate scene objects with satellite and targets
-        const missionData = result.data.mission_data;
-        const newObjects: SceneObject[] = [];
+        const missionData = result.data.mission_data
+        const newObjects: SceneObject[] = []
 
         // Extract satellite from CZML data and add to object tree
         if (result.data.czml_data) {
-          const satellitePacket = result.data.czml_data.find(
-            (packet: CZMLPacket) => packet.id?.startsWith("sat_"),
-          );
+          const satellitePacket = result.data.czml_data.find((packet: CZMLPacket) =>
+            packet.id?.startsWith('sat_'),
+          )
           if (satellitePacket) {
             // Extract position data from CZML if available
-            let position = undefined;
+            let position = undefined
             if (satellitePacket.position?.cartographicDegrees) {
-              const posArray = satellitePacket.position.cartographicDegrees;
+              const posArray = satellitePacket.position.cartographicDegrees
               // Position array format: [time, lon, lat, alt, time, lon, lat, alt, ...]
               // Get the first position (after epoch time)
               if (posArray.length >= 4) {
-                const longitude = posArray[1];
-                const latitude = posArray[2];
-                const altitude = posArray[3] * 1000; // Convert km to meters
-                position = { latitude, longitude, altitude };
+                const longitude = posArray[1]
+                const latitude = posArray[2]
+                const altitude = posArray[3] * 1000 // Convert km to meters
+                position = { latitude, longitude, altitude }
               }
             }
 
             // Get satellite name with fallback for constellation support
-            const satName =
-              satellitePacket.name || missionData.satellite_name || "Satellite";
+            const satName = satellitePacket.name || missionData.satellite_name || 'Satellite'
 
             newObjects.push({
               id: satellitePacket.id,
               name: satName,
-              type: "satellite",
+              type: 'satellite',
               position: position,
               visible: true,
               createdAt: new Date().toISOString(),
               updatedAt: new Date().toISOString(),
-            });
-            debug.verbose(`Added satellite: ${satellitePacket.id}`);
+            })
+            debug.verbose(`Added satellite: ${satellitePacket.id}`)
           }
         }
 
@@ -339,7 +353,7 @@ export function MissionProvider({
           newObjects.push({
             id: `target_${index}_${target.name}`,
             name: target.name,
-            type: "target",
+            type: 'target',
             position: {
               latitude: target.latitude,
               longitude: target.longitude,
@@ -348,227 +362,223 @@ export function MissionProvider({
             visible: true,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
-          });
-        });
+          })
+        })
 
         // Add all objects to Zustand scene object store
-        const soStore = useSceneObjectStore.getState();
+        const soStore = useSceneObjectStore.getState()
         newObjects.forEach((obj) => {
-          soStore.addSceneObject(obj);
-        });
+          soStore.addSceneObject(obj)
+        })
 
         // Load ground stations with visibility enabled
         setTimeout(async () => {
-          await loadGroundStations(true); // Pass true to force visibility
-        }, 600); // Small delay to ensure CZML data is loaded
+          await loadGroundStations(true) // Pass true to force visibility
+        }, 600) // Small delay to ensure CZML data is loaded
       } else {
         dispatch({
-          type: "SET_ERROR",
-          payload: result.message || "Mission analysis failed",
-        });
+          type: 'SET_ERROR',
+          payload: result.message || 'Mission analysis failed',
+        })
       }
     } catch (error) {
       // Don't report aborted requests as errors
-      if (error instanceof Error && error.name === "AbortError") {
-        return;
+      if (error instanceof Error && error.name === 'AbortError') {
+        return
       }
-      console.error("Mission analysis error:", {
+      console.error('Mission analysis error:', {
         message: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
         name: error instanceof Error ? error.name : typeof error,
-      });
+      })
       dispatch({
-        type: "SET_ERROR",
+        type: 'SET_ERROR',
         payload: `Mission analysis failed: ${getErrorMessage(error)}`,
-      });
+      })
     } finally {
-      dispatch({ type: "SET_LOADING", payload: false });
+      dispatch({ type: 'SET_LOADING', payload: false })
     }
-  }, []);
+  }, [])
 
   const clearMission = useCallback(() => {
     // Cancel any pending requests
-    analyzeAbortRef.current?.abort();
-    validateAbortRef.current?.abort();
-    dispatch({ type: "CLEAR_MISSION" });
-    useSceneObjectStore.getState().clearSceneObjects();
-  }, []);
+    analyzeAbortRef.current?.abort()
+    validateAbortRef.current?.abort()
+    dispatch({ type: 'CLEAR_MISSION' })
+    useSceneObjectStore.getState().clearSceneObjects()
+    useSessionStore.getState().clearSession()
+  }, [])
 
   const navigateToPassWindow = useCallback(
     (passIndex: number) => {
-      if (!state.missionData) return;
+      if (!state.missionData) return
 
-      const pass = state.missionData.passes[passIndex];
-      if (!pass) return;
+      const pass = state.missionData.passes[passIndex]
+      if (!pass) return
 
-      debug.verbose(`Navigating to pass ${passIndex + 1}`);
+      debug.verbose(`Navigating to pass ${passIndex + 1}`)
 
       try {
         // Jump to pass window start (for Mission Results)
-        const targetTime = pass.start_time;
+        const targetTime = pass.start_time
 
         // Convert timezone offset format (+00:00) to Z format for Cesium
-        let utcTimeString = targetTime;
-        if (utcTimeString.includes("+00:00")) {
-          utcTimeString = utcTimeString.replace("+00:00", "Z");
-        } else if (!utcTimeString.endsWith("Z")) {
-          utcTimeString = utcTimeString + "Z";
+        let utcTimeString = targetTime
+        if (utcTimeString.includes('+00:00')) {
+          utcTimeString = utcTimeString.replace('+00:00', 'Z')
+        } else if (!utcTimeString.endsWith('Z')) {
+          utcTimeString = utcTimeString + 'Z'
         }
 
-        const jumpTime = JulianDate.fromIso8601(utcTimeString);
-        setClockTime(jumpTime);
+        const jumpTime = JulianDate.fromIso8601(utcTimeString)
+        setClockTime(jumpTime)
       } catch (error: unknown) {
-        console.error("Error in navigateToPassWindow:", error);
+        console.error('Error in navigateToPassWindow:', error)
       }
     },
     [state.missionData, setClockTime],
-  );
+  )
 
   const navigateToImagingTime = useCallback(
     (passIndex: number) => {
-      if (!state.missionData) return;
+      if (!state.missionData) return
 
-      const pass = state.missionData.passes[passIndex];
-      if (!pass) return;
+      const pass = state.missionData.passes[passIndex]
+      if (!pass) return
 
-      debug.verbose(`Navigating to imaging time for pass ${passIndex + 1}`);
+      debug.verbose(`Navigating to imaging time for pass ${passIndex + 1}`)
 
       try {
         // Jump to optimal imaging time (for Mission Planning Schedule)
-        const isImagingMission = state.missionData.mission_type === "imaging";
+        const isImagingMission = state.missionData.mission_type === 'imaging'
         const targetTime =
-          isImagingMission && pass.max_elevation_time
-            ? pass.max_elevation_time
-            : pass.start_time;
+          isImagingMission && pass.max_elevation_time ? pass.max_elevation_time : pass.start_time
 
         // Convert timezone offset format (+00:00) to Z format for Cesium
-        let utcTimeString = targetTime;
-        if (utcTimeString.includes("+00:00")) {
-          utcTimeString = utcTimeString.replace("+00:00", "Z");
-        } else if (!utcTimeString.endsWith("Z")) {
-          utcTimeString = utcTimeString + "Z";
+        let utcTimeString = targetTime
+        if (utcTimeString.includes('+00:00')) {
+          utcTimeString = utcTimeString.replace('+00:00', 'Z')
+        } else if (!utcTimeString.endsWith('Z')) {
+          utcTimeString = utcTimeString + 'Z'
         }
 
-        const jumpTime = JulianDate.fromIso8601(utcTimeString);
-        setClockTime(jumpTime);
+        const jumpTime = JulianDate.fromIso8601(utcTimeString)
+        setClockTime(jumpTime)
       } catch (error: unknown) {
-        console.error("Error in navigateToImagingTime:", error);
+        console.error('Error in navigateToImagingTime:', error)
       }
     },
     [state.missionData, setClockTime],
-  );
+  )
 
   const addSceneObject = useCallback((object: SceneObject) => {
-    useSceneObjectStore.getState().addSceneObject(object);
-  }, []);
+    useSceneObjectStore.getState().addSceneObject(object)
+  }, [])
 
-  const updateSceneObject = useCallback(
-    (id: string, updates: Partial<SceneObject>) => {
-      useSceneObjectStore.getState().updateSceneObject(id, updates);
-    },
-    [],
-  );
+  const updateSceneObject = useCallback((id: string, updates: Partial<SceneObject>) => {
+    useSceneObjectStore.getState().updateSceneObject(id, updates)
+  }, [])
 
   const removeSceneObject = useCallback((id: string) => {
-    useSceneObjectStore.getState().removeSceneObject(id);
-  }, []);
+    useSceneObjectStore.getState().removeSceneObject(id)
+  }, [])
 
   const setSelectedObject = useCallback((id: string | null) => {
-    useSceneObjectStore.getState().setSelectedObject(id);
-  }, []);
+    useSceneObjectStore.getState().setSelectedObject(id)
+  }, [])
 
   const saveWorkspace = (name: string) => {
-    const sceneObjects = useSceneObjectStore.getState().sceneObjects;
+    const sceneObjects = useSceneObjectStore.getState().sceneObjects
     useWorkspaceStore
       .getState()
-      .createWorkspace(name, sceneObjects, state.missionData, state.czmlData);
-  };
+      .createWorkspace(name, sceneObjects, state.missionData, state.czmlData)
+  }
 
   const loadWorkspace = (id: string) => {
-    const workspace = useWorkspaceStore.getState().loadWorkspace(id);
+    const workspace = useWorkspaceStore.getState().loadWorkspace(id)
     if (workspace) {
       // Restore scene objects to Zustand store
-      useSceneObjectStore.getState().setSceneObjects(workspace.sceneObjects);
+      useSceneObjectStore.getState().setSceneObjects(workspace.sceneObjects)
       // Restore mission data to reducer
       if (workspace.missionData) {
         dispatch({
-          type: "SET_MISSION_DATA",
+          type: 'SET_MISSION_DATA',
           payload: {
             missionData: workspace.missionData,
             czmlData: workspace.czmlData,
           },
-        });
+        })
       }
     }
-  };
+  }
 
   const deleteWorkspace = (id: string) => {
-    useWorkspaceStore.getState().deleteWorkspace(id);
-  };
+    useWorkspaceStore.getState().deleteWorkspace(id)
+  }
 
   const flyToObject = (objectId: string) => {
-    debug.verbose(`Flying to object: ${objectId}`);
+    debug.verbose(`Flying to object: ${objectId}`)
 
     if (!cesiumViewer || !cesiumViewer.cesiumElement) {
-      console.warn("[flyToObject] No cesiumViewer available");
-      return;
+      console.warn('[flyToObject] No cesiumViewer available')
+      return
     }
 
-    const viewer = cesiumViewer.cesiumElement;
-    let entity: Entity | null = null;
+    const viewer = cesiumViewer.cesiumElement
+    let entity: Entity | null = null
 
     // Map object IDs to entity IDs
-    let searchId = objectId;
+    let searchId = objectId
 
     // Handle satellite IDs from tree: satellite_sat_ICEYE-X67 -> sat_ICEYE-X67
-    if (objectId.startsWith("satellite_sat_")) {
-      searchId = objectId.replace("satellite_", "");
+    if (objectId.startsWith('satellite_sat_')) {
+      searchId = objectId.replace('satellite_', '')
     }
     // Handle satellite IDs: keep sat_ prefix for direct match with CZML entities
-    else if (objectId.startsWith("sat_")) {
-      searchId = objectId; // Keep the original ID for direct match
+    else if (objectId.startsWith('sat_')) {
+      searchId = objectId // Keep the original ID for direct match
     }
     // Handle entity-generated IDs: entity_sat_Satellite -> sat_Satellite
-    else if (objectId.startsWith("entity_sat_")) {
-      searchId = objectId.replace("entity_", "");
+    else if (objectId.startsWith('entity_sat_')) {
+      searchId = objectId.replace('entity_', '')
     }
     // Handle target IDs from tree: target_target_Athens or target_mission_0_Athens -> target_0 or search by name
-    else if (objectId.startsWith("target_")) {
+    else if (objectId.startsWith('target_')) {
       // Try to extract target name for searching
-      const nameMatch = objectId.match(/target_(?:target_|mission_\d+_)?(.+)$/);
+      const nameMatch = objectId.match(/target_(?:target_|mission_\d+_)?(.+)$/)
       if (nameMatch) {
-        searchId = nameMatch[1]; // Use just the target name
+        searchId = nameMatch[1] // Use just the target name
       }
       // Also try numeric target ID format
-      const numMatch = objectId.match(/target_(\d+)/);
+      const numMatch = objectId.match(/target_(\d+)/)
       if (numMatch) {
-        searchId = `target_${numMatch[1]}`;
+        searchId = `target_${numMatch[1]}`
       }
     }
 
     // First, check regular entities collection
-    entity = viewer.entities.getById(searchId);
+    entity = viewer.entities.getById(searchId)
 
     // If not found, search through all data sources (CZML entities)
     if (!entity && viewer.dataSources && viewer.dataSources.length > 0) {
       for (let i = 0; i < viewer.dataSources.length; i++) {
-        const dataSource = viewer.dataSources.get(i);
+        const dataSource = viewer.dataSources.get(i)
         if (dataSource && dataSource.entities) {
           // Try to find by mapped searchId
-          entity = dataSource.entities.getById(searchId);
-          if (entity) break;
+          entity = dataSource.entities.getById(searchId)
+          if (entity) break
 
           // Also try searching by entity name for targets
-          if (!entity && objectId.startsWith("target_")) {
-            const entities = dataSource.entities.values;
+          if (!entity && objectId.startsWith('target_')) {
+            const entities = dataSource.entities.values
             for (const e of entities) {
               if (e.name && e.name === searchId) {
-                entity = e;
-                break;
+                entity = e
+                break
               }
             }
           }
-          if (entity) break;
+          if (entity) break
         }
       }
     }
@@ -576,19 +586,19 @@ export function MissionProvider({
     if (entity) {
       // Unlock previous tracked entity
       if (viewer.trackedEntity) {
-        viewer.trackedEntity = undefined;
+        viewer.trackedEntity = undefined
       }
 
       // Determine appropriate viewing distance based on entity type
-      let distance = 500000; // Default 500km for satellites
+      let distance = 500000 // Default 500km for satellites
 
       // Adjust distance based on entity type or ID patterns
-      if (objectId.includes("ground_station") || objectId.includes("target")) {
-        distance = 300000; // 300km for ground targets
-      } else if (objectId.includes("coverage")) {
-        distance = 5000000; // 5000km for coverage circles
-      } else if (objectId === "satellite" || objectId.includes("satellite")) {
-        distance = 800000; // 800km for satellites
+      if (objectId.includes('ground_station') || objectId.includes('target')) {
+        distance = 300000 // 300km for ground targets
+      } else if (objectId.includes('coverage')) {
+        distance = 5000000 // 5000km for coverage circles
+      } else if (objectId === 'satellite' || objectId.includes('satellite')) {
+        distance = 800000 // 800km for satellites
       }
 
       // Fly to entity with nadir view (straight down)
@@ -599,193 +609,173 @@ export function MissionProvider({
         })
         .then(() => {
           // Only select the entity, don't use trackedEntity to avoid camera jumps
-          viewer.selectedEntity = entity;
+          viewer.selectedEntity = entity
         })
         .catch((error: unknown) => {
-          console.error("[flyToObject] Failed to fly to entity:", error);
-        });
+          console.error('[flyToObject] Failed to fly to entity:', error)
+        })
     } else {
-      console.warn(
-        `[flyToObject] Entity with ID '${objectId}' not found in viewer or data sources`,
-      );
+      console.warn(`[flyToObject] Entity with ID '${objectId}' not found in viewer or data sources`)
     }
-  };
+  }
 
-  const toggleEntityVisibility = async (
-    entityType: string,
-    isVisible: boolean,
-  ) => {
-    if (!cesiumViewer || !cesiumViewer.cesiumElement) return;
+  const toggleEntityVisibility = async (entityType: string, isVisible: boolean) => {
+    if (!cesiumViewer || !cesiumViewer.cesiumElement) return
 
-    const viewer = cesiumViewer.cesiumElement;
+    const viewer = cesiumViewer.cesiumElement
 
     // Check all data sources (including CZML)
     if (viewer.dataSources && viewer.dataSources.length > 0) {
       for (let i = 0; i < viewer.dataSources.length; i++) {
-        const dataSource = viewer.dataSources.get(i);
+        const dataSource = viewer.dataSources.get(i)
         if (dataSource && dataSource.entities && dataSource.entities.values) {
           dataSource.entities.values.forEach((entity: Entity) => {
             // Toggle based on entity ID patterns or name
-            if (entityType === "satellite" && entity.id.startsWith("sat_")) {
-              entity.show = isVisible;
+            if (entityType === 'satellite' && entity.id.startsWith('sat_')) {
+              entity.show = isVisible
             } else if (
-              entityType === "target" &&
-              entity.id.startsWith("target_") &&
-              !entity.id.includes("coverage")
+              entityType === 'target' &&
+              entity.id.startsWith('target_') &&
+              !entity.id.includes('coverage')
             ) {
-              entity.show = isVisible;
-            } else if (entityType === "coverage") {
+              entity.show = isVisible
+            } else if (entityType === 'coverage') {
               // Check both ID and name for coverage areas
               if (
-                entity.id.includes("coverage") ||
-                (entity.name && entity.name.includes("Coverage Area"))
+                entity.id.includes('coverage') ||
+                (entity.name && entity.name.includes('Coverage Area'))
               ) {
-                entity.show = isVisible;
+                entity.show = isVisible
               }
-            } else if (
-              entityType === "pointing_cone" &&
-              entity.id === "pointing_cone"
-            ) {
-              entity.show = isVisible;
+            } else if (entityType === 'pointing_cone' && entity.id === 'pointing_cone') {
+              entity.show = isVisible
             }
-          });
+          })
         }
       }
     }
 
     // Handle day/night lighting toggle
-    if (entityType === "day_night_lighting") {
+    if (entityType === 'day_night_lighting') {
       // Prevent lighting toggles during initialization
       if ((window as any).lightingInitializationInProgress) {
-        return;
+        return
       }
 
       // Only change lighting if it's actually different to prevent unnecessary toggles
-      const currentLighting = viewer.scene.globe.enableLighting;
-      const currentAtmosphere = viewer.scene.globe.showGroundAtmosphere;
+      const currentLighting = viewer.scene.globe.enableLighting
+      const currentAtmosphere = viewer.scene.globe.showGroundAtmosphere
 
       if (currentLighting !== isVisible || currentAtmosphere !== isVisible) {
         if (isVisible) {
           // Toggle ON: Show realistic day/night terminator
-          viewer.scene.globe.enableLighting = true;
-          viewer.scene.globe.showGroundAtmosphere = true;
+          viewer.scene.globe.enableLighting = true
+          viewer.scene.globe.showGroundAtmosphere = true
           // Reset lighting to normal
-          viewer.scene.globe.dynamicAtmosphereLighting = true;
-          viewer.scene.globe.dynamicAtmosphereLightingFromSun = true;
+          viewer.scene.globe.dynamicAtmosphereLighting = true
+          viewer.scene.globe.dynamicAtmosphereLightingFromSun = true
           if (viewer.scene.skyAtmosphere) {
-            viewer.scene.skyAtmosphere.show = true;
+            viewer.scene.skyAtmosphere.show = true
           }
         } else {
           // Toggle OFF: Return to default Cesium state (uniform bright lighting)
-          viewer.scene.globe.enableLighting = false; // This gives uniform brightness
-          viewer.scene.globe.showGroundAtmosphere = true; // Keep atmosphere for visual appeal
+          viewer.scene.globe.enableLighting = false // This gives uniform brightness
+          viewer.scene.globe.showGroundAtmosphere = true // Keep atmosphere for visual appeal
           // Reset dynamic atmosphere to defaults
-          viewer.scene.globe.dynamicAtmosphereLighting = true;
-          viewer.scene.globe.dynamicAtmosphereLightingFromSun = true;
+          viewer.scene.globe.dynamicAtmosphereLighting = true
+          viewer.scene.globe.dynamicAtmosphereLightingFromSun = true
           if (viewer.scene.skyAtmosphere) {
-            viewer.scene.skyAtmosphere.show = true;
+            viewer.scene.skyAtmosphere.show = true
           }
           // Ensure HDR doesn't interfere with brightness
-          viewer.scene.highDynamicRange = false;
+          viewer.scene.highDynamicRange = false
         }
 
         // Force render to update lighting immediately
-        viewer.scene.requestRender();
+        viewer.scene.requestRender()
 
-        console.log(
-          `Day/night lighting ${isVisible ? "enabled" : "disabled"}`,
-          {
-            previousLighting: currentLighting,
-            newLighting: isVisible,
-            previousAtmosphere: currentAtmosphere,
-            newAtmosphere: isVisible,
-          },
-        );
+        console.log(`Day/night lighting ${isVisible ? 'enabled' : 'disabled'}`, {
+          previousLighting: currentLighting,
+          newLighting: isVisible,
+          previousAtmosphere: currentAtmosphere,
+          newAtmosphere: isVisible,
+        })
       }
 
       // Keep sun always visible - don't control sun visibility with lighting toggle
       if (viewer.scene.sun) {
-        viewer.scene.sun.show = true; // Always keep sun visible
+        viewer.scene.sun.show = true // Always keep sun visible
       }
     }
 
     // Handle ground stations specially - they need to be loaded from config
-    if (entityType === "ground_station") {
-      const entities = viewer.entities.values;
+    if (entityType === 'ground_station') {
+      const entities = viewer.entities.values
       const groundStations = entities.filter(
-        (e: Entity) => e.id && e.id.toString().includes("ground_station"),
-      );
+        (e: Entity) => e.id && e.id.toString().includes('ground_station'),
+      )
 
       if (isVisible) {
         // If toggling on and no ground stations exist, load them
         if (groundStations.length === 0) {
-          await loadGroundStations();
+          await loadGroundStations()
         } else {
           // If they exist, just show them
           groundStations.forEach((entity: Entity) => {
-            entity.show = true;
-          });
+            entity.show = true
+          })
         }
       } else {
         // Hide existing ground stations
         groundStations.forEach((entity: Entity) => {
-          entity.show = false;
-        });
+          entity.show = false
+        })
       }
     }
-  };
+  }
 
   const loadGroundStations = useCallback(
     async (forceVisible: boolean = true) => {
-      if (!cesiumViewer || !cesiumViewer.cesiumElement) return;
+      if (!cesiumViewer || !cesiumViewer.cesiumElement) return
 
       try {
-        const data = await configApi.getGroundStations();
+        const data = await configApi.getGroundStations()
 
         if (data.success && data.ground_stations) {
-          const viewer = cesiumViewer.cesiumElement;
+          const viewer = cesiumViewer.cesiumElement
 
-          console.log(
-            `Loading ${data.ground_stations.length} ground stations...`,
-          );
+          console.log(`Loading ${data.ground_stations.length} ground stations...`)
 
           // First, remove any existing ground stations to avoid duplicates
           const existingStations = viewer.entities.values.filter(
-            (e: Entity) => e.id && e.id.toString().includes("ground_station"),
-          );
+            (e: Entity) => e.id && e.id.toString().includes('ground_station'),
+          )
           existingStations.forEach((entity: Entity) => {
-            viewer.entities.remove(entity);
-          });
+            viewer.entities.remove(entity)
+          })
 
           // Create all ground station entities
           data.ground_stations.forEach((station: GroundStation) => {
             // Determine color based on station type
-            const stationColor =
-              station.type === "Primary" ? Color.GOLD : Color.ORANGE;
+            const stationColor = station.type === 'Primary' ? Color.GOLD : Color.ORANGE
 
             viewer.entities.add({
-              id: `ground_station_${
-                station.id || station.name.toLowerCase().replace(/\s+/g, "_")
-              }`,
+              id: `ground_station_${station.id || station.name.toLowerCase().replace(/\s+/g, '_')}`,
               name: station.name,
               show: forceVisible, // Use the forceVisible parameter
-              position: Cartesian3.fromDegrees(
-                station.longitude,
-                station.latitude,
-                0,
-              ),
+              position: Cartesian3.fromDegrees(station.longitude, station.latitude, 0),
               billboard: {
                 image:
-                  "data:image/svg+xml;base64," +
+                  'data:image/svg+xml;base64,' +
                   btoa(`
                 <svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
                   <!-- Ground Station Dish Icon -->
                   <circle cx="16" cy="26" r="5" fill="${
-                    station.type === "Primary" ? "#FFD700" : "#FFA500"
+                    station.type === 'Primary' ? '#FFD700' : '#FFA500'
                   }" stroke="#000" stroke-width="1.5"/>
                   <rect x="15" y="21" width="2" height="10" fill="#000"/>
                   <path d="M 16 21 Q 8 16 8 8 Q 16 13 24 8 Q 24 16 16 21" fill="${
-                    station.type === "Primary" ? "#FFD700" : "#FFA500"
+                    station.type === 'Primary' ? '#FFD700' : '#FFA500'
                   }" stroke="#000" stroke-width="1.5"/>
                   <circle cx="16" cy="14" r="2" fill="#FFF"/>
                 </svg>
@@ -805,7 +795,7 @@ export function MissionProvider({
               },
               label: {
                 text: station.name,
-                font: "14px sans-serif",
+                font: '14px sans-serif',
                 fillColor: Color.WHITE,
                 outlineColor: Color.BLACK,
                 outlineWidth: 3,
@@ -817,64 +807,60 @@ export function MissionProvider({
               },
               description: `
               <div style="background: rgba(17, 24, 39, 0.9); padding: 10px; border-radius: 5px;">
-                <h3 style="color: #FFD700; margin: 0 0 10px 0;">${
-                  station.name
-                }</h3>
+                <h3 style="color: #FFD700; margin: 0 0 10px 0;">${station.name}</h3>
                 <p style="color: #FFF; margin: 5px 0;"><strong>Type:</strong> ${
-                  station.type || "Ground Station"
+                  station.type || 'Ground Station'
                 }</p>
                 <p style="color: #FFF; margin: 5px 0;"><strong>Location:</strong> ${station.latitude.toFixed(
                   4,
                 )}°, ${station.longitude.toFixed(4)}°</p>
                 <p style="color: #FFF; margin: 5px 0;"><strong>Description:</strong> ${
-                  station.description || "Communication ground station"
+                  station.description || 'Communication ground station'
                 }</p>
               </div>
             `,
-            });
-          });
+            })
+          })
 
-          console.log(
-            `${data.ground_stations.length} ground stations loaded successfully`,
-          );
+          console.log(`${data.ground_stations.length} ground stations loaded successfully`)
 
           // Force render and visibility update using multiple strategies
-          viewer.scene.requestRender();
+          viewer.scene.requestRender()
 
           // Strategy 1: Immediate visibility update
           const groundStations = viewer.entities.values.filter(
-            (e: Entity) => e.id && e.id.toString().includes("ground_station"),
-          );
+            (e: Entity) => e.id && e.id.toString().includes('ground_station'),
+          )
           groundStations.forEach((entity: Entity) => {
-            entity.show = forceVisible;
-          });
+            entity.show = forceVisible
+          })
 
           // Strategy 2: Force update via entity collection change
-          viewer.entities.suspendEvents();
-          viewer.entities.resumeEvents();
+          viewer.entities.suspendEvents()
+          viewer.entities.resumeEvents()
 
           // Strategy 3: Multiple render requests with delays
-          viewer.scene.requestRender();
+          viewer.scene.requestRender()
           requestAnimationFrame(() => {
-            viewer.scene.requestRender();
+            viewer.scene.requestRender()
             setTimeout(() => {
               groundStations.forEach((entity: Entity) => {
-                entity.show = forceVisible;
-              });
-              viewer.scene.requestRender();
-            }, 100);
-          });
+                entity.show = forceVisible
+              })
+              viewer.scene.requestRender()
+            }, 100)
+          })
         }
       } catch (error) {
-        console.error("Failed to load ground stations:", {
+        console.error('Failed to load ground stations:', {
           message: error instanceof Error ? error.message : String(error),
           stack: error instanceof Error ? error.stack : undefined,
           name: error instanceof Error ? error.name : typeof error,
-        });
+        })
       }
     },
     [cesiumViewer],
-  );
+  )
 
   // Workspaces are now auto-loaded from localStorage via workspaceStore's persist middleware
 
@@ -899,18 +885,16 @@ export function MissionProvider({
     deleteWorkspace,
     flyToObject,
     toggleEntityVisibility,
-  };
+  }
 
-  return (
-    <MissionContext.Provider value={value}>{children}</MissionContext.Provider>
-  );
+  return <MissionContext.Provider value={value}>{children}</MissionContext.Provider>
 }
 
 // Hook to use the context
 export function useMission(): MissionContextType {
-  const context = useContext(MissionContext);
+  const context = useContext(MissionContext)
   if (context === undefined) {
-    throw new Error("useMission must be used within a MissionProvider");
+    throw new Error('useMission must be used within a MissionProvider')
   }
-  return context;
+  return context
 }

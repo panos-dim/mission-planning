@@ -31,6 +31,7 @@ import {
   bulkDeleteAcquisitions,
 } from '../api/scheduleApi'
 import { useSelectionStore } from '../store/selectionStore'
+import { queryClient, queryKeys } from '../lib/queryClient'
 import { formatDateTimeShort } from '../utils/date'
 
 interface ScheduledAcquisitionsListProps {
@@ -202,6 +203,7 @@ export default function ScheduledAcquisitionsList({
       setError(null)
       try {
         await apiDeleteAcquisition(acquisitionId, isLocked)
+        queryClient.invalidateQueries({ queryKey: queryKeys.schedule.all })
         onRefresh?.()
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to delete acquisition')
@@ -235,6 +237,7 @@ export default function ScheduledAcquisitionsList({
           }
         }
         clearSelection()
+        queryClient.invalidateQueries({ queryKey: queryKeys.schedule.all })
         onRefresh?.()
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to delete acquisitions')

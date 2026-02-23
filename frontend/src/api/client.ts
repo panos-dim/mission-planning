@@ -215,6 +215,23 @@ export const apiClient = {
   },
 
   /**
+   * PATCH request
+   */
+  async patch<T, D = unknown>(endpoint: string, data: D, options?: RequestOptions): Promise<T> {
+    const url = `${API_BASE_URL}${endpoint}`
+    debug.apiRequest(`PATCH ${endpoint}`, data)
+
+    const response = await fetchWithRetry<T>(url, {
+      ...options,
+      method: 'PATCH',
+      body: data,
+    })
+
+    debug.apiResponse(`PATCH ${endpoint}`, response.data)
+    return response.data
+  },
+
+  /**
    * DELETE request
    */
   async delete<T>(endpoint: string, options?: RequestOptions): Promise<T> {

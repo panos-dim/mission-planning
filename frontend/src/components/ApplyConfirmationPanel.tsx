@@ -193,13 +193,13 @@ export default function ApplyConfirmationPanel({
               </span>
             )}
             {rd.dropped.length > 0 && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-900/25 text-[11px] text-amber-300 border border-amber-700/30">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-900/25 text-[11px] text-red-300 border border-red-700/30">
                 <Minus className="w-3 h-3" />
                 {rd.dropped.length} dropped
               </span>
             )}
             {rd.moved.length > 0 && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-900/25 text-[11px] text-purple-300 border border-purple-700/30">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-900/25 text-[11px] text-orange-300 border border-orange-700/30">
                 <Clock className="w-3 h-3" />
                 {rd.moved.length} moved
               </span>
@@ -220,7 +220,7 @@ export default function ApplyConfirmationPanel({
             <h4 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
               Target Assignments
             </h4>
-            <div className="space-y-1 max-h-48 overflow-y-auto">
+            <div className="space-y-1 max-h-[400px] overflow-y-auto">
               {ps.target_acquisitions.map((acq, idx) => (
                 <div
                   key={idx}
@@ -248,6 +248,28 @@ export default function ApplyConfirmationPanel({
                   ) : (
                     <span className="text-[9px] text-gray-600 shrink-0">kept</span>
                   )}
+                </div>
+              ))}
+              {/* Dropped acquisitions */}
+              {rd?.change_log?.dropped?.map((entry, idx) => (
+                <div
+                  key={`dropped-${idx}`}
+                  className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs bg-red-900/10 border border-red-800/20 opacity-75"
+                >
+                  <Minus className="w-3 h-3 shrink-0 text-red-400" />
+                  <span className="text-red-300/80 font-medium truncate flex-1 line-through">
+                    {entry.target_id}
+                  </span>
+                  <span className="text-gray-500 text-[10px] shrink-0">
+                    <Satellite className="w-3 h-3 inline mr-0.5 -mt-px" />
+                    {entry.satellite_id}
+                  </span>
+                  <span className="text-gray-600 text-[10px] shrink-0">
+                    {fmtShort(entry.start)}
+                  </span>
+                  <span className="text-[9px] font-semibold text-red-400 bg-red-900/40 px-1.5 py-0.5 rounded shrink-0">
+                    DROPPED
+                  </span>
                 </div>
               ))}
             </div>

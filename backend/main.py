@@ -12,6 +12,7 @@ Provides REST API endpoints for:
 import hashlib
 import json
 import logging
+import math
 import os
 import sys
 import tempfile
@@ -1088,8 +1089,6 @@ async def analyze_lighting(request: LightingAnalysisRequest) -> PassLightingResp
         )
 
         # Calculate local solar time
-        import math
-
         utc_hour = timestamp.hour + timestamp.minute / 60 + timestamp.second / 3600
         lst_hour = (utc_hour + request.longitude / 15) % 24
         lst_minutes = int((lst_hour % 1) * 60)
@@ -2032,6 +2031,8 @@ def _compute_incidence_angle_at_time(
     target_lat: float,
     target_lon: float,
     timestamp: datetime,
+    vel_lat_norm: Optional[float] = None,
+    vel_lon_norm: Optional[float] = None,
 ) -> float:
     """
     Compute the SIGNED incidence (roll) angle from satellite to target at a specific time.
@@ -2044,30 +2045,34 @@ def _compute_incidence_angle_at_time(
         target_lat: Target latitude in degrees
         target_lon: Target longitude in degrees
         timestamp: Specific time to compute the angle
+        vel_lat_norm: Pre-computed normalized velocity lat (optional, saves 1 propagation call)
+        vel_lon_norm: Pre-computed normalized velocity lon (optional)
 
     Returns:
         Signed incidence angle in degrees (positive = right of track, negative = left)
     """
-    import math
-
     # Get satellite position at this specific time
     sat_lat, sat_lon, sat_alt = satellite.get_position(timestamp)
 
-    # Get velocity direction (for determining left/right of track)
-    sat_lat_future, sat_lon_future, _ = satellite.get_position(
-        timestamp + timedelta(seconds=1)
-    )
-    vel_lat = sat_lat_future - sat_lat
-    vel_lon = sat_lon_future - sat_lon
-
-    # Normalize velocity
-    vel_mag = math.sqrt(vel_lat**2 + vel_lon**2)
-    if vel_mag > 0:
-        vel_lat_norm = vel_lat / vel_mag
-        vel_lon_norm = vel_lon / vel_mag
+    # Use pre-computed velocity direction if provided (avoids extra propagation call)
+    _vlat_n: float = 1.0
+    _vlon_n: float = 0.0
+    if vel_lat_norm is not None and vel_lon_norm is not None:
+        _vlat_n = vel_lat_norm
+        _vlon_n = vel_lon_norm
     else:
-        vel_lat_norm = 1.0
-        vel_lon_norm = 0.0
+        sat_lat_future, sat_lon_future, _ = satellite.get_position(
+            timestamp + timedelta(seconds=1)
+        )
+        vel_lat = sat_lat_future - sat_lat
+        vel_lon = sat_lon_future - sat_lon
+        vel_mag = math.sqrt(vel_lat**2 + vel_lon**2)
+        if vel_mag > 0:
+            _vlat_n = vel_lat / vel_mag
+            _vlon_n = vel_lon / vel_mag
+        else:
+            _vlat_n = 1.0
+            _vlon_n = 0.0
 
     # Calculate look angle magnitude (off-nadir angle)
     # Using spherical geometry
@@ -2101,7 +2106,7 @@ def _compute_incidence_angle_at_time(
     # Determine sign using cross-track calculation
     target_vec_lat = target_lat - sat_lat
     target_vec_lon = target_lon - sat_lon
-    cross_track = target_vec_lon * vel_lat_norm - target_vec_lat * vel_lon_norm
+    cross_track = target_vec_lon * _vlat_n - target_vec_lat * _vlon_n
 
     # Apply sign based on which side of ground track
     # Positive cross_track = target to left when looking along velocity
@@ -2121,6 +2126,9 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
     Applies satellite agility constraints and returns schedules + metrics
     for selected algorithms.
     """
+    import time as _time
+
+    t0 = _time.perf_counter()
     try:
         _cmd = getattr(app.state, "current_mission_data", {})
 
@@ -2250,9 +2258,9 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
                         "quality_score": sar_obj.quality_score,
                     }
 
-            # DEBUG: Log each pass being processed
-            logger.info(
-                f"🔄 Pass {idx+1}: {target_name} mode={mode} inc={incidence_angle_deg} t={max_elevation_time}"
+            # Log each pass being processed (debug-level to avoid I/O overhead)
+            logger.debug(
+                f"Pass {idx+1}: {target_name} mode={mode} inc={incidence_angle_deg} t={max_elevation_time}"
             )
 
             # For IMAGING missions: Create multiple opportunities across ENTIRE pass duration
@@ -2261,12 +2269,13 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
                 # Calculate pass duration
                 pass_duration_s = (end_time - start_time).total_seconds()
 
-                # MAXIMUM GRANULARITY: 1-second sampling for truly continuous coverage
-                SAMPLE_INTERVAL_S = 1.0
+                # 5-second sampling for good pitch coverage without overwhelming the scheduler
+                # (1s was causing ~4000+ opportunities with O(n²) scheduling, leading to timeouts)
+                SAMPLE_INTERVAL_S = 5.0
                 num_samples = max(3, int(pass_duration_s / SAMPLE_INTERVAL_S))
 
-                # Allow up to 180 opportunities per pass (3 minutes / 1s = 180)
-                num_samples = max(3, min(180, num_samples))
+                # Cap at 36 opportunities per pass (3 minutes / 5s = 36)
+                num_samples = max(3, min(36, num_samples))
 
                 imaging_times = []
 
@@ -2301,8 +2310,6 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
                         )
 
                         # Pitch angle from geometry
-                        import math
-
                         pitch_rad = math.atan2(along_track_distance_km, sat_altitude_km)
                         pitch_deg = math.degrees(pitch_rad)
 
@@ -2324,14 +2331,14 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
 
                     imaging_times.append((time_type, imaging_time, pitch_angle))
 
-                logger.info(
+                logger.debug(
                     f"IMAGING mode for {target_name}: created {len(imaging_times)} opportunities "
-                    f"across {pass_duration_s:.0f}s pass (1-sec sampling)"
+                    f"across {pass_duration_s:.0f}s pass"
                 )
             else:
                 # Non-imaging: single opportunity for the entire window
                 imaging_times = [("full", start_time, 0.0)]
-                logger.info(
+                logger.debug(
                     f"NON-IMAGING mode for {target_name}: mode={mode}, using full window"
                 )
 
@@ -2341,6 +2348,26 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
             # Get satellite object for this specific satellite (for dynamic angle computation)
             sat_key = f"sat_{sat_name}"
             sat_obj_for_angle = satellites_dict.get(sat_key)
+
+            # PERF: Precompute velocity direction once per pass (at max_elevation_time).
+            # Velocity barely changes within a single pass, so reuse for all opportunities.
+            pass_vel_lat_norm, pass_vel_lon_norm = None, None
+            if sat_obj_for_angle:
+                try:
+                    _p0_lat, _p0_lon, _ = sat_obj_for_angle.get_position(
+                        max_elevation_time
+                    )
+                    _p1_lat, _p1_lon, _ = sat_obj_for_angle.get_position(
+                        max_elevation_time + timedelta(seconds=1)
+                    )
+                    _vlat = _p1_lat - _p0_lat
+                    _vlon = _p1_lon - _p0_lon
+                    _vmag = math.sqrt(_vlat**2 + _vlon**2)
+                    if _vmag > 0:
+                        pass_vel_lat_norm = _vlat / _vmag
+                        pass_vel_lon_norm = _vlon / _vmag
+                except Exception:
+                    pass  # fallback: computed per-opportunity inside the function
 
             # Create one opportunity for each imaging time (early/max/late)
             for time_type, imaging_time, pitch_angle in imaging_times:
@@ -2356,10 +2383,8 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
                             target_coords[0],  # latitude
                             target_coords[1],  # longitude
                             imaging_time,
-                        )
-                        logger.debug(
-                            f"Computed incidence angle at {imaging_time}: {actual_incidence_angle:.2f}° "
-                            f"(was {incidence_angle_deg}° from pass start)"
+                            vel_lat_norm=pass_vel_lat_norm,
+                            vel_lon_norm=pass_vel_lon_norm,
                         )
                     except Exception as e:
                         logger.warning(
@@ -2452,18 +2477,11 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
                         sar_data_dict.get("quality_score") if sar_data_dict else None
                     ),
                 )
-                # Log with SAR info if present
-                sar_info = (
-                    f", look={sar_data_dict.get('look_side')}" if sar_data_dict else ""
-                )
-                logger.info(
-                    f"Created opportunity: {target_name} at {imaging_time} "
-                    f"(type={time_type}, roll={actual_incidence_angle:+.1f}°, pitch={pitch_angle:+.1f}°{sar_info})"
-                )
                 opportunities.append(opp)
 
+        t1 = _time.perf_counter()
         logger.info(
-            f"Planning with {len(opportunities)} opportunities from mission analysis"
+            f"⏱ Opportunity generation: {t1 - t0:.2f}s — {len(opportunities)} opportunities from {len(passes)} passes"
         )
 
         # Cache opportunities for /api/v1/schedule/plan and /repair endpoints
@@ -2669,8 +2687,13 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
 
         try:
             # Run scheduling with appropriate opportunity set
+            t2 = _time.perf_counter()
             schedule, metrics = scheduler.schedule(
                 algo_opportunities, target_positions, algo
+            )
+            t3 = _time.perf_counter()
+            logger.info(
+                f"⏱ Scheduling algorithm: {t3 - t2:.2f}s — {len(schedule)} accepted from {len(algo_opportunities)} opportunities"
             )
 
             # Compute target-level statistics
@@ -2684,8 +2707,6 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
 
             # Calculate angle statistics for API response
             # For roll+pitch, off-nadir is the vector magnitude: sqrt(roll² + pitch²)
-            import math
-
             off_nadir_angles = []
             for s in schedule:
                 roll = abs(s.roll_angle) if s.roll_angle is not None else 0.0
@@ -2919,6 +2940,9 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
         logger.info(
             f"[AUDIT] run_id={run_id}, input_hash={plan_input_hash}, opps={len(opportunities_considered)}"
         )
+
+        t_end = _time.perf_counter()
+        logger.info(f"⏱ Total scheduling endpoint: {t_end - t0:.2f}s")
 
         return PlanningResponse(
             success=True,

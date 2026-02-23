@@ -1301,6 +1301,7 @@ def execute_repair_planning(
     max_changes: int = 100,
     objective: RepairObjective = RepairObjective.MAXIMIZE_SCORE,
     slew_config: Optional[SlewConfig] = None,
+    target_priorities: Optional[Dict[str, int]] = None,
 ) -> Tuple[List[Dict[str, Any]], RepairDiff, Dict[str, Any]]:
     """
     Execute repair planning: decide what to keep/drop/add/move.
@@ -1315,6 +1316,7 @@ def execute_repair_planning(
         max_changes: Maximum number of changes allowed
         objective: Optimization objective
         slew_config: Slew configuration for feasibility checks
+        target_priorities: Optional map of target_name → priority (1=highest, 5=lowest)
 
     Returns:
         Tuple of (proposed_schedule, repair_diff, metrics)
@@ -1574,6 +1576,397 @@ def execute_repair_planning(
         except (ValueError, KeyError):
             continue
 
+    # Stage E: Coverage improvement — cross-target swaps for uncovered targets.
+    # When a target has opportunities but can't fit around kept acquisitions,
+    # try dropping a kept flex item on the same satellite IF the dropped target
+    # can be re-covered on a different satellite.  Net result: +1 coverage.
+    all_request_targets = set(
+        opp.get("target_id", "") for opp in opportunities if opp.get("target_id")
+    )
+    uncovered_targets = all_request_targets - targets_covered
+
+    if uncovered_targets and changes_made < max_changes:
+        logger.info(
+            f"[RepairPlanning] Stage E: {len(uncovered_targets)} uncovered target(s), "
+            f"attempting cross-target coverage swaps"
+        )
+
+        for uncovered_target in sorted(uncovered_targets):
+            if changes_made >= max_changes:
+                break
+
+            # All opportunities for this uncovered target, best first
+            target_opps = sorted(
+                [o for o in opportunities if o.get("target_id") == uncovered_target],
+                key=lambda o: o.get("value", 1.0),
+                reverse=True,
+            )
+
+            swap_done = False
+            for opp in target_opps:
+                if swap_done or changes_made >= max_changes:
+                    break
+
+                opp_id = opp.get("id", opp.get("opportunity_id", ""))
+                if opp_id in already_added:
+                    continue
+
+                try:
+                    opp_start = datetime.fromisoformat(
+                        opp.get("start_time", "").replace("Z", "+00:00")
+                    ).replace(tzinfo=None)
+                    opp_end = datetime.fromisoformat(
+                        opp.get("end_time", "").replace("Z", "+00:00")
+                    ).replace(tzinfo=None)
+                    opp_sat = opp.get("satellite_id", "")
+                except (ValueError, KeyError):
+                    continue
+
+                # Flex items on the same satellite, lowest value first
+                same_sat_flex = sorted(
+                    [
+                        f
+                        for f in flex_to_keep
+                        if f.action == "keep" and f.satellite_id == opp_sat
+                    ],
+                    key=lambda f: f.value,
+                )
+
+                for flex_candidate in same_sat_flex:
+                    if changes_made >= max_changes:
+                        break
+
+                    # Build test context without this flex item
+                    test_blocked = IncrementalPlanningContext(
+                        mode=PlanningMode.INCREMENTAL,
+                        blocked_intervals={},
+                    )
+                    for sat_id, intervals in all_blocked.blocked_intervals.items():
+                        test_blocked.blocked_intervals[sat_id] = [
+                            i
+                            for i in intervals
+                            if i.acquisition_id != flex_candidate.acquisition_id
+                        ]
+
+                    # Check if uncovered target's opportunity fits without the flex item
+                    is_feasible, _ = check_adjacency_feasibility(
+                        context=test_blocked,
+                        satellite_id=opp_sat,
+                        candidate_start=opp_start,
+                        candidate_end=opp_end,
+                        candidate_roll_deg=opp.get("roll_angle_deg", 0.0),
+                        candidate_pitch_deg=opp.get("pitch_angle_deg", 0.0),
+                        slew_config=slew_config,
+                    )
+                    if not is_feasible:
+                        continue
+
+                    # Add new opp to test context before checking alt coverage
+                    new_bi = BlockedInterval(
+                        acquisition_id=opp_id,
+                        satellite_id=opp_sat,
+                        target_id=uncovered_target,
+                        start_time=opp_start,
+                        end_time=opp_end,
+                        roll_angle_deg=opp.get("roll_angle_deg", 0.0),
+                        pitch_angle_deg=opp.get("pitch_angle_deg", 0.0),
+                    )
+                    if opp_sat not in test_blocked.blocked_intervals:
+                        test_blocked.blocked_intervals[opp_sat] = []
+                    test_blocked.blocked_intervals[opp_sat].append(new_bi)
+                    test_blocked.blocked_intervals[opp_sat].sort(
+                        key=lambda x: x.start_time
+                    )
+
+                    # Can the dropped target be re-covered on a DIFFERENT satellite?
+                    dropped_target = flex_candidate.target_id
+                    alt_opps = sorted(
+                        [
+                            o
+                            for o in opportunities
+                            if o.get("target_id") == dropped_target
+                            and o.get("satellite_id") != opp_sat
+                            and o.get("id", o.get("opportunity_id", ""))
+                            not in already_added
+                        ],
+                        key=lambda o: o.get("value", 1.0),
+                        reverse=True,
+                    )
+
+                    alt_opp_match = None
+                    for ao in alt_opps:
+                        try:
+                            ao_start = datetime.fromisoformat(
+                                ao.get("start_time", "").replace("Z", "+00:00")
+                            ).replace(tzinfo=None)
+                            ao_end = datetime.fromisoformat(
+                                ao.get("end_time", "").replace("Z", "+00:00")
+                            ).replace(tzinfo=None)
+                            ao_sat = ao.get("satellite_id", "")
+
+                            ao_feasible, _ = check_adjacency_feasibility(
+                                context=test_blocked,
+                                satellite_id=ao_sat,
+                                candidate_start=ao_start,
+                                candidate_end=ao_end,
+                                candidate_roll_deg=ao.get("roll_angle_deg", 0.0),
+                                candidate_pitch_deg=ao.get("pitch_angle_deg", 0.0),
+                                slew_config=slew_config,
+                            )
+                            if ao_feasible:
+                                alt_opp_match = ao
+                                break
+                        except (ValueError, KeyError):
+                            continue
+
+                    if alt_opp_match is None:
+                        logger.debug(
+                            f"[RepairPlanning] Stage E: Cannot swap {dropped_target} "
+                            f"for {uncovered_target} on {opp_sat} — no re-coverage "
+                            f"available for {dropped_target}"
+                        )
+                        continue
+
+                    # ── Execute the coverage swap ──
+                    # 1. Drop the flex item
+                    flex_candidate.action = "drop"
+                    if flex_candidate.acquisition_id in kept_ids:
+                        kept_ids.remove(flex_candidate.acquisition_id)
+                    dropped_ids.append(flex_candidate.acquisition_id)
+                    drop_reasons.append(
+                        {
+                            "id": flex_candidate.acquisition_id,
+                            "reason": (
+                                f"Swapped to improve coverage: "
+                                f"re-covered {dropped_target} on another satellite "
+                                f"to add uncovered target {uncovered_target}"
+                            ),
+                        }
+                    )
+                    changes_made += 1
+
+                    # 2. Add uncovered target's opportunity
+                    added_ids.append(opp_id)
+                    already_added.add(opp_id)
+                    targets_covered.add(uncovered_target)
+                    changes_made += 1
+
+                    # 3. Add alternative coverage for the dropped target
+                    alt_opp_id = alt_opp_match.get(
+                        "id", alt_opp_match.get("opportunity_id", "")
+                    )
+                    added_ids.append(alt_opp_id)
+                    already_added.add(alt_opp_id)
+                    # dropped_target stays in targets_covered
+                    changes_made += 1
+
+                    # Update blocked intervals to reflect the swap
+                    all_blocked.blocked_intervals = {
+                        sid: list(ivs)
+                        for sid, ivs in test_blocked.blocked_intervals.items()
+                    }
+                    # Add alt opportunity to blocked
+                    ao_sat = alt_opp_match.get("satellite_id", "")
+                    ao_start = datetime.fromisoformat(
+                        alt_opp_match.get("start_time", "").replace("Z", "+00:00")
+                    ).replace(tzinfo=None)
+                    ao_end = datetime.fromisoformat(
+                        alt_opp_match.get("end_time", "").replace("Z", "+00:00")
+                    ).replace(tzinfo=None)
+                    alt_bi = BlockedInterval(
+                        acquisition_id=alt_opp_id,
+                        satellite_id=ao_sat,
+                        target_id=dropped_target,
+                        start_time=ao_start,
+                        end_time=ao_end,
+                        roll_angle_deg=alt_opp_match.get("roll_angle_deg", 0.0),
+                        pitch_angle_deg=alt_opp_match.get("pitch_angle_deg", 0.0),
+                    )
+                    if ao_sat not in all_blocked.blocked_intervals:
+                        all_blocked.blocked_intervals[ao_sat] = []
+                    all_blocked.blocked_intervals[ao_sat].append(alt_bi)
+                    all_blocked.blocked_intervals[ao_sat].sort(
+                        key=lambda x: x.start_time
+                    )
+
+                    logger.info(
+                        f"[RepairPlanning] Stage E coverage swap: "
+                        f"dropped {dropped_target} on {opp_sat}, "
+                        f"added {uncovered_target} on {opp_sat}, "
+                        f"re-covered {dropped_target} on {ao_sat}"
+                    )
+                    swap_done = True
+                    break
+
+        remaining_uncovered = all_request_targets - targets_covered
+        if remaining_uncovered:
+            logger.info(
+                f"[RepairPlanning] Stage E complete. Still uncovered: "
+                f"{sorted(remaining_uncovered)}"
+            )
+        else:
+            logger.info("[RepairPlanning] Stage E: All targets now covered")
+
+    # Stage F: Priority-driven eviction — when an uncovered target has HIGHER
+    # priority than a covered flex item, drop the lower-priority item to make
+    # room, even if the dropped target cannot be re-covered elsewhere.
+    # This trades coverage count for schedule value (high-priority coverage).
+    remaining_uncovered = all_request_targets - targets_covered
+    if remaining_uncovered and target_priorities and changes_made < max_changes:
+        logger.info(
+            f"[RepairPlanning] Stage F: {len(remaining_uncovered)} uncovered target(s), "
+            f"attempting priority-driven eviction"
+        )
+
+        # Sort uncovered targets by priority (highest first = lowest number)
+        uncovered_by_priority = sorted(
+            remaining_uncovered,
+            key=lambda t: target_priorities.get(t, 5),
+        )
+
+        for uncovered_target in uncovered_by_priority:
+            if changes_made >= max_changes:
+                break
+
+            uncovered_priority = target_priorities.get(uncovered_target, 5)
+
+            # Best opportunities for this uncovered target
+            target_opps = sorted(
+                [o for o in opportunities if o.get("target_id") == uncovered_target],
+                key=lambda o: o.get("value", 1.0),
+                reverse=True,
+            )
+
+            eviction_done = False
+            for opp in target_opps:
+                if eviction_done or changes_made >= max_changes:
+                    break
+
+                opp_id = opp.get("id", opp.get("opportunity_id", ""))
+                if opp_id in already_added:
+                    continue
+
+                try:
+                    opp_start = datetime.fromisoformat(
+                        opp.get("start_time", "").replace("Z", "+00:00")
+                    ).replace(tzinfo=None)
+                    opp_end = datetime.fromisoformat(
+                        opp.get("end_time", "").replace("Z", "+00:00")
+                    ).replace(tzinfo=None)
+                    opp_sat = opp.get("satellite_id", "")
+                except (ValueError, KeyError):
+                    continue
+
+                # Find flex items on the same satellite with LOWER priority (higher number)
+                same_sat_flex = sorted(
+                    [
+                        f
+                        for f in flex_to_keep
+                        if f.action == "keep" and f.satellite_id == opp_sat
+                    ],
+                    key=lambda f: -(target_priorities.get(f.target_id, 5)),
+                )
+
+                for flex_candidate in same_sat_flex:
+                    if changes_made >= max_changes:
+                        break
+
+                    candidate_priority = target_priorities.get(
+                        flex_candidate.target_id, 5
+                    )
+                    # Only evict if uncovered target has strictly higher priority
+                    if uncovered_priority >= candidate_priority:
+                        continue
+
+                    # Build test context without this flex item
+                    test_blocked = IncrementalPlanningContext(
+                        mode=PlanningMode.INCREMENTAL,
+                        blocked_intervals={},
+                    )
+                    for sat_id, intervals in all_blocked.blocked_intervals.items():
+                        test_blocked.blocked_intervals[sat_id] = [
+                            i
+                            for i in intervals
+                            if i.acquisition_id != flex_candidate.acquisition_id
+                        ]
+
+                    # Check if uncovered target's opportunity fits without the flex item
+                    is_feasible, _ = check_adjacency_feasibility(
+                        context=test_blocked,
+                        satellite_id=opp_sat,
+                        candidate_start=opp_start,
+                        candidate_end=opp_end,
+                        candidate_roll_deg=opp.get("roll_angle_deg", 0.0),
+                        candidate_pitch_deg=opp.get("pitch_angle_deg", 0.0),
+                        slew_config=slew_config,
+                    )
+                    if not is_feasible:
+                        continue
+
+                    # ── Execute priority eviction ──
+                    dropped_target = flex_candidate.target_id
+
+                    # 1. Drop the lower-priority flex item
+                    flex_candidate.action = "drop"
+                    if flex_candidate.acquisition_id in kept_ids:
+                        kept_ids.remove(flex_candidate.acquisition_id)
+                    dropped_ids.append(flex_candidate.acquisition_id)
+                    drop_reasons.append(
+                        {
+                            "id": flex_candidate.acquisition_id,
+                            "reason": (
+                                f"Priority eviction: dropped {dropped_target} (priority {candidate_priority}) "
+                                f"to schedule higher-priority {uncovered_target} (priority {uncovered_priority})"
+                            ),
+                        }
+                    )
+                    targets_covered.discard(dropped_target)
+                    changes_made += 1
+
+                    # 2. Add the higher-priority uncovered target's opportunity
+                    added_ids.append(opp_id)
+                    already_added.add(opp_id)
+                    targets_covered.add(uncovered_target)
+                    changes_made += 1
+
+                    # Update blocked intervals
+                    all_blocked.blocked_intervals = {
+                        sid: list(ivs)
+                        for sid, ivs in test_blocked.blocked_intervals.items()
+                    }
+                    new_bi = BlockedInterval(
+                        acquisition_id=opp_id,
+                        satellite_id=opp_sat,
+                        target_id=uncovered_target,
+                        start_time=opp_start,
+                        end_time=opp_end,
+                        roll_angle_deg=opp.get("roll_angle_deg", 0.0),
+                        pitch_angle_deg=opp.get("pitch_angle_deg", 0.0),
+                    )
+                    if opp_sat not in all_blocked.blocked_intervals:
+                        all_blocked.blocked_intervals[opp_sat] = []
+                    all_blocked.blocked_intervals[opp_sat].append(new_bi)
+                    all_blocked.blocked_intervals[opp_sat].sort(
+                        key=lambda x: x.start_time
+                    )
+
+                    logger.info(
+                        f"[RepairPlanning] Stage F priority eviction: "
+                        f"dropped {dropped_target} (P{candidate_priority}) on {opp_sat}, "
+                        f"added {uncovered_target} (P{uncovered_priority}) on {opp_sat}"
+                    )
+                    eviction_done = True
+                    break
+
+        final_uncovered = all_request_targets - targets_covered
+        if final_uncovered:
+            logger.info(
+                f"[RepairPlanning] Stage F complete. Still uncovered: "
+                f"{sorted(final_uncovered)}"
+            )
+        else:
+            logger.info("[RepairPlanning] Stage F: All targets now covered")
+
     # Build final proposed schedule
     proposed_schedule: List[Dict[str, Any]] = []
 
@@ -1654,6 +2047,8 @@ def execute_repair_planning(
             return RepairReasonCode.PRIORITY_UPGRADE.value
         if "quality" in reason_lower or "score" in reason_lower:
             return RepairReasonCode.QUALITY_SCORE_UPGRADE.value
+        if "coverage" in reason_lower or "uncovered" in reason_lower:
+            return RepairReasonCode.CONFLICT_RESOLUTION.value
         if "slew" in reason_lower or "feasib" in reason_lower:
             return RepairReasonCode.SLEW_CHAIN_FEASIBILITY.value
         if "horizon" in reason_lower or "boundary" in reason_lower:

@@ -34,3 +34,6 @@ export {
   type ViewContext,
   type ContextFilter,
 } from './selectionStore'
+
+// Schedule store (master timeline state)
+export { useScheduleStore, type MasterZoom } from './scheduleStore'

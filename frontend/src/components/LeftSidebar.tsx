@@ -23,8 +23,10 @@ import { useWorkspaceStore } from '../store/workspaceStore'
 import { usePreviewTargetsStore } from '../store/previewTargetsStore'
 import { useOrdersStore } from '../store/ordersStore'
 import { usePlanningStore } from '../store/planningStore'
+import { useSlewVisStore } from '../store/slewVisStore'
 import { AlgorithmResult, AcceptedOrder, WorkspaceData, SceneObject, TargetData } from '../types'
 import { commitScheduleDirect, commitRepairPlan, DirectCommitItem } from '../api/scheduleApi'
+import { queryClient, queryKeys } from '../lib/queryClient'
 import { LEFT_SIDEBAR_PANELS, SIMPLE_MODE_LEFT_PANELS, isDebugMode } from '../constants/simpleMode'
 import { LABELS } from '../constants/labels'
 
@@ -62,7 +64,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
 
   // Get UI mode - in developer mode, show all panels
   const isDeveloperMode = uiMode === 'developer' || isDebugMode()
-  const { state, dispatch } = useMission()
+  const { state, dispatch, clearMission } = useMission()
   const { setTargets: setPreviewTargets, setHidePreview } = usePreviewTargetsStore()
   const setOrdersInStore = useOrdersStore((s) => s.setOrders)
   const setPlanningResults = usePlanningStore((s) => s.setResults)
@@ -72,6 +74,36 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
   useEffect(() => {
     setOrdersInStore(orders)
   }, [orders, setOrdersInStore])
+
+  // Backfill target_positions for legacy orders that were committed before this field existed.
+  // Runs once when missionData becomes available and patches any orders missing geo.
+  useEffect(() => {
+    const targets = state.missionData?.targets
+    if (!targets || targets.length === 0 || orders.length === 0) return
+
+    const geoMap = new Map<string, { latitude: number; longitude: number }>()
+    for (const t of targets) {
+      if (t.latitude != null && t.longitude != null) {
+        geoMap.set(t.name, { latitude: t.latitude, longitude: t.longitude })
+      }
+    }
+    if (geoMap.size === 0) return
+
+    let patched = false
+    const updatedOrders = orders.map((order) => {
+      if (order.target_positions && order.target_positions.length > 0) return order
+      const coveredTargets = [...new Set(order.schedule.map((s) => s.target_id))]
+      const positions = coveredTargets
+        .filter((tid) => geoMap.has(tid))
+        .map((tid) => ({ target_id: tid, ...geoMap.get(tid)! }))
+      if (positions.length === 0) return order
+      patched = true
+      return { ...order, target_positions: positions }
+    })
+    if (patched) {
+      setOrders(updatedOrders)
+    }
+  }, [state.missionData?.targets, orders.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Determine if we have mission data (for workspace save button)
   const hasMissionData = !!state.missionData
@@ -254,15 +286,15 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
           if (repairResponse.success) {
             backendCommitSuccess = true
             planId = repairResponse.plan_id
-            // Collect all acquisition IDs: existing kept + newly created
-            // The kept ones are already in DB; new ones are returned by the commit
-            backendAcqIds = result.schedule
-              .filter((s) => s.opportunity_id.startsWith('acq_'))
-              .map((s) => s.opportunity_id)
+            // Only store NEWLY CREATED acquisition IDs — NOT kept ones from previous orders.
+            // Kept acquisitions belong to their original orders; storing them here would
+            // cause them to be deleted if THIS order is deleted later.
+            backendAcqIds = repairResponse.acquisition_ids || []
             console.log('[PromoteToOrders] Repair commit successful:', {
               planId,
               committed: repairResponse.committed,
               dropped: repairResponse.dropped,
+              newAcqIds: backendAcqIds.length,
             })
           }
         } else {
@@ -277,7 +309,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
             algorithm,
             mode: result.schedule[0]?.sar_mode ? 'SAR' : 'OPTICAL',
             lock_level: 'none',
-            workspace_id: state.activeWorkspace || undefined,
+            workspace_id: state.activeWorkspace || 'default',
           })
 
           if (commitResponse.success) {
@@ -292,7 +324,12 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
           }
         }
       } catch (error) {
-        console.warn('[PromoteToOrders] Backend commit failed:', error)
+        const apiErr = error as { status?: number; data?: { detail?: string } }
+        console.warn('[PromoteToOrders] Backend commit failed:', {
+          status: apiErr.status,
+          detail: apiErr.data?.detail,
+          error,
+        })
         // Don't create local order if backend rejected (e.g. 409 Conflict = duplicate)
         return
       }
@@ -330,6 +367,13 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
         satellites_involved: satellites,
         targets_covered: targets,
         backend_acquisition_ids: backendAcqIds,
+        target_positions: (state.missionData?.targets || [])
+          .filter((t) => targets.includes(t.name) && t.latitude != null && t.longitude != null)
+          .map((t) => ({
+            target_id: t.name,
+            latitude: t.latitude,
+            longitude: t.longitude,
+          })),
       }
 
       // Dedup safety: never append if order_id already exists in state
@@ -337,10 +381,35 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
         if (prev.some((o) => o.order_id === newOrder.order_id)) return prev
         return [...prev, newOrder]
       })
+
+      // ── Invalidate schedule cache so next planning run sees fresh DB state ──
+      queryClient.invalidateQueries({ queryKey: queryKeys.schedule.all })
+
+      // ── Clear all visualization & analysis state for a fresh start ──
+      // clearMission: clears reducer (missionData, czmlData), scene objects, AND session store
+      clearMission()
+      // Planning results
+      usePlanningStore.getState().clearResults()
+      // Slew visualization
+      useSlewVisStore.getState().setActiveSchedule(null)
+      useSlewVisStore.getState().setEnabled(false)
+      // Preview targets
+      setPreviewTargets([])
+      setHidePreview(true)
+
       setActivePanel(LEFT_SIDEBAR_PANELS.SCHEDULE)
-      console.log(`[PromoteToOrders] ✓ Schedule committed to database (plan: ${planId})`)
+      console.log(
+        `[PromoteToOrders] ✓ Schedule committed to database (plan: ${planId}). State cleared for fresh start.`,
+      )
     },
-    [orders.length, state.activeWorkspace],
+    [
+      orders.length,
+      state.activeWorkspace,
+      state.missionData?.targets,
+      clearMission,
+      setPreviewTargets,
+      setHidePreview,
+    ],
   )
 
   // Filter panels based on Simple Mode configuration

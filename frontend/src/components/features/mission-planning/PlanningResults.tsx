@@ -93,7 +93,7 @@ export const PlanningResults: React.FC<PlanningResultsProps> = ({
                   <td className="py-1 font-medium">Avg Off-Nadir (°)</td>
                   {availableAlgorithms.map((alg) => (
                     <td key={alg} className="text-right py-1 px-2">
-                      {results[alg]?.metrics?.mean_incidence_deg?.toFixed(2) ?? 'N/A'}
+                      {results[alg]?.metrics?.mean_incidence_deg?.toFixed(1) ?? 'N/A'}
                     </td>
                   ))}
                 </tr>

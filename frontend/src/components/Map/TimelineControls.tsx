@@ -25,33 +25,24 @@ interface TimelineControlsProps {
 /** Speed presets (multiplier values) */
 const SPEED_PRESETS = [0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600]
 
-/** Format JulianDate to readable UTC string */
+/** Format JulianDate to readable UTC string — DD-MM-YYYY HH:mm */
 function formatTime(jd: JulianDate | null, style: 'full' | 'short' | 'date-time' = 'full'): string {
   if (!jd) return '--:--:--'
   try {
     const d = JulianDate.toDate(jd)
+    const day = String(d.getUTCDate()).padStart(2, '0')
+    const month = String(d.getUTCMonth() + 1).padStart(2, '0')
+    const year = d.getUTCFullYear()
+    const hours = String(d.getUTCHours()).padStart(2, '0')
+    const mins = String(d.getUTCMinutes()).padStart(2, '0')
+    const secs = String(d.getUTCSeconds()).padStart(2, '0')
     if (style === 'short') {
-      return d.toISOString().slice(11, 19) + 'Z'
+      return `${hours}:${mins}:${secs} UTC`
     }
     if (style === 'date-time') {
-      // Compact: "Feb 12 12:50Z"
-      const months = [
-        'Jan',
-        'Feb',
-        'Mar',
-        'Apr',
-        'May',
-        'Jun',
-        'Jul',
-        'Aug',
-        'Sep',
-        'Oct',
-        'Nov',
-        'Dec',
-      ]
-      return `${months[d.getUTCMonth()]} ${d.getUTCDate()} ${d.toISOString().slice(11, 16)}Z`
+      return `${day}-${month}-${year} ${hours}:${mins}`
     }
-    return d.toISOString().slice(0, 10) + ' ' + d.toISOString().slice(11, 19) + ' UTC'
+    return `${day}-${month}-${year} ${hours}:${mins}:${secs} UTC`
   } catch {
     return '--:--:--'
   }

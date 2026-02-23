@@ -11,6 +11,7 @@ Endpoints:
 - GET /api/v1/schedule/conflicts - Get scheduling conflicts
 """
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -355,6 +356,239 @@ async def get_schedule_horizon(
         acquisitions=acq_summaries,
         statistics=statistics,
         conflicts_summary=conflicts_summary_data,
+    )
+
+
+# =============================================================================
+# Master Schedule Endpoint (v2.5)
+# =============================================================================
+
+
+class MasterScheduleBucket(BaseModel):
+    """Aggregated acquisition bucket for zoomed-out view."""
+
+    target_id: str
+    satellite_id: str
+    mode: str
+    bucket_start: str
+    bucket_end: str
+    count: int
+    target_lat: Optional[float] = None
+    target_lon: Optional[float] = None
+    avg_off_nadir_deg: Optional[float] = None
+
+
+class MasterScheduleResponse(BaseModel):
+    """Response from master schedule endpoint."""
+
+    success: bool
+    zoom: str  # 'detail' | 'aggregate'
+    total: int
+    items: List[Dict[str, Any]] = Field(default_factory=list)
+    buckets: List[MasterScheduleBucket] = Field(default_factory=list)
+    t_start: str
+    t_end: str
+    fetch_ms: Optional[float] = None
+
+
+@router.get("/master", response_model=MasterScheduleResponse)
+async def get_master_schedule(
+    workspace_id: str = Query(..., description="Workspace ID"),
+    t_start: Optional[str] = Query(
+        None, description="Visible range start (ISO datetime, default: now)"
+    ),
+    t_end: Optional[str] = Query(
+        None, description="Visible range end (ISO datetime, default: +7 days)"
+    ),
+    zoom: str = Query(
+        "detail",
+        description="Zoom level: 'detail' for individual items, 'aggregate' for bucketed",
+    ),
+    limit: int = Query(2000, ge=1, le=5000, description="Max items in detail mode"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+) -> MasterScheduleResponse:
+    """
+    Get master schedule for the Schedule menu timeline view.
+
+    Returns all scheduled acquisitions in the visible time range with full
+    fields needed for timeline rendering, map placement, and hover tooltips.
+
+    When zoom='aggregate', returns bucketed counts per target/satellite
+    instead of individual acquisitions (for zoomed-out performance).
+
+    Required fields per item: acquisition_id, workspace_id, scheduled_start_time,
+    satellite_id + display name, target_id + lat/lon, off_nadir_deg, mode.
+    """
+    import time
+
+    t0 = time.monotonic()
+    db = get_schedule_db()
+
+    # Parse or default times
+    now = datetime.now(timezone.utc)
+
+    if t_start:
+        try:
+            start_dt = datetime.fromisoformat(t_start.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid t_start format: {t_start}"
+            )
+    else:
+        start_dt = now
+
+    if t_end:
+        try:
+            end_dt = datetime.fromisoformat(t_end.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid t_end format: {t_end}"
+            )
+    else:
+        end_dt = now + timedelta(days=7)
+
+    start_str = start_dt.isoformat() + "Z"
+    end_str = end_dt.isoformat() + "Z"
+
+    result = db.get_master_schedule(
+        workspace_id=workspace_id,
+        t_start=start_str,
+        t_end=end_str,
+        zoom=zoom,
+        limit=limit,
+        offset=offset,
+    )
+
+    fetch_ms = round((time.monotonic() - t0) * 1000, 1)
+
+    logger.info(
+        f"[Master Schedule] workspace={workspace_id}, zoom={zoom}, "
+        f"total={result['total']}, items={len(result['items'])}, "
+        f"buckets={len(result['buckets'])}, fetch_ms={fetch_ms}"
+    )
+
+    buckets = [MasterScheduleBucket(**b) for b in result["buckets"]]
+
+    return MasterScheduleResponse(
+        success=True,
+        zoom=result["zoom"],
+        total=result["total"],
+        items=result["items"],
+        buckets=buckets,
+        t_start=start_str,
+        t_end=end_str,
+        fetch_ms=fetch_ms,
+    )
+
+
+class TargetLocation(BaseModel):
+    """A target with its geographic position."""
+
+    target_id: str
+    latitude: float
+    longitude: float
+
+
+class TargetLocationsResponse(BaseModel):
+    """Response from target-locations endpoint."""
+
+    success: bool
+    targets: List[TargetLocation]
+
+
+@router.get("/target-locations", response_model=TargetLocationsResponse)
+async def get_schedule_target_locations(
+    workspace_id: Optional[str] = Query(
+        None,
+        description="Scope to a specific workspace. Recommended to avoid cross-workspace leaks.",
+    ),
+) -> TargetLocationsResponse:
+    """
+    Get geographic positions for all targets that have scheduled acquisitions.
+
+    Primary source: acquisitions.target_lat / target_lon (v2.5 geo-backfill).
+    Fallback: workspace scenario_config blobs.
+    When workspace_id is provided, results are scoped to that workspace only.
+    """
+    from backend.workspace_persistence import get_workspace_db
+
+    db = get_schedule_db()
+    target_positions: Dict[str, TargetLocation] = {}
+
+    # 1. Primary: get target positions directly from acquisitions table (v2.5 fields)
+    with db._get_connection() as conn:
+        cursor = conn.cursor()
+        if workspace_id:
+            cursor.execute(
+                """SELECT DISTINCT target_id, target_lat, target_lon
+                   FROM acquisitions
+                   WHERE workspace_id = ? AND state != 'failed'""",
+                (workspace_id,),
+            )
+        else:
+            cursor.execute(
+                "SELECT DISTINCT target_id, target_lat, target_lon FROM acquisitions WHERE state != 'failed'"
+            )
+        for row in cursor.fetchall():
+            tid = row["target_id"]
+            if tid and row["target_lat"] is not None and row["target_lon"] is not None:
+                target_positions[tid] = TargetLocation(
+                    target_id=tid,
+                    latitude=row["target_lat"],
+                    longitude=row["target_lon"],
+                )
+
+        # Collect target_ids that still need geo resolution
+        if workspace_id:
+            cursor.execute(
+                """SELECT DISTINCT target_id FROM acquisitions
+                   WHERE workspace_id = ? AND state != 'failed'""",
+                (workspace_id,),
+            )
+        else:
+            cursor.execute(
+                "SELECT DISTINCT target_id FROM acquisitions WHERE state != 'failed'"
+            )
+        all_target_ids = {row["target_id"] for row in cursor.fetchall()}
+
+    missing_ids = all_target_ids - set(target_positions.keys())
+
+    # 2. Fallback: look up missing positions from workspace scenario_configs
+    if missing_ids:
+        ws_db = get_workspace_db()
+        with ws_db._get_connection() as conn:
+            cursor = conn.cursor()
+            if workspace_id:
+                cursor.execute(
+                    "SELECT scenario_config_json FROM workspace_blobs WHERE workspace_id = ? AND scenario_config_json IS NOT NULL",
+                    (workspace_id,),
+                )
+            else:
+                cursor.execute(
+                    "SELECT scenario_config_json FROM workspace_blobs WHERE scenario_config_json IS NOT NULL"
+                )
+            for row in cursor.fetchall():
+                try:
+                    config = json.loads(row["scenario_config_json"])
+                    for t in config.get("targets", []):
+                        name = t.get("name", "")
+                        if name in missing_ids and name not in target_positions:
+                            target_positions[name] = TargetLocation(
+                                target_id=name,
+                                latitude=t["latitude"],
+                                longitude=t["longitude"],
+                            )
+                except (json.JSONDecodeError, KeyError):
+                    continue
+
+    logger.info(
+        f"[TargetLocations] Resolved {len(target_positions)}/{len(all_target_ids)} target positions"
+        + (f" for workspace {workspace_id}" if workspace_id else "")
+    )
+
+    return TargetLocationsResponse(
+        success=True,
+        targets=list(target_positions.values()),
     )
 
 
@@ -1154,6 +1388,12 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
 
     db = get_schedule_db()
 
+    logger.info(
+        f"[Direct Commit] Received request: items={len(request.items)}, "
+        f"algorithm={request.algorithm}, mode={request.mode}, "
+        f"workspace_id={request.workspace_id}"
+    )
+
     if not request.items:
         raise HTTPException(status_code=400, detail="No items to commit")
 
@@ -1387,7 +1627,7 @@ async def create_incremental_plan(
                 status_code=400, detail=f"Invalid horizon_from: {request.horizon_from}"
             )
     else:
-        horizon_start = now
+        horizon_start = now.replace(tzinfo=None)
 
     if request.horizon_to:
         try:
@@ -1399,7 +1639,7 @@ async def create_incremental_plan(
                 status_code=400, detail=f"Invalid horizon_to: {request.horizon_to}"
             )
     else:
-        horizon_end = now + timedelta(days=7)
+        horizon_end = (now + timedelta(days=7)).replace(tzinfo=None)
 
     # Parse planning mode and lock policy
     try:
@@ -1801,6 +2041,25 @@ class RepairPlanRequestModel(BaseModel):
     satellite_subset: List[str] = Field(default_factory=list)
     target_subset: List[str] = Field(default_factory=list)
 
+    # Per-target priorities (target_name → priority 1-5, 1=highest)
+    # Used to re-score cached opportunities with current priorities
+    target_priorities: Dict[str, int] = Field(
+        default_factory=dict,
+        description="Map of target name to priority (1=highest, 5=lowest). "
+        "When provided, cached opportunity values are re-scored with these priorities.",
+    )
+
+    # Scoring weights (passed from frontend weightConfig)
+    weight_priority: float = Field(
+        default=40.0, description="Weight for target priority"
+    )
+    weight_geometry: float = Field(
+        default=40.0, description="Weight for geometry quality"
+    )
+    weight_timing: float = Field(
+        default=20.0, description="Weight for timing preference"
+    )
+
     # Planning parameters
     imaging_time_s: float = Field(default=1.0)
     max_roll_rate_dps: float = Field(default=1.0)
@@ -1950,7 +2209,7 @@ async def create_repair_plan(
                 status_code=400, detail=f"Invalid horizon_from: {request.horizon_from}"
             )
     else:
-        horizon_start = now
+        horizon_start = now.replace(tzinfo=None)
 
     if request.horizon_to:
         try:
@@ -1964,7 +2223,7 @@ async def create_repair_plan(
                 status_code=400, detail=f"Invalid horizon_to: {request.horizon_to}"
             )
     else:
-        horizon_end = now + timedelta(days=7)
+        horizon_end = (now + timedelta(days=7)).replace(tzinfo=None)
 
     # Parse enums
     try:
@@ -2094,6 +2353,42 @@ async def create_repair_plan(
             "[Repair Plan] No cached opportunities - repair will only adjust existing items"
         )
 
+    # Re-score opportunity values with current target priorities
+    if request.target_priorities and raw_opportunities:
+        from src.mission_planner.quality_scoring import (
+            MultiCriteriaWeights,
+            compute_composite_value,
+        )
+
+        rescore_weights = MultiCriteriaWeights(
+            priority=request.weight_priority,
+            geometry=request.weight_geometry,
+            timing=request.weight_timing,
+        )
+        rescored_count = 0
+        for opp in raw_opportunities:
+            tid = opp.get("target_id", "")
+            if tid in request.target_priorities:
+                new_priority = float(request.target_priorities[tid])
+                old_priority = float(opp.get("priority", 5))
+                quality = float(opp.get("quality_score") or 0.5)
+                # Timing score not cached — use 0.5 as neutral default
+                timing = 0.5
+                new_value = compute_composite_value(
+                    priority=new_priority,
+                    quality_score=quality,
+                    timing_score=timing,
+                    weights=rescore_weights,
+                )
+                if new_priority != old_priority:
+                    rescored_count += 1
+                opp["value"] = new_value
+                opp["priority"] = int(new_priority)
+        if rescored_count > 0:
+            logger.info(
+                f"[Repair Plan] Re-scored {rescored_count} opportunities with updated target priorities"
+            )
+
     # Configure slew
     slew_config = SlewConfig(
         roll_slew_rate_deg_per_sec=request.max_roll_rate_dps,
@@ -2109,6 +2404,7 @@ async def create_repair_plan(
         max_changes=request.max_changes,
         objective=objective,
         slew_config=slew_config,
+        target_priorities=request.target_priorities or None,
     )
 
     # Create plan record
@@ -2383,6 +2679,10 @@ class RepairCommitResponse(BaseModel):
     audit_log_id: str
     conflicts_after: int = 0
     warnings: List[str] = Field(default_factory=list)
+    acquisition_ids: List[str] = Field(
+        default_factory=list,
+        description="IDs of newly created acquisitions (NOT kept ones from previous orders)",
+    )
 
 
 @router.post("/repair/commit", response_model=RepairCommitResponse)
@@ -2525,6 +2825,7 @@ async def commit_repair_plan(request: RepairCommitRequest) -> RepairCommitRespon
             audit_log_id=audit_log.id,
             conflicts_after=conflicts_after,
             warnings=warnings,
+            acquisition_ids=[a["id"] for a in result["acquisitions_created"]],
         )
 
     except ValueError as e:

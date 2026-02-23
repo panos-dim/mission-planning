@@ -210,43 +210,9 @@ export function scheduleToSlewArcs(
 
     if (satOpps.length === 0) continue
 
-    // FIRST: Add initial slew arc from satellite position to first target
-    const firstOpp = satOpps[0]
-    const firstLoc = findTargetLocation(firstOpp.target_id, missionData)
+    // PR-UI-024: Path starts at first target — no satellite→target initial arc
 
-    if (firstLoc && firstOpp.delta_roll > 0.1) {
-      // Only show if there's actual slew
-      let fromLat = firstLoc.lat
-      let fromLon = firstLoc.lon
-
-      // Use satellite position from backend if available
-      if (firstOpp.satellite_lat !== undefined && firstOpp.satellite_lon !== undefined) {
-        fromLat = firstOpp.satellite_lat
-        fromLon = firstOpp.satellite_lon
-      } else {
-        // Fallback: Use offset approximation
-        const offsetDegrees = 3.5
-        fromLat = firstLoc.lat - offsetDegrees
-        fromLon = firstLoc.lon - offsetDegrees * 0.2
-      }
-
-      // Use satellite color for arc
-      const initialColor = getSatelliteArcColor(firstOpp.satellite_id, missionData)
-
-      arcs.push({
-        fromOpportunityId: 'nadir',
-        toOpportunityId: firstOpp.opportunity_id,
-        fromLat: fromLat,
-        fromLon: fromLon,
-        toLat: firstLoc.lat,
-        toLon: firstLoc.lon,
-        deltaRoll: firstOpp.delta_roll,
-        slewTime: firstOpp.maneuver_time,
-        color: initialColor,
-      })
-    }
-
-    // THEN: Add arcs between consecutive opportunities FOR THIS SATELLITE ONLY
+    // Add arcs between consecutive opportunities FOR THIS SATELLITE ONLY
     for (let i = 0; i < satOpps.length - 1; i++) {
       const from = satOpps[i]
       const to = satOpps[i + 1]
@@ -261,26 +227,9 @@ export function scheduleToSlewArcs(
       const toTime = new Date(to.start_time).getTime()
       const timeGapMinutes = (toTime - fromTime) / (1000 * 60)
 
-      // If gap > 10 minutes, they're on DIFFERENT PASSES of the same satellite
+      // PR-UI-024: If gap > 10 minutes, different passes — skip (no satellite→target arcs)
       if (timeGapMinutes > 10) {
-        // Draw "new pass start" arc from satellite position to new target
-        if (to.satellite_lat !== undefined && to.satellite_lon !== undefined) {
-          // Use satellite color for arc
-          const newPassColor = getSatelliteArcColor(to.satellite_id, missionData)
-
-          arcs.push({
-            fromOpportunityId: `last_attitude_${from.target_id}`,
-            toOpportunityId: to.opportunity_id,
-            fromLat: to.satellite_lat,
-            fromLon: to.satellite_lon,
-            toLat: toLoc.lat,
-            toLon: toLoc.lon,
-            deltaRoll: to.delta_roll,
-            slewTime: to.maneuver_time,
-            color: newPassColor,
-          })
-        }
-        continue // Skip the direct arc between passes
+        continue
       }
 
       // Same pass: draw normal slew arc (target to target)

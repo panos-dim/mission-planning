@@ -24,7 +24,7 @@ from typing import Any, Dict, Generator, List, Optional
 logger = logging.getLogger(__name__)
 
 # Schema version for this module
-SCHEMA_VERSION = "2.3"
+SCHEMA_VERSION = "2.5"
 
 # Default database path (same as workspace_persistence.py)
 DEFAULT_DB_PATH = Path(__file__).parent.parent / "data" / "workspaces.db"
@@ -203,6 +203,11 @@ class Acquisition:
     maneuver_time_s: Optional[float]
     slack_time_s: Optional[float]
     workspace_id: Optional[str]
+    # v2.5 geo-backfill fields for master schedule view
+    target_lat: Optional[float] = None
+    target_lon: Optional[float] = None
+    satellite_display_name: Optional[str] = None
+    off_nadir_deg: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API response."""
@@ -230,6 +235,10 @@ class Acquisition:
             "maneuver_time_s": self.maneuver_time_s,
             "slack_time_s": self.slack_time_s,
             "workspace_id": self.workspace_id,
+            "target_lat": self.target_lat,
+            "target_lon": self.target_lon,
+            "satellite_display_name": self.satellite_display_name,
+            "off_nadir_deg": self.off_nadir_deg,
         }
 
         # Add SAR-specific fields if present
@@ -481,6 +490,9 @@ class ScheduleDB:
 
             if current_version < "2.4":
                 self._migrate_to_v2_4(conn)
+
+            if current_version < "2.5":
+                self._migrate_to_v2_5(conn)
 
             conn.commit()
 
@@ -943,6 +955,117 @@ class ScheduleDB:
 
         logger.info("Migration to schema v2.4 complete")
 
+    def _migrate_to_v2_5(self, conn: sqlite3.Connection) -> None:
+        """Migrate database schema to v2.5 - Geo-backfill for master schedule view.
+
+        Adds target_lat, target_lon, satellite_display_name, off_nadir_deg
+        to acquisitions table so the master schedule view can render map
+        targets and hover tooltips without recomputing feasibility.
+        """
+        cursor = conn.cursor()
+        now = datetime.now(timezone.utc).isoformat() + "Z"
+
+        logger.info("Running migration to schema v2.5 (geo-backfill)...")
+
+        new_columns = [
+            ("target_lat", "REAL"),
+            ("target_lon", "REAL"),
+            ("satellite_display_name", "TEXT"),
+            ("off_nadir_deg", "REAL"),
+        ]
+
+        for col_name, col_type in new_columns:
+            try:
+                cursor.execute(
+                    f"ALTER TABLE acquisitions ADD COLUMN {col_name} {col_type}"
+                )
+                logger.info(f"  Added column acquisitions.{col_name}")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
+        # Backfill off_nadir_deg from existing roll_angle_deg (absolute value)
+        cursor.execute(
+            """
+            UPDATE acquisitions
+            SET off_nadir_deg = ABS(roll_angle_deg)
+            WHERE off_nadir_deg IS NULL AND roll_angle_deg IS NOT NULL
+        """
+        )
+        backfilled_off_nadir = cursor.rowcount
+        if backfilled_off_nadir > 0:
+            logger.info(
+                f"  Backfilled off_nadir_deg for {backfilled_off_nadir} acquisitions"
+            )
+
+        # Backfill target coords from workspace scenario_config JSON blobs
+        # This queries workspace_blobs to find target lat/lon by target name
+        try:
+            cursor.execute(
+                """
+                SELECT DISTINCT a.workspace_id
+                FROM acquisitions a
+                WHERE a.target_lat IS NULL AND a.workspace_id IS NOT NULL
+            """
+            )
+            workspace_ids = [row["workspace_id"] for row in cursor.fetchall()]
+
+            for ws_id in workspace_ids:
+                cursor.execute(
+                    "SELECT scenario_config_json FROM workspace_blobs WHERE workspace_id = ?",
+                    (ws_id,),
+                )
+                blob_row = cursor.fetchone()
+                if not blob_row or not blob_row["scenario_config_json"]:
+                    continue
+
+                try:
+                    config = json.loads(blob_row["scenario_config_json"])
+                    target_coords = {
+                        t["name"]: (t["latitude"], t["longitude"])
+                        for t in config.get("targets", [])
+                        if "latitude" in t and "longitude" in t
+                    }
+
+                    for target_name, (lat, lon) in target_coords.items():
+                        cursor.execute(
+                            """
+                            UPDATE acquisitions
+                            SET target_lat = ?, target_lon = ?
+                            WHERE target_id = ? AND workspace_id = ?
+                              AND target_lat IS NULL
+                        """,
+                            (lat, lon, target_name, ws_id),
+                        )
+                except (json.JSONDecodeError, KeyError):
+                    continue
+
+            logger.info(
+                f"  Backfilled target coords from {len(workspace_ids)} workspaces"
+            )
+        except Exception as e:
+            logger.warning(f"  Target coord backfill partial failure: {e}")
+
+        # Add composite index for master schedule queries
+        cursor.execute(
+            """CREATE INDEX IF NOT EXISTS idx_acq_workspace_time
+               ON acquisitions(workspace_id, start_time, end_time)"""
+        )
+
+        # Record migration
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO schema_migrations (version, applied_at, description)
+            VALUES (?, ?, ?)
+        """,
+            (
+                "2.5",
+                now,
+                "Geo-backfill: target_lat/lon, satellite_display_name, off_nadir_deg on acquisitions",
+            ),
+        )
+
+        logger.info("Migration to schema v2.5 complete")
+
     # =========================================================================
     # Order Operations
     # =========================================================================
@@ -1252,10 +1375,18 @@ class ScheduleDB:
         maneuver_time_s: Optional[float] = None,
         slack_time_s: Optional[float] = None,
         workspace_id: Optional[str] = None,
+        target_lat: Optional[float] = None,
+        target_lon: Optional[float] = None,
+        satellite_display_name: Optional[str] = None,
+        off_nadir_deg: Optional[float] = None,
     ) -> Acquisition:
         """Create a new acquisition (scheduled slot)."""
         acq_id = f"acq_{uuid.uuid4().hex[:12]}"
         now = datetime.now(timezone.utc).isoformat() + "Z"
+
+        # Auto-compute off_nadir_deg from roll_angle if not provided
+        if off_nadir_deg is None and roll_angle_deg is not None:
+            off_nadir_deg = abs(roll_angle_deg)
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -1267,8 +1398,9 @@ class ScheduleDB:
                     incidence_angle_deg, look_side, pass_direction, sar_mode,
                     swath_width_km, scene_length_km, state, lock_level, source,
                     order_id, plan_id, opportunity_id, quality_score,
-                    maneuver_time_s, slack_time_s, workspace_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    maneuver_time_s, slack_time_s, workspace_id,
+                    target_lat, target_lon, satellite_display_name, off_nadir_deg
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     acq_id,
@@ -1297,6 +1429,10 @@ class ScheduleDB:
                     maneuver_time_s,
                     slack_time_s,
                     workspace_id,
+                    target_lat,
+                    target_lon,
+                    satellite_display_name,
+                    off_nadir_deg,
                 ),
             )
             conn.commit()
@@ -1332,6 +1468,10 @@ class ScheduleDB:
             maneuver_time_s=maneuver_time_s,
             slack_time_s=slack_time_s,
             workspace_id=workspace_id,
+            target_lat=target_lat,
+            target_lon=target_lon,
+            satellite_display_name=satellite_display_name,
+            off_nadir_deg=off_nadir_deg,
         )
 
     def get_acquisition(self, acq_id: str) -> Optional[Acquisition]:
@@ -1600,6 +1740,7 @@ class ScheduleDB:
 
     def _row_to_acquisition(self, row: sqlite3.Row) -> Acquisition:
         """Convert database row to Acquisition object."""
+        row_keys = row.keys()
         return Acquisition(
             id=row["id"],
             created_at=row["created_at"],
@@ -1627,7 +1768,137 @@ class ScheduleDB:
             maneuver_time_s=row["maneuver_time_s"],
             slack_time_s=row["slack_time_s"],
             workspace_id=row["workspace_id"],
+            # v2.5 geo-backfill fields
+            target_lat=row["target_lat"] if "target_lat" in row_keys else None,
+            target_lon=row["target_lon"] if "target_lon" in row_keys else None,
+            satellite_display_name=(
+                row["satellite_display_name"]
+                if "satellite_display_name" in row_keys
+                else None
+            ),
+            off_nadir_deg=(
+                row["off_nadir_deg"] if "off_nadir_deg" in row_keys else None
+            ),
         )
+
+    # =========================================================================
+    # Master Schedule Query (v2.5)
+    # =========================================================================
+
+    def get_master_schedule(
+        self,
+        workspace_id: str,
+        t_start: str,
+        t_end: str,
+        zoom: str = "detail",
+        limit: int = 2000,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """Get master schedule for timeline view.
+
+        Returns acquisitions in the time range with all fields needed for
+        timeline rendering, map placement, and hover tooltips.
+
+        When zoom='aggregate', returns bucketed counts per target per time
+        bucket instead of individual acquisitions.
+
+        Args:
+            workspace_id: Workspace to query
+            t_start: ISO datetime start of visible range
+            t_end: ISO datetime end of visible range
+            zoom: 'detail' for individual items, 'aggregate' for bucketed view
+            limit: Max items to return in detail mode
+            offset: Pagination offset
+
+        Returns:
+            Dict with items (or buckets), total count, and metadata
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Count total in range
+            cursor.execute(
+                """
+                SELECT COUNT(*) as cnt FROM acquisitions
+                WHERE (workspace_id = ? OR workspace_id IS NULL)
+                  AND start_time < ? AND end_time > ?
+                  AND state NOT IN ('failed')
+            """,
+                (workspace_id, t_end, t_start),
+            )
+            total = cursor.fetchone()["cnt"]
+
+            if zoom == "aggregate":
+                # Bucketed aggregation: group by target_id, count per bucket
+                cursor.execute(
+                    """
+                    SELECT target_id, satellite_id, mode,
+                           MIN(start_time) as bucket_start,
+                           MAX(end_time) as bucket_end,
+                           COUNT(*) as count,
+                           AVG(target_lat) as avg_lat,
+                           AVG(target_lon) as avg_lon,
+                           AVG(off_nadir_deg) as avg_off_nadir
+                    FROM acquisitions
+                    WHERE (workspace_id = ? OR workspace_id IS NULL)
+                      AND start_time < ? AND end_time > ?
+                      AND state NOT IN ('failed')
+                    GROUP BY target_id, satellite_id
+                    ORDER BY bucket_start ASC
+                    LIMIT ? OFFSET ?
+                """,
+                    (workspace_id, t_end, t_start, limit, offset),
+                )
+                buckets = []
+                for row in cursor.fetchall():
+                    buckets.append(
+                        {
+                            "target_id": row["target_id"],
+                            "satellite_id": row["satellite_id"],
+                            "mode": row["mode"],
+                            "bucket_start": row["bucket_start"],
+                            "bucket_end": row["bucket_end"],
+                            "count": row["count"],
+                            "target_lat": row["avg_lat"],
+                            "target_lon": row["avg_lon"],
+                            "avg_off_nadir_deg": (
+                                round(row["avg_off_nadir"], 2)
+                                if row["avg_off_nadir"] is not None
+                                else None
+                            ),
+                        }
+                    )
+                return {
+                    "zoom": "aggregate",
+                    "total": total,
+                    "buckets": buckets,
+                    "items": [],
+                }
+
+            # Detail mode: return individual acquisitions
+            cursor.execute(
+                """
+                SELECT * FROM acquisitions
+                WHERE (workspace_id = ? OR workspace_id IS NULL)
+                  AND start_time < ? AND end_time > ?
+                  AND state NOT IN ('failed')
+                ORDER BY start_time ASC
+                LIMIT ? OFFSET ?
+            """,
+                (workspace_id, t_end, t_start, limit, offset),
+            )
+
+            items = []
+            for row in cursor.fetchall():
+                acq = self._row_to_acquisition(row)
+                items.append(acq.to_dict())
+
+            return {
+                "zoom": "detail",
+                "total": total,
+                "buckets": [],
+                "items": items,
+            }
 
     # =========================================================================
     # Plan Operations
@@ -1828,6 +2099,42 @@ class ScheduleDB:
         )
 
     # =========================================================================
+    # Geo-lookup helpers (v2.5)
+    # =========================================================================
+
+    def _resolve_target_coords(
+        self, cursor: sqlite3.Cursor, workspace_id: Optional[str]
+    ) -> Dict[str, tuple]:
+        """Look up target lat/lon from workspace scenario_config.
+
+        Returns dict mapping target_name -> (lat, lon).
+        Safe to call with None workspace_id (returns empty dict).
+        """
+        if not workspace_id:
+            return {}
+
+        try:
+            cursor.execute(
+                "SELECT scenario_config_json FROM workspace_blobs WHERE workspace_id = ?",
+                (workspace_id,),
+            )
+            blob_row = cursor.fetchone()
+            if not blob_row or not blob_row["scenario_config_json"]:
+                return {}
+
+            config = json.loads(blob_row["scenario_config_json"])
+            return {
+                t["name"]: (t["latitude"], t["longitude"])
+                for t in config.get("targets", [])
+                if "latitude" in t and "longitude" in t
+            }
+        except (json.JSONDecodeError, KeyError, Exception) as e:
+            logger.debug(
+                f"Could not resolve target coords for workspace {workspace_id}: {e}"
+            )
+            return {}
+
+    # =========================================================================
     # Commit Plan Operation
     # =========================================================================
 
@@ -1885,8 +2192,20 @@ class ScheduleDB:
             items = cursor.fetchall()
             now = datetime.now(timezone.utc).isoformat() + "Z"
 
+            # v2.5: resolve target coords from workspace scenario_config
+            target_coords = self._resolve_target_coords(cursor, workspace_id)
+
             for item in items:
                 acq_id = f"acq_{uuid.uuid4().hex[:12]}"
+
+                # v2.5: compute off_nadir_deg from roll_angle
+                roll_deg = item["roll_angle_deg"]
+                off_nadir = abs(roll_deg) if roll_deg is not None else None
+
+                # v2.5: look up target geo coords
+                coords = target_coords.get(item["target_id"])
+                t_lat = coords[0] if coords else None
+                t_lon = coords[1] if coords else None
 
                 # Create acquisition from plan item
                 cursor.execute(
@@ -1895,8 +2214,9 @@ class ScheduleDB:
                         id, created_at, updated_at, satellite_id, target_id,
                         start_time, end_time, mode, roll_angle_deg, pitch_angle_deg,
                         state, lock_level, source, order_id, plan_id, opportunity_id,
-                        quality_score, maneuver_time_s, slack_time_s, workspace_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        quality_score, maneuver_time_s, slack_time_s, workspace_id,
+                        off_nadir_deg, target_lat, target_lon
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         acq_id,
@@ -1919,6 +2239,9 @@ class ScheduleDB:
                         item["maneuver_time_s"],
                         item["slack_time_s"],
                         workspace_id,
+                        off_nadir,
+                        t_lat,
+                        t_lon,
                     ),
                 )
 
@@ -2746,9 +3069,21 @@ class ScheduleDB:
 
                 items = cursor.fetchall()
 
+                # v2.5: resolve target coords from workspace scenario_config
+                target_coords = self._resolve_target_coords(cursor, workspace_id)
+
                 # Step 3: Create acquisitions from plan items
                 for item in items:
                     acq_id = f"acq_{uuid.uuid4().hex[:12]}"
+
+                    # v2.5: compute off_nadir_deg from roll_angle
+                    roll_deg = item["roll_angle_deg"]
+                    off_nadir = abs(roll_deg) if roll_deg is not None else None
+
+                    # v2.5: look up target geo coords
+                    coords = target_coords.get(item["target_id"])
+                    t_lat = coords[0] if coords else None
+                    t_lon = coords[1] if coords else None
 
                     cursor.execute(
                         """
@@ -2756,8 +3091,9 @@ class ScheduleDB:
                             id, created_at, updated_at, satellite_id, target_id,
                             start_time, end_time, mode, roll_angle_deg, pitch_angle_deg,
                             state, lock_level, source, order_id, plan_id, opportunity_id,
-                            quality_score, maneuver_time_s, slack_time_s, workspace_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            quality_score, maneuver_time_s, slack_time_s, workspace_id,
+                            off_nadir_deg, target_lat, target_lon
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                         (
                             acq_id,
@@ -2780,6 +3116,9 @@ class ScheduleDB:
                             item["maneuver_time_s"],
                             item["slack_time_s"],
                             workspace_id,
+                            off_nadir,
+                            t_lat,
+                            t_lon,
                         ),
                     )
 

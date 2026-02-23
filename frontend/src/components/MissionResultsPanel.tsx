@@ -1,9 +1,9 @@
-import React, { useState, useCallback, useMemo } from 'react'
+import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { useMission } from '../context/MissionContext'
-import { Clock, BarChart2, MapPin } from 'lucide-react'
+import { Clock, BarChart2, MapPin, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
 import { LABELS } from '../constants/labels'
 import { formatDateTimeShort, formatDateTimeDDMMYYYY } from '../utils/date'
-import { fmt2 } from '../utils/format'
+import { fmt1 } from '../utils/format'
 import type { PassData } from '../types'
 
 // =============================================================================
@@ -14,6 +14,8 @@ const FT_LANE_HEIGHT = 32
 const FT_LANE_GAP = 4
 const FT_LABEL_WIDTH = 100
 const FT_MIN_BAR_PX = 4
+const FT_ZOOM_FACTOR = 0.15
+const FT_MIN_VIEW_RANGE_MS = 5 * 60_000 // 5 minutes minimum zoom
 
 const ftFormatTick = (ts: number): string => {
   const d = new Date(ts)
@@ -124,6 +126,134 @@ const MissionResultsPanel: React.FC = () => {
     [selectedTargets],
   )
 
+  // Compute coverage stats (must be hooks-safe — before any early return)
+  const { covered, total, isPerfect } = useMemo(() => {
+    if (!state.missionData) return { covered: 0, total: 0, isPerfect: false }
+    const targetsWithOpps = state.missionData.targets.filter((target) =>
+      state.missionData!.passes.some((pass) => pass.target === target.name),
+    )
+    const c = targetsWithOpps.length
+    const t = state.missionData.targets.length
+    return { covered: c, total: t, isPerfect: t > 0 && c === t }
+  }, [state.missionData])
+
+  // Visible passes & targets based on target selection
+  const visiblePasses = useMemo(
+    () => sortedPasses.filter((p) => isTargetVisible(p.target)),
+    [sortedPasses, isTargetVisible],
+  )
+  const visibleTargets = useMemo(
+    () => (state.missionData?.targets ?? []).filter((t) => isTargetVisible(t.name)),
+    [state.missionData, isTargetVisible],
+  )
+
+  // Time bounds for the visualization
+  const { minTs, maxTs } = useMemo(() => {
+    let mn = Infinity
+    let mx = -Infinity
+    for (const p of visiblePasses) {
+      const s = new Date(p.start_time.replace('+00:00', 'Z')).getTime()
+      const e = new Date(p.end_time.replace('+00:00', 'Z')).getTime()
+      if (s < mn) mn = s
+      if (e > mx) mx = e
+    }
+    if (!isFinite(mn)) {
+      const now = Date.now()
+      return { minTs: now, maxTs: now + 86_400_000 }
+    }
+    const pad = (mx - mn) * 0.02 || 60_000
+    return { minTs: mn - pad, maxTs: mx + pad }
+  }, [visiblePasses])
+
+  // ── Zoom & Pan state ──
+  const [viewRange, setViewRange] = useState({ min: minTs, max: maxTs })
+  const isPanning = useRef(false)
+  const panStartX = useRef(0)
+  const panStartRange = useRef({ min: minTs, max: maxTs })
+  const trackRef = useRef<HTMLDivElement>(null)
+
+  // Reset view when data bounds change
+  useEffect(() => {
+    setViewRange({ min: minTs, max: maxTs })
+  }, [minTs, maxTs])
+
+  const zoomAt = useCallback(
+    (centerFraction: number, direction: number) => {
+      setViewRange((prev) => {
+        const range = prev.max - prev.min
+        const delta = range * FT_ZOOM_FACTOR * direction
+        const newMin = prev.min + delta * centerFraction
+        const newMax = prev.max - delta * (1 - centerFraction)
+        if (newMax - newMin < FT_MIN_VIEW_RANGE_MS) return prev
+        const extent = maxTs - minTs
+        return {
+          min: Math.max(minTs - extent, newMin),
+          max: Math.min(maxTs + extent, newMax),
+        }
+      })
+    },
+    [minTs, maxTs],
+  )
+
+  // Native wheel listener with { passive: false } to allow preventDefault
+  const zoomAtRef = useRef(zoomAt)
+  zoomAtRef.current = zoomAt
+
+  useEffect(() => {
+    const el = trackRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return // plain scroll = vertical scroll
+      e.preventDefault()
+      const rect = el.getBoundingClientRect()
+      const fraction = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
+      const direction = e.deltaY > 0 ? -1 : 1
+      zoomAtRef.current(fraction, direction)
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
+
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button !== 0) return
+      isPanning.current = true
+      panStartX.current = e.clientX
+      panStartRange.current = viewRange
+      ;(e.currentTarget as HTMLElement).style.cursor = 'grabbing'
+    },
+    [viewRange],
+  )
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!isPanning.current || !trackRef.current) return
+    const rect = trackRef.current.getBoundingClientRect()
+    const dxFraction = (e.clientX - panStartX.current) / rect.width
+    const range = panStartRange.current.max - panStartRange.current.min
+    const shift = -dxFraction * range
+    setViewRange({
+      min: panStartRange.current.min + shift,
+      max: panStartRange.current.max + shift,
+    })
+  }, [])
+
+  const handleMouseUp = useCallback((e: React.MouseEvent) => {
+    isPanning.current = false
+    ;(e.currentTarget as HTMLElement).style.cursor = ''
+  }, [])
+
+  const resetZoom = useCallback(() => {
+    setViewRange({ min: minTs, max: maxTs })
+  }, [minTs, maxTs])
+
+  const viewMinTs = viewRange.min
+  const viewMaxTs = viewRange.max
+  const isZoomed = viewMinTs !== minTs || viewMaxTs !== maxTs
+
+  const timeRange = viewMaxTs - viewMinTs
+  const ticks = visiblePasses.length > 0 ? ftGenerateTicks(viewMinTs, viewMaxTs, 5) : []
+
+  // ── Early return: no mission data ──
   if (!state.missionData) {
     return (
       <div className="h-full flex flex-col items-center justify-center p-6 text-center">
@@ -171,35 +301,8 @@ const MissionResultsPanel: React.FC = () => {
     )
   }
 
-  // Compute coverage stats
-  const targetsWithOpportunities = state.missionData.targets.filter((target) =>
-    state.missionData!.passes.some((pass) => pass.target === target.name),
-  )
-  const covered = targetsWithOpportunities.length
-  const total = state.missionData.targets.length
-  const isPerfect = total > 0 && covered === total
-
-  // Visible passes based on target selection
-  const visiblePasses = sortedPasses.filter((p) => isTargetVisible(p.target))
-  const visibleTargets = state.missionData.targets.filter((t) => isTargetVisible(t.name))
-
-  // Time bounds & ticks for the visualization
-  let minTs = Infinity
-  let maxTs = -Infinity
-  for (const p of visiblePasses) {
-    const s = new Date(p.start_time.replace('+00:00', 'Z')).getTime()
-    const e = new Date(p.end_time.replace('+00:00', 'Z')).getTime()
-    if (s < minTs) minTs = s
-    if (e > maxTs) maxTs = e
-  }
-  const pad = (maxTs - minTs) * 0.02 || 60_000
-  minTs -= pad
-  maxTs += pad
-  const timeRange = maxTs - minTs
-  const ticks = visiblePasses.length > 0 ? ftGenerateTicks(minTs, maxTs, 5) : []
-
   return (
-    <div className="h-full flex flex-col bg-gray-900">
+    <div className="h-full flex flex-col min-h-0 bg-gray-900">
       {/* Fixed Header — Summary + Timeline label */}
       <div className="flex-shrink-0 border-b border-gray-700 bg-gray-800/95">
         <div className="px-3 py-2.5 flex items-center justify-between">
@@ -234,7 +337,7 @@ const MissionResultsPanel: React.FC = () => {
         </div>
 
         {/* Target filter pills — click to select */}
-        <div className="px-3 pb-2.5 flex flex-wrap items-center gap-1.5">
+        <div className="px-3 pb-2.5 flex flex-wrap items-center gap-1.5 max-h-[96px] overflow-y-auto">
           {state.missionData.targets.map((t) => {
             const count = targetPassCounts.get(t.name) || 0
             const isActive = isTargetVisible(t.name)
@@ -283,8 +386,49 @@ const MissionResultsPanel: React.FC = () => {
         </div>
       </div>
 
+      {/* Zoom controls */}
+      {visiblePasses.length > 0 && (
+        <div className="flex items-center gap-1 px-3 py-1.5 border-b border-gray-700/50 bg-gray-900/50 flex-shrink-0">
+          <button
+            onClick={() => zoomAt(0.5, 1)}
+            className="p-1 rounded text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
+            title="Zoom in"
+          >
+            <ZoomIn size={14} />
+          </button>
+          <button
+            onClick={() => zoomAt(0.5, -1)}
+            className="p-1 rounded text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
+            title="Zoom out"
+          >
+            <ZoomOut size={14} />
+          </button>
+          {isZoomed && (
+            <button
+              onClick={resetZoom}
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium text-blue-400 hover:text-white hover:bg-gray-700 transition-colors"
+              title="Reset zoom"
+            >
+              <Maximize2 size={12} />
+              Reset
+            </button>
+          )}
+          <span className="ml-auto text-[9px] text-gray-500">
+            ⌘/Ctrl+Scroll to zoom · Drag to pan
+          </span>
+        </div>
+      )}
+
       {/* Timeline Content — always visible, scrollable */}
-      <div className="flex-1 overflow-y-auto p-3">
+      <div
+        ref={trackRef}
+        className="flex-1 overflow-y-auto p-3 select-none"
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
+        style={{ cursor: visiblePasses.length > 0 ? 'grab' : undefined }}
+      >
         {visiblePasses.length === 0 ? (
           <div className="text-xs text-gray-500 text-center py-8">
             {sortedPasses.length === 0
@@ -304,7 +448,7 @@ const MissionResultsPanel: React.FC = () => {
               <div style={{ width: FT_LABEL_WIDTH }} className="flex-shrink-0" />
               <div className="flex-1 relative h-full">
                 {ticks.map((ts) => {
-                  const pct = ((ts - minTs) / timeRange) * 100
+                  const pct = ((ts - viewMinTs) / timeRange) * 100
                   return (
                     <div
                       key={ts}
@@ -329,7 +473,7 @@ const MissionResultsPanel: React.FC = () => {
               {/* Faint vertical grid lines */}
               <div className="absolute inset-0" style={{ marginLeft: FT_LABEL_WIDTH }}>
                 {ticks.map((ts) => {
-                  const pct = ((ts - minTs) / timeRange) * 100
+                  const pct = ((ts - viewMinTs) / timeRange) * 100
                   return (
                     <div
                       key={`g-${ts}`}
@@ -377,7 +521,7 @@ const MissionResultsPanel: React.FC = () => {
                               pass.start_time.replace('+00:00', 'Z'),
                             ).getTime()
                             const endTs = new Date(pass.end_time.replace('+00:00', 'Z')).getTime()
-                            const leftPct = Math.max(0, ((startTs - minTs) / timeRange) * 100)
+                            const leftPct = Math.max(0, ((startTs - viewMinTs) / timeRange) * 100)
                             const widthPct = Math.max(0, ((endTs - startTs) / timeRange) * 100)
                             const isSAR = !!pass.sar_data
                             const barColor = isSAR
@@ -441,7 +585,7 @@ const MissionResultsPanel: React.FC = () => {
             </div>
             <div className="text-gray-300">
               <span className="text-gray-500">Off-nadir angle: </span>
-              {fmt2(timelineTooltip.pass.off_nadir_deg ?? 90 - timelineTooltip.pass.max_elevation)}°
+              {fmt1(timelineTooltip.pass.off_nadir_deg ?? 90 - timelineTooltip.pass.max_elevation)}°
             </div>
             <div className="font-mono text-gray-400">
               {formatDateTimeDDMMYYYY(

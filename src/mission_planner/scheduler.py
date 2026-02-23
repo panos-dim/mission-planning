@@ -1612,6 +1612,246 @@ class MissionScheduler:
                 f"[roll_pitch_best_fit] ✅ {opp.target_id}: value={opp.value:.3f} {pitch_str} inc={abs(opp.incidence_angle or 0):.1f}°"
             )
 
+        # ── Coverage improvement pass: cross-satellite swap ──
+        # The greedy pass may miss targets because it greedily assigned a target
+        # to a satellite that later blocked another target with no alternative.
+        # For each uncovered target, try swapping a scheduled item to a different
+        # satellite to free a slot. Net result: same or +1 coverage.
+        all_target_ids = set(opp.target_id for opp in opportunities)
+        uncovered_targets = all_target_ids - scheduled_targets
+
+        if uncovered_targets:
+            logger.info(
+                f"[roll_pitch_best_fit] Coverage improvement: {len(uncovered_targets)} uncovered "
+                f"target(s): {sorted(uncovered_targets)}"
+            )
+
+            for uncov_target in sorted(uncovered_targets):
+                # Best opportunities for the uncovered target (by value)
+                uncov_opps = sorted(
+                    [o for o in opportunities if o.target_id == uncov_target],
+                    key=lambda o: -o.value,
+                )
+
+                swap_done = False
+                for uncov_opp in uncov_opps:
+                    if swap_done:
+                        break
+
+                    uncov_sat = uncov_opp.satellite_id or "default"
+                    uncov_start = uncov_opp.start_time
+                    uncov_end = uncov_start + timedelta(
+                        seconds=self.config.imaging_time_s
+                    )
+
+                    # Find scheduled items on the SAME satellite that block this opportunity
+                    sat_items = scheduled_items_by_sat.get(uncov_sat, [])
+                    blocking_items = []
+                    for sched_start, sched_end, sched_item in sat_items:
+                        # Check if this scheduled item's time window conflicts
+                        if uncov_start <= sched_end and uncov_end >= sched_start:
+                            blocking_items.append((sched_start, sched_end, sched_item))
+                        elif uncov_start > sched_end:
+                            gap = (uncov_start - sched_end).total_seconds()
+                            roll_diff = abs(
+                                abs(uncov_opp.incidence_angle or 0)
+                                - abs(sched_item.incidence_angle or 0)
+                            )
+                            roll_time = (
+                                roll_diff / self.config.max_roll_rate_dps
+                                if self.config.max_roll_rate_dps > 0
+                                else 0
+                            )
+                            if gap < max(MIN_GAP_SECONDS, roll_time):
+                                blocking_items.append(
+                                    (sched_start, sched_end, sched_item)
+                                )
+                        elif uncov_end < sched_start:
+                            gap = (sched_start - uncov_end).total_seconds()
+                            roll_diff = abs(
+                                abs(uncov_opp.incidence_angle or 0)
+                                - abs(sched_item.incidence_angle or 0)
+                            )
+                            roll_time = (
+                                roll_diff / self.config.max_roll_rate_dps
+                                if self.config.max_roll_rate_dps > 0
+                                else 0
+                            )
+                            if gap < max(MIN_GAP_SECONDS, roll_time):
+                                blocking_items.append(
+                                    (sched_start, sched_end, sched_item)
+                                )
+
+                    if not blocking_items:
+                        # No blocker — the greedy pass should have picked it up.
+                        # Try scheduling directly (may have been blocked by feasibility).
+                        continue
+
+                    # Try swapping each blocker to a DIFFERENT satellite
+                    for _, _, blocker in blocking_items:
+                        if swap_done:
+                            break
+
+                        blocker_target = blocker.target_id
+                        # Find alternative opportunities for the blocker's target
+                        # on a DIFFERENT satellite
+                        alt_opps = sorted(
+                            [
+                                o
+                                for o in opportunities
+                                if o.target_id == blocker_target
+                                and (o.satellite_id or "default") != uncov_sat
+                            ],
+                            key=lambda o: -o.value,
+                        )
+
+                        for alt_opp in alt_opps:
+                            alt_sat = alt_opp.satellite_id or "default"
+                            alt_start = alt_opp.start_time
+                            alt_end = alt_start + timedelta(
+                                seconds=self.config.imaging_time_s
+                            )
+
+                            # Check if alt fits on its satellite without conflicts
+                            alt_sat_items = scheduled_items_by_sat.get(alt_sat, [])
+                            alt_conflicts = False
+                            for s_start, s_end, s_item in alt_sat_items:
+                                if alt_start <= s_end and alt_end >= s_start:
+                                    alt_conflicts = True
+                                    break
+                                elif alt_start > s_end:
+                                    gap = (alt_start - s_end).total_seconds()
+                                    rd = abs(
+                                        abs(alt_opp.incidence_angle or 0)
+                                        - abs(s_item.incidence_angle or 0)
+                                    )
+                                    rt = (
+                                        rd / self.config.max_roll_rate_dps
+                                        if self.config.max_roll_rate_dps > 0
+                                        else 0
+                                    )
+                                    if gap < max(MIN_GAP_SECONDS, rt):
+                                        alt_conflicts = True
+                                        break
+                                elif alt_end < s_start:
+                                    gap = (s_start - alt_end).total_seconds()
+                                    rd = abs(
+                                        abs(alt_opp.incidence_angle or 0)
+                                        - abs(s_item.incidence_angle or 0)
+                                    )
+                                    rt = (
+                                        rd / self.config.max_roll_rate_dps
+                                        if self.config.max_roll_rate_dps > 0
+                                        else 0
+                                    )
+                                    if gap < max(MIN_GAP_SECONDS, rt):
+                                        alt_conflicts = True
+                                        break
+
+                            if alt_conflicts:
+                                continue
+
+                            # ── Execute the swap ──
+                            # 1. Remove blocker from schedule and satellite tracking
+                            schedule = [
+                                s
+                                for s in schedule
+                                if s.opportunity_id != blocker.opportunity_id
+                            ]
+                            scheduled_items_by_sat[uncov_sat] = [
+                                (st, en, si)
+                                for st, en, si in scheduled_items_by_sat[uncov_sat]
+                                if si.opportunity_id != blocker.opportunity_id
+                            ]
+                            scheduled_targets.discard(blocker_target)
+
+                            # 2. Add uncovered target on freed satellite
+                            uncov_density = (
+                                uncov_opp.value / 1.0 if True else float("inf")
+                            )
+                            uncov_scheduled = ScheduledOpportunity(
+                                opportunity_id=uncov_opp.id,
+                                satellite_id=uncov_opp.satellite_id,
+                                target_id=uncov_opp.target_id,
+                                start_time=uncov_start,
+                                end_time=uncov_end,
+                                delta_roll=0,
+                                delta_pitch=0,
+                                roll_angle=uncov_opp.incidence_angle or 0,
+                                pitch_angle=uncov_opp.pitch_angle or 0,
+                                maneuver_time=0,
+                                slack_time=0,
+                                value=uncov_opp.value,
+                                density=uncov_density,
+                                incidence_angle=uncov_opp.incidence_angle,
+                                mission_mode=uncov_opp.mission_mode,
+                                sar_mode=uncov_opp.sar_mode,
+                                look_side=uncov_opp.look_side,
+                                pass_direction=uncov_opp.pass_direction,
+                                incidence_center_deg=uncov_opp.incidence_center_deg,
+                                swath_width_km=uncov_opp.swath_width_km,
+                                scene_length_km=uncov_opp.scene_length_km,
+                            )
+                            schedule.append(uncov_scheduled)
+                            scheduled_targets.add(uncov_target)
+                            if uncov_sat not in scheduled_items_by_sat:
+                                scheduled_items_by_sat[uncov_sat] = []
+                            scheduled_items_by_sat[uncov_sat].append(
+                                (uncov_start, uncov_end, uncov_scheduled)
+                            )
+
+                            # 3. Add blocker's target on alternative satellite
+                            alt_density = alt_opp.value / 1.0 if True else float("inf")
+                            alt_scheduled = ScheduledOpportunity(
+                                opportunity_id=alt_opp.id,
+                                satellite_id=alt_opp.satellite_id,
+                                target_id=alt_opp.target_id,
+                                start_time=alt_start,
+                                end_time=alt_end,
+                                delta_roll=0,
+                                delta_pitch=0,
+                                roll_angle=alt_opp.incidence_angle or 0,
+                                pitch_angle=alt_opp.pitch_angle or 0,
+                                maneuver_time=0,
+                                slack_time=0,
+                                value=alt_opp.value,
+                                density=alt_density,
+                                incidence_angle=alt_opp.incidence_angle,
+                                mission_mode=alt_opp.mission_mode,
+                                sar_mode=alt_opp.sar_mode,
+                                look_side=alt_opp.look_side,
+                                pass_direction=alt_opp.pass_direction,
+                                incidence_center_deg=alt_opp.incidence_center_deg,
+                                swath_width_km=alt_opp.swath_width_km,
+                                scene_length_km=alt_opp.scene_length_km,
+                            )
+                            schedule.append(alt_scheduled)
+                            scheduled_targets.add(blocker_target)
+                            if alt_sat not in scheduled_items_by_sat:
+                                scheduled_items_by_sat[alt_sat] = []
+                            scheduled_items_by_sat[alt_sat].append(
+                                (alt_start, alt_end, alt_scheduled)
+                            )
+
+                            logger.info(
+                                f"[roll_pitch_best_fit] Coverage swap: "
+                                f"moved {blocker_target} from {uncov_sat} to {alt_sat}, "
+                                f"added {uncov_target} on {uncov_sat}"
+                            )
+                            swap_done = True
+                            break
+
+            final_uncovered = all_target_ids - scheduled_targets
+            if final_uncovered:
+                logger.info(
+                    f"[roll_pitch_best_fit] After coverage improvement: "
+                    f"still uncovered: {sorted(final_uncovered)}"
+                )
+            else:
+                logger.info(
+                    "[roll_pitch_best_fit] Coverage improvement: all targets now covered"
+                )
+
         # Sort schedule chronologically
         schedule.sort(key=lambda x: x.start_time)
 
@@ -1926,255 +2166,6 @@ class MissionScheduler:
         avg_value = total_scheduled_value / len(schedule) if schedule else 0.0
         logger.info(
             f"[best_fit] Summary: {len(scheduled_targets)} targets scheduled (value-priority, total={total_scheduled_value:.2f}, avg={avg_value:.3f})"
-        )
-        return schedule
-
-    def _optimal(
-        self,
-        opportunities: List[Opportunity],
-        target_positions: Dict[str, Tuple[float, float]],
-    ) -> List[ScheduledOpportunity]:
-        """
-        Optimal Integer Linear Programming algorithm.
-
-        Finds the best opportunity for each target to minimize total maneuver time,
-        considering pairwise transition costs in chronological order.
-
-        This formulation accounts for sequencing by modeling transitions between
-        chronologically adjacent opportunities.
-        """
-        try:
-            from pulp import (  # type: ignore[import-untyped]
-                LpMinimize,
-                LpProblem,
-                LpStatus,
-                LpVariable,
-                lpSum,
-                value,
-            )
-        except ImportError:
-            logger.error("PuLP library not installed. Run: pip install pulp")
-            raise ImportError(
-                "PuLP is required for optimal scheduling. Install with: pip install pulp"
-            )
-
-        # Group opportunities by target
-        target_opps: Dict[str, List[Tuple[int, Opportunity]]] = {}
-        for i, opp in enumerate(opportunities):
-            if opp.target_id not in target_opps:
-                target_opps[opp.target_id] = []
-            target_opps[opp.target_id].append((i, opp))
-
-        n_targets = len(target_opps)
-        n_opps = len(opportunities)
-        logger.info(
-            f"[optimal] Solving for {n_targets} targets with {n_opps} opportunities..."
-        )
-
-        # Sort opportunities chronologically - this is the order they'll be scheduled
-        sorted_indices = sorted(
-            range(n_opps), key=lambda i: opportunities[i].start_time
-        )
-
-        # Compute pairwise transition costs for chronologically adjacent opportunities
-        logger.info(f"[optimal] Computing pairwise transition costs...")
-        transition_costs: Dict[Tuple[Optional[int], int], float] = {}
-
-        for idx in range(len(sorted_indices)):
-            i = sorted_indices[idx]
-            opp_i = opportunities[i]
-
-            if idx == 0:
-                # First opportunity: cost is maneuver from nadir
-                _, man_time, _, _, _, _, _ = self.kernel.is_feasible(
-                    None, opp_i, target_positions
-                )
-                transition_costs[(None, i)] = man_time
-            else:
-                # Transition from previous opportunity in chronological order
-                prev_idx = sorted_indices[idx - 1]
-                opp_prev = opportunities[prev_idx]
-
-                # Create temporary scheduled opportunity for previous
-                _, man_prev, _, _, _, roll_prev, pitch_prev = self.kernel.is_feasible(
-                    None, opp_prev, target_positions
-                )
-                temp_prev = ScheduledOpportunity(
-                    opportunity_id=opp_prev.id,
-                    satellite_id=opp_prev.satellite_id,
-                    target_id=opp_prev.target_id,
-                    start_time=opp_prev.start_time,
-                    end_time=opp_prev.end_time,
-                    delta_roll=0,
-                    delta_pitch=0,
-                    roll_angle=roll_prev,
-                    pitch_angle=pitch_prev,
-                    maneuver_time=man_prev,
-                    slack_time=0,
-                    value=opp_prev.value,
-                    density=0,
-                    incidence_angle=opp_prev.incidence_angle,
-                )
-
-                # Check feasibility of transition
-                is_feas, man_time, _, _, _, _, _ = self.kernel.is_feasible(
-                    temp_prev, opp_i, target_positions
-                )
-
-                if is_feas:
-                    transition_costs[(prev_idx, i)] = man_time
-                else:
-                    # Infeasible transition - use large penalty
-                    transition_costs[(prev_idx, i)] = 1000.0
-
-        # Create ILP problem
-        logger.info(f"[optimal] Setting up ILP...")
-        prob = LpProblem("Satellite_Scheduling", LpMinimize)
-
-        # Decision variables: x[i] = 1 if opportunity i is selected
-        x = {i: LpVariable(f"x_{i}", cat="Binary") for i in range(n_opps)}
-
-        # Build objective: sum of transition costs for selected opportunities
-        # For each pair of consecutive opportunities in chronological order,
-        # if both are selected, add their transition cost
-        objective_terms = []
-
-        # First opportunity cost (from nadir)
-        first_idx = sorted_indices[0]
-        if (None, first_idx) in transition_costs:
-            objective_terms.append(x[first_idx] * transition_costs[(None, first_idx)])
-
-        # Subsequent transition costs
-        for idx in range(1, len(sorted_indices)):
-            i = sorted_indices[idx]
-            prev_idx = sorted_indices[idx - 1]
-
-            if (prev_idx, i) in transition_costs:
-                # If both prev and current are selected, add transition cost
-                # Use linearization: cost * x[prev] * x[i] ≈ cost * x[i] (assuming most are selected)
-                # Better approximation: just use x[i] * cost as a proxy
-                objective_terms.append(x[i] * transition_costs[(prev_idx, i)])
-
-        prob += lpSum(objective_terms)
-
-        # Constraint: Exactly one opportunity per target
-        for target_id, opps in target_opps.items():
-            prob += lpSum([x[i] for i, _ in opps]) == 1, f"one_per_target_{target_id}"
-
-        # Solve
-        logger.info(f"[optimal] Solving ILP...")
-        prob.solve()
-
-        status = LpStatus[prob.status]
-        logger.info(f"[optimal] ILP Status: {status}")
-
-        if status != "Optimal":
-            logger.warning(
-                f"[optimal] Could not find optimal solution. Using first_fit fallback."
-            )
-            return self._first_fit(opportunities, target_positions)
-
-        # Extract solution
-        selected_indices = [i for i in range(n_opps) if value(x[i]) > 0.5]
-        selected_opps = [opportunities[i] for i in selected_indices]
-
-        logger.info(f"[optimal] ILP selected {len(selected_opps)} opportunities")
-
-        # Build schedule chronologically with real feasibility checks
-        schedule = []
-        last_scheduled = None
-        skipped = []
-
-        for opp in sorted(selected_opps, key=lambda o: o.start_time):
-            (
-                is_feasible,
-                maneuver_time,
-                slack,
-                delta_roll,
-                delta_pitch,
-                roll_angle,
-                pitch_angle,
-            ) = self.kernel.is_feasible(last_scheduled, opp, target_positions)
-
-            if is_feasible:
-                # Determine side indicator
-                side_indicator = "R" if roll_angle >= 0 else "L"
-                incidence = (
-                    abs(opp.incidence_angle) if opp.incidence_angle is not None else 0.0
-                )
-
-                logger.info(
-                    f"[SCHEDULE] Opp {opp.id}: target={opp.target_id}, "
-                    f"incidence={incidence:.2f}°, "
-                    f"roll={roll_angle:+.2f}° ({side_indicator}), "
-                    f"delta=({delta_roll:.2f}°, {delta_pitch:.2f}°), "
-                    f"maneuver={maneuver_time:.2f}s, slack={slack:.1f}s"
-                )
-
-                density = (
-                    opp.value / maneuver_time if maneuver_time > 0 else float("inf")
-                )
-                imaging_start = opp.start_time
-                imaging_end = imaging_start + timedelta(
-                    seconds=self.config.imaging_time_s
-                )
-
-                sat_lat, sat_lon, sat_alt = None, None, None
-                sat_obj = self._get_satellite_for_opportunity(opp.satellite_id)
-                if sat_obj:
-                    try:
-                        maneuver_start_time = imaging_start - timedelta(
-                            seconds=maneuver_time
-                        )
-                        sat_lat, sat_lon, sat_alt = sat_obj.get_position(
-                            maneuver_start_time
-                        )
-                    except Exception as e:
-                        logger.warning(f"Could not get satellite position: {e}")
-
-                scheduled = ScheduledOpportunity(
-                    opportunity_id=opp.id,
-                    satellite_id=opp.satellite_id,
-                    target_id=opp.target_id,
-                    start_time=imaging_start,
-                    end_time=imaging_end,
-                    delta_roll=delta_roll,
-                    delta_pitch=delta_pitch,
-                    roll_angle=roll_angle,
-                    pitch_angle=pitch_angle,
-                    maneuver_time=maneuver_time,
-                    slack_time=slack,
-                    value=opp.value,
-                    density=density,
-                    incidence_angle=opp.incidence_angle,
-                    satellite_lat=sat_lat,
-                    satellite_lon=sat_lon,
-                    satellite_alt=sat_alt,
-                    # SAR-specific fields (copied from Opportunity)
-                    mission_mode=opp.mission_mode,
-                    sar_mode=opp.sar_mode,
-                    look_side=opp.look_side,
-                    pass_direction=opp.pass_direction,
-                    incidence_center_deg=opp.incidence_center_deg,
-                    swath_width_km=opp.swath_width_km,
-                    scene_length_km=opp.scene_length_km,
-                )
-                schedule.append(scheduled)
-                last_scheduled = scheduled
-            else:
-                skipped.append(opp.target_id)
-                logger.warning(
-                    f"[optimal] Selected {opp.target_id} is infeasible, skipping"
-                )
-
-        if skipped:
-            logger.warning(
-                f"[optimal] Skipped {len(skipped)} infeasible opportunities: {skipped}"
-            )
-
-        total_maneuver = sum(s.maneuver_time for s in schedule)
-        logger.info(
-            f"[optimal] Built schedule with {len(schedule)}/{n_targets} targets, maneuver: {total_maneuver:.1f}s"
         )
         return schedule
 
