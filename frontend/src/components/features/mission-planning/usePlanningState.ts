@@ -54,13 +54,6 @@ export const WEIGHT_PRESETS: Record<
     label: 'Urgent',
     desc: 'Time-critical collection',
   },
-  archival: {
-    priority: 10,
-    geometry: 80,
-    timing: 10,
-    label: 'Archival',
-    desc: 'Best quality for archive',
-  },
 }
 
 export const ALGORITHMS = [

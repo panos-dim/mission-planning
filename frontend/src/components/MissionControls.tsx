@@ -10,6 +10,10 @@ import { useManagedSatellites } from '../hooks/queries'
 import { useSatelliteSelectionStore, toTLEDataArray } from '../store/satelliteSelectionStore'
 import { usePreFeasibilityOrdersStore } from '../store/preFeasibilityOrdersStore'
 import { useTargetAddStore } from '../store/targetAddStore'
+import { usePlanningStore } from '../store/planningStore'
+import { useSlewVisStore } from '../store/slewVisStore'
+import { useVisStore } from '../store/visStore'
+import { RIGHT_SIDEBAR_PANELS } from '../constants/simpleMode'
 
 // Governance indicator component
 const GovernanceIndicator: React.FC = () => {
@@ -169,10 +173,16 @@ const MissionControls: React.FC = () => {
     }
 
     await analyzeMission(missionData)
+    // Auto-open the right sidebar to Feasibility Results after analysis completes
+    useVisStore.getState().openRightPanel(RIGHT_SIDEBAR_PANELS.MISSION_RESULTS)
   }
 
   const handleClearMission = () => {
     clearMission()
+    // Also clear planning results so the planning panel resets too
+    usePlanningStore.getState().clearResults()
+    useSlewVisStore.getState().setActiveSchedule(null)
+    useSlewVisStore.getState().setEnabled(false)
     // Reset mission-specific fields but KEEP satellite selection —
     // satellites come from admin config and persist in satelliteSelectionStore
     setFormData((prev) => ({

@@ -41,7 +41,17 @@ const RightSidebar: React.FC = () => {
     setRightSidebarOpen,
     rightSidebarWidth,
     setRightSidebarWidth,
+    requestedRightPanel,
+    clearRequestedRightPanel,
   } = useVisStore()
+
+  // Imperative open: triggered by other panels (e.g. after feasibility analysis completes)
+  useEffect(() => {
+    if (!requestedRightPanel) return
+    setActivePanel(requestedRightPanel)
+    setIsPanelOpen(true)
+    clearRequestedRightPanel()
+  }, [requestedRightPanel, clearRequestedRightPanel])
 
   // Sync panel state to global store
   useEffect(() => {

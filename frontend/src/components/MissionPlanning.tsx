@@ -114,13 +114,6 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
       label: 'Urgent',
       desc: 'Time-critical collection',
     },
-    archival: {
-      priority: 10,
-      geometry: 80,
-      timing: 10,
-      label: 'Archival',
-      desc: 'Best quality for archive',
-    },
   }
 
   // Scoring strategy state (weight presets — planner-facing)
@@ -158,6 +151,20 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
   const [results, setResults] = useState<Record<string, AlgorithmResult> | null>(null)
   const [isPlanning, setIsPlanning] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Sync local results with planning store — when store is cleared externally
+  // (e.g. from Clear Mission button or after schedule commit), clear local state too
+  const storeResults = usePlanningStore((s) => s.results)
+  useEffect(() => {
+    if (storeResults === null && results !== null) {
+      setResults(null)
+      setRepairResult(null)
+      setError(null)
+      setSchedulingReasoning(null)
+      setActiveSchedule(null)
+      setSlewVisEnabled(false)
+    }
+  }, [storeResults]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Pagination state for results table (per UX_MINIMAL_SPEC: paginate if >50 rows)
   const [currentPage, setCurrentPage] = useState(1)

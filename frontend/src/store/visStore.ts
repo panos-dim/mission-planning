@@ -78,6 +78,11 @@ interface VisStore {
   setLayerVisibility: (layer: keyof LayerVisibility, visible: boolean) => void
   setCameraPosition: (position: any) => void
 
+  // Imperative panel open signal — consumed once by RightSidebar
+  requestedRightPanel: string | null
+  openRightPanel: (panelId: string) => void
+  clearRequestedRightPanel: () => void
+
   // Bulk updates for initialization
   initializeLayers: (layers: Partial<LayerVisibility>) => void
 }
@@ -130,6 +135,8 @@ export const useVisStore = create<VisStore>()(
       },
       cameraPosition: null,
 
+      requestedRightPanel: null,
+
       // Actions
       setLeftSidebarOpen: (open) => set({ leftSidebarOpen: open }),
       setRightSidebarOpen: (open) => set({ rightSidebarOpen: open }),
@@ -179,6 +186,9 @@ export const useVisStore = create<VisStore>()(
         })),
 
       setCameraPosition: (position) => set({ cameraPosition: position }),
+
+      openRightPanel: (panelId) => set({ requestedRightPanel: panelId }),
+      clearRequestedRightPanel: () => set({ requestedRightPanel: null }),
 
       initializeLayers: (layers) =>
         set((state) => ({
