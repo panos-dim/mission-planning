@@ -45,6 +45,12 @@ interface ScheduleState {
   focusedAcquisitionId: string | null
   focusedTargetCoords: { lat: number; lon: number } | null
   focusedStartTime: string | null
+  focusedSatelliteId: string | null
+
+  // Schedule viewer layer toggles (visual-only, no schedule filtering)
+  schedLayerSatellites: boolean
+  schedLayerGroundtracks: boolean
+  schedLayerHighlight: boolean
 
   // Polling state (PR-UI-030)
   pollingWorkspaceId: string | null
@@ -86,6 +92,12 @@ interface ScheduleActions {
   /** Stop live polling and clean up listeners. */
   stopPolling: () => void
 
+  /**
+   * Toggle a schedule-view visual layer.
+   * These are viewer-only and do NOT affect schedule timeline contents.
+   */
+  setSchedLayer: (key: 'satellites' | 'groundtracks' | 'highlight', visible: boolean) => void
+
   /** Clear all data */
   reset: () => void
 }
@@ -110,6 +122,10 @@ const INITIAL_STATE: ScheduleState = {
   focusedAcquisitionId: null,
   focusedTargetCoords: null,
   focusedStartTime: null,
+  focusedSatelliteId: null,
+  schedLayerSatellites: true,
+  schedLayerGroundtracks: true,
+  schedLayerHighlight: true,
   pollingWorkspaceId: null,
   pollingIntervalMs: 15000,
 }
@@ -184,25 +200,45 @@ export const useScheduleStore = create<ScheduleStore>()(
       focusAcquisition: (id, overrides) => {
         if (!id) {
           set(
-            { focusedAcquisitionId: null, focusedTargetCoords: null, focusedStartTime: null },
+            {
+              focusedAcquisitionId: null,
+              focusedTargetCoords: null,
+              focusedStartTime: null,
+              focusedSatelliteId: null,
+            },
             false,
             'focusAcquisition/clear',
           )
           return
         }
 
-        // Resolve coords and start time from loaded items; fall back to overrides
+        // Resolve coords, start time, and satellite ID from loaded items; fall back to overrides
         const item = get().items.find((i) => i.id === id)
         const lat = overrides?.lat ?? item?.target_lat
         const lon = overrides?.lon ?? item?.target_lon
         const startTime = overrides?.startTime ?? item?.start_time ?? null
         const coords = lat != null && lon != null ? { lat, lon } : null
+        const satelliteId = item?.satellite_id ?? null
 
         set(
-          { focusedAcquisitionId: id, focusedTargetCoords: coords, focusedStartTime: startTime },
+          {
+            focusedAcquisitionId: id,
+            focusedTargetCoords: coords,
+            focusedStartTime: startTime,
+            focusedSatelliteId: satelliteId,
+          },
           false,
           'focusAcquisition',
         )
+      },
+
+      setSchedLayer: (key, visible) => {
+        const keyMap = {
+          satellites: 'schedLayerSatellites',
+          groundtracks: 'schedLayerGroundtracks',
+          highlight: 'schedLayerHighlight',
+        } as const
+        set({ [keyMap[key]]: visible }, false, `setSchedLayer/${key}`)
       },
 
       startPolling: (workspaceId, intervalMs = 15000) => {

@@ -37,6 +37,8 @@ import SlewVisualizationLayer from './SlewVisualizationLayer'
 import { SlewCanvasOverlay } from './SlewCanvasOverlay'
 import SwathDebugOverlay from './SwathDebugOverlay'
 import SatelliteColorLegend from './SatelliteColorLegend'
+import ScheduleSatelliteLayers from './ScheduleSatelliteLayers'
+import { useScheduleSatelliteLayers } from './hooks'
 // LockModeButton is now integrated into MapControls strip
 import MapControls from './MapControls'
 import SelectionIndicator from './SelectionIndicator'
@@ -128,6 +130,9 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
   const imageryReplacedRef = useRef(false)
   // Loaded CZML DataSource — set from onLoad callback to guarantee availability
   const [loadedDataSource, setLoadedDataSource] = useState<DataSource | null>(null)
+
+  // PR-UI-031: Schedule satellite layers — manage entity visibility for schedule view
+  useScheduleSatelliteLayers(viewerRef, loadedDataSource)
 
   // Create OSM provider immediately (needed as emergency fallback)
   const [osmProvider] = useState(() => {
@@ -1687,6 +1692,9 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
 
       {/* Satellite color legend (PR-UI-026) */}
       {viewportId === 'primary' && <SatelliteColorLegend />}
+
+      {/* Schedule satellite layer toggles (PR-UI-031) */}
+      {viewportId === 'primary' && <ScheduleSatelliteLayers />}
     </div>
   )
 }
