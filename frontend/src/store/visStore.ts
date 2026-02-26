@@ -6,6 +6,17 @@ export type SceneMode = '2D' | '3D'
 export type ViewMode = 'single' | 'split'
 export type UIMode = 'simple' | 'developer'
 
+/** Minimal camera state snapshot for cross-viewport synchronisation */
+export interface CameraState {
+  position: number[]
+  direction: number[]
+  up: number[]
+  right?: number[]
+  heading?: number
+  pitch?: number
+  roll?: number
+}
+
 interface LayerVisibility {
   // Entity layers
   orbitLine: boolean
@@ -57,7 +68,7 @@ interface VisStore {
   activeLayers: LayerVisibility
 
   // Camera synchronization
-  cameraPosition: any | null // Will hold camera state for sync
+  cameraPosition: CameraState | null
 
   // Actions
   setLeftSidebarOpen: (open: boolean) => void
@@ -73,10 +84,12 @@ interface VisStore {
   setClockTime: (time: JulianDate | null) => void
   setClockState: (time: JulianDate | null, shouldAnimate: boolean, multiplier: number) => void
   setTimeWindow: (start: JulianDate | null, stop: JulianDate | null) => void
+  /** Convenience: set timeline window + clock from ISO strings (for schedule → Cesium sync) */
+  setTimeRangeFromIso: (start: string, stop: string) => void
   setSelectedOpportunity: (id: string | null) => void
   toggleLayer: (layer: keyof LayerVisibility) => void
   setLayerVisibility: (layer: keyof LayerVisibility, visible: boolean) => void
-  setCameraPosition: (position: any) => void
+  setCameraPosition: (position: CameraState | null) => void
 
   // Imperative panel open signal — consumed once by RightSidebar
   requestedRightPanel: string | null
@@ -167,6 +180,11 @@ export const useVisStore = create<VisStore>()(
         set({
           timeWindow: { start, stop },
         }),
+      setTimeRangeFromIso: (start, stop) => {
+        const startJd = JulianDate.fromIso8601(start)
+        const stopJd = JulianDate.fromIso8601(stop)
+        set({ timeWindow: { start: startJd, stop: stopJd }, clockTime: startJd })
+      },
       setSelectedOpportunity: (id) => set({ selectedOpportunityId: id }),
 
       toggleLayer: (layer) =>
@@ -185,7 +203,7 @@ export const useVisStore = create<VisStore>()(
           },
         })),
 
-      setCameraPosition: (position) => set({ cameraPosition: position }),
+      setCameraPosition: (position: CameraState | null) => set({ cameraPosition: position }),
 
       openRightPanel: (panelId) => set({ requestedRightPanel: panelId }),
       clearRequestedRightPanel: () => set({ requestedRightPanel: null }),

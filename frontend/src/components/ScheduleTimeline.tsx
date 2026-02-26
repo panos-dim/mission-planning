@@ -6,7 +6,18 @@
  */
 
 import React, { useMemo, useCallback, useRef, useState, useEffect, memo } from 'react'
-import { Clock, MapPin, X, Lock, Filter, Shield, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
+import {
+  Clock,
+  MapPin,
+  X,
+  Lock,
+  Filter,
+  Shield,
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
+  Satellite,
+} from 'lucide-react'
 import { useSelectionStore } from '../store/selectionStore'
 import { useLockStore } from '../store/lockStore'
 import type { LockLevel } from '../api/scheduleApi'
@@ -32,20 +43,27 @@ export interface ScheduledAcquisition {
   repair_reason?: string
   satellite_name?: string // PR-UI-021: Display name (fallback: satellite_id)
   off_nadir_deg?: number // PR-UI-021: Off-nadir angle in degrees
+  target_lat?: number // PR-UI-030: Target geo for map fly-to
+  target_lon?: number // PR-UI-030: Target geo for map fly-to
 }
 
 interface ScheduleTimelineProps {
   acquisitions: ScheduledAcquisition[]
   onFocusAcquisition?: (id: string) => void
+  /** PR-UI-030: Full acquisition passed back for Cesium sync */
+  onSelectAcquisition?: (acq: ScheduledAcquisition) => void
   /** PR-LOCK-OPS-01: Callback when user toggles lock on a card */
   onLockToggle?: (acquisitionId: string) => void
   /** PR-UI-006: Mission time window for axis bounds */
   missionStartTime?: string
   missionEndTime?: string
+  /** PR-UI-030: Fires (debounced) when the visible range changes — for Cesium timeline sync */
+  onViewRangeChange?: (minMs: number, maxMs: number) => void
 }
 
 interface TimelineFilters {
   target: string | null
+  satellite: string | null
   lockedOnly: boolean
 }
 
@@ -60,6 +78,7 @@ interface TargetLaneData {
 
 const DEFAULT_FILTERS: TimelineFilters = {
   target: null,
+  satellite: null,
   lockedOnly: false,
 }
 
@@ -215,11 +234,12 @@ interface FilterChipsProps {
   onFilterChange: (updates: Partial<TimelineFilters>) => void
   onClearAll: () => void
   targets: string[]
+  satellites: string[]
 }
 
 const FilterChips: React.FC<FilterChipsProps> = memo(
-  ({ filters, onFilterChange, onClearAll, targets }) => {
-    const hasActive = filters.target !== null || filters.lockedOnly
+  ({ filters, onFilterChange, onClearAll, targets, satellites }) => {
+    const hasActive = filters.target !== null || filters.satellite !== null || filters.lockedOnly
 
     return (
       <div className="flex flex-wrap items-center gap-1.5 px-3 py-2 border-b border-gray-700/50 bg-gray-900/50">
@@ -230,6 +250,16 @@ const FilterChips: React.FC<FilterChipsProps> = memo(
             value={filters.target}
             options={targets}
             onChange={(v) => onFilterChange({ target: v })}
+          />
+        )}
+
+        {satellites.length > 1 && (
+          <ChipSelect
+            label="Satellite"
+            icon={<Satellite size={11} />}
+            value={filters.satellite}
+            options={satellites}
+            onChange={(v) => onFilterChange({ satellite: v })}
           />
         )}
 
@@ -491,7 +521,7 @@ const TargetLane: React.FC<TargetLaneProps> = memo(
               <div
                 key={acq.id}
                 data-acquisition-id={acq.id}
-                className={`absolute top-1 bottom-1 rounded-sm border cursor-pointer transition-all ${barColor} ${selectedRing} ${lockedBorder}`}
+                className={`absolute top-1 bottom-1 rounded-sm border cursor-pointer transition-all overflow-hidden ${barColor} ${selectedRing} ${lockedBorder}`}
                 style={{
                   left: `${leftPct}%`,
                   width: `max(${MIN_BAR_WIDTH_PX}px, ${widthPct}%)`,
@@ -501,6 +531,12 @@ const TargetLane: React.FC<TargetLaneProps> = memo(
                 onMouseLeave={handleMouseLeave}
                 onDoubleClick={() => onLockToggle?.(acq.id)}
               >
+                {/* PR-UI-030: Satellite name badge — only when bar is wide enough */}
+                {widthPct > 3 && (acq.satellite_name || acq.satellite_id) && (
+                  <span className="absolute inset-0 flex items-center pl-1 text-[9px] font-medium text-white/80 truncate pointer-events-none leading-none">
+                    {acq.satellite_name || acq.satellite_id}
+                  </span>
+                )}
                 {/* Lock indicator */}
                 {isLocked && (
                   <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full flex items-center justify-center">
@@ -524,9 +560,11 @@ TargetLane.displayName = 'TargetLane'
 export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
   acquisitions,
   onFocusAcquisition,
+  onSelectAcquisition,
   onLockToggle,
   missionStartTime,
   missionEndTime,
+  onViewRangeChange,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null)
   const [tooltipData, setTooltipData] = useState<TooltipData | null>(null)
@@ -559,11 +597,22 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
     [acquisitions],
   )
 
+  const uniqueSatellites = useMemo(
+    () =>
+      [...new Set(acquisitions.map((a) => a.satellite_name || a.satellite_id))]
+        .filter(Boolean)
+        .sort(),
+    [acquisitions],
+  )
+
   // Filtered acquisitions (memoized)
   const filteredAcquisitions = useMemo(() => {
     let result = acquisitions
     if (filters.target) {
       result = result.filter((a) => a.target_id === filters.target)
+    }
+    if (filters.satellite) {
+      result = result.filter((a) => (a.satellite_name || a.satellite_id) === filters.satellite)
     }
     if (filters.lockedOnly) {
       result = result.filter((a) => a.lock_level === 'hard')
@@ -738,9 +787,23 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
     (id: string) => {
       selectAcquisition(id, 'timeline')
       onFocusAcquisition?.(id)
+      // PR-UI-030: pass full item back for Cesium timeline + camera sync
+      const acq = acquisitions.find((a) => a.id === id)
+      if (acq) onSelectAcquisition?.(acq)
     },
-    [selectAcquisition, onFocusAcquisition],
+    [selectAcquisition, onFocusAcquisition, onSelectAcquisition, acquisitions],
   )
+
+  // PR-UI-030: Notify parent of viewRange changes (debounced) for Cesium timeline sync
+  const onViewRangeChangeRef = useRef(onViewRangeChange)
+  onViewRangeChangeRef.current = onViewRangeChange
+  useEffect(() => {
+    if (!onViewRangeChangeRef.current) return
+    const id = setTimeout(() => {
+      onViewRangeChangeRef.current?.(viewRange.min, viewRange.max)
+    }, 300)
+    return () => clearTimeout(id)
+  }, [viewRange.min, viewRange.max])
 
   // Tooltip hover handler
   const handleHover = useCallback((data: TooltipData | null) => {
@@ -780,6 +843,7 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
         onFilterChange={handleFilterChange}
         onClearAll={handleClearFilters}
         targets={uniqueTargets}
+        satellites={uniqueSatellites}
       />
 
       {/* Filters-hide-all edge state */}

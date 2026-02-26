@@ -7,6 +7,7 @@
  * - Fetched master schedule data
  * - Selected acquisition for map focus
  * - Loading / error state
+ * - Live polling (PR-UI-030)
  */
 
 import { create } from 'zustand'
@@ -43,6 +44,11 @@ interface ScheduleState {
   // Selection (for map sync)
   focusedAcquisitionId: string | null
   focusedTargetCoords: { lat: number; lon: number } | null
+  focusedStartTime: string | null
+
+  // Polling state (PR-UI-030)
+  pollingWorkspaceId: string | null
+  pollingIntervalMs: number
 }
 
 interface ScheduleActions {
@@ -60,8 +66,25 @@ interface ScheduleActions {
   /** Set zoom mode */
   setZoom: (zoom: MasterZoom) => void
 
-  /** Focus an acquisition (triggers map fly-to) */
-  focusAcquisition: (id: string | null) => void
+  /**
+   * Focus an acquisition (triggers map fly-to + clock sync).
+   * Coords/startTime are resolved from loaded items; pass overrides when
+   * calling from orders-derived data where items may not be loaded yet.
+   */
+  focusAcquisition: (
+    id: string | null,
+    overrides?: { startTime?: string; lat?: number; lon?: number },
+  ) => void
+
+  /**
+   * Start live polling the master schedule every `intervalMs` ms.
+   * Pauses automatically when the document is hidden; resumes when visible.
+   * Safe to call multiple times — stops any previous polling first.
+   */
+  startPolling: (workspaceId: string, intervalMs?: number) => void
+
+  /** Stop live polling and clean up listeners. */
+  stopPolling: () => void
 
   /** Clear all data */
   reset: () => void
@@ -86,6 +109,27 @@ const INITIAL_STATE: ScheduleState = {
   lastFetchedAt: null,
   focusedAcquisitionId: null,
   focusedTargetCoords: null,
+  focusedStartTime: null,
+  pollingWorkspaceId: null,
+  pollingIntervalMs: 15000,
+}
+
+// =============================================================================
+// Module-level refs for polling (outside Zustand state to avoid re-renders)
+// =============================================================================
+
+let _pollingTimerId: ReturnType<typeof setInterval> | null = null
+let _visibilityHandler: (() => void) | null = null
+
+function _clearPolling() {
+  if (_pollingTimerId !== null) {
+    clearInterval(_pollingTimerId)
+    _pollingTimerId = null
+  }
+  if (_visibilityHandler !== null) {
+    document.removeEventListener('visibilitychange', _visibilityHandler)
+    _visibilityHandler = null
+  }
 }
 
 // =============================================================================
@@ -137,31 +181,68 @@ export const useScheduleStore = create<ScheduleStore>()(
         set({ zoom }, false, 'setZoom')
       },
 
-      focusAcquisition: (id) => {
+      focusAcquisition: (id, overrides) => {
         if (!id) {
           set(
-            { focusedAcquisitionId: null, focusedTargetCoords: null },
+            { focusedAcquisitionId: null, focusedTargetCoords: null, focusedStartTime: null },
             false,
             'focusAcquisition/clear',
           )
           return
         }
 
-        // Find coordinates from items
+        // Resolve coords and start time from loaded items; fall back to overrides
         const item = get().items.find((i) => i.id === id)
-        const coords =
-          item?.target_lat != null && item?.target_lon != null
-            ? { lat: item.target_lat, lon: item.target_lon }
-            : null
+        const lat = overrides?.lat ?? item?.target_lat
+        const lon = overrides?.lon ?? item?.target_lon
+        const startTime = overrides?.startTime ?? item?.start_time ?? null
+        const coords = lat != null && lon != null ? { lat, lon } : null
 
         set(
-          { focusedAcquisitionId: id, focusedTargetCoords: coords },
+          { focusedAcquisitionId: id, focusedTargetCoords: coords, focusedStartTime: startTime },
           false,
           'focusAcquisition',
         )
       },
 
+      startPolling: (workspaceId, intervalMs = 15000) => {
+        _clearPolling()
+
+        set(
+          { pollingWorkspaceId: workspaceId, pollingIntervalMs: intervalMs },
+          false,
+          'startPolling',
+        )
+
+        const tick = () => {
+          if (document.hidden) return
+          const { tStart, tEnd, zoom } = get()
+          get().fetchMaster({
+            workspace_id: workspaceId,
+            t_start: tStart ?? undefined,
+            t_end: tEnd ?? undefined,
+            zoom,
+          })
+        }
+
+        // Visibility-aware resume: restart interval when tab becomes visible
+        _visibilityHandler = () => {
+          if (!document.hidden) {
+            tick()
+          }
+        }
+        document.addEventListener('visibilitychange', _visibilityHandler)
+
+        _pollingTimerId = setInterval(tick, intervalMs)
+      },
+
+      stopPolling: () => {
+        _clearPolling()
+        set({ pollingWorkspaceId: null }, false, 'stopPolling')
+      },
+
       reset: () => {
+        _clearPolling()
         set(INITIAL_STATE, false, 'reset')
       },
     }),

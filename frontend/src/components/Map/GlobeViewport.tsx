@@ -46,6 +46,7 @@ import { useLockStore } from '../../store/lockStore'
 import { useOrdersStore } from '../../store/ordersStore'
 import { usePlanningStore } from '../../store/planningStore'
 import { getScheduleTargetLocations } from '../../api/scheduleApi'
+import { useScheduleStore } from '../../store/scheduleStore'
 import debug from '../../utils/debug'
 import { registerSatellites, getSatColor, getSatColorWithAlpha } from '../../utils/satelliteColors'
 
@@ -181,6 +182,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
     clockMultiplier,
     setClockState,
     setSelectedOpportunity,
+    setClockTime,
   } = useVisStore(
     useShallow((s) => ({
       selectedOpportunityId: s.selectedOpportunityId,
@@ -192,6 +194,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
       clockMultiplier: s.clockMultiplier,
       setClockState: s.setClockState,
       setSelectedOpportunity: s.setSelectedOpportunity,
+      setClockTime: s.setClockTime,
     })),
   )
 
@@ -731,6 +734,39 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
       }
     }
   }, [committedOrders, loadedDataSource, activeLeftPanel])
+
+  // PR-UI-030: Fly camera to focused acquisition target + sync Cesium clock
+  const focusedTargetCoords = useScheduleStore((s) => s.focusedTargetCoords)
+  const focusedStartTime = useScheduleStore((s) => s.focusedStartTime)
+  const focusedAcquisitionId = useScheduleStore((s) => s.focusedAcquisitionId)
+  useEffect(() => {
+    if (!focusedAcquisitionId) return
+    const viewer = viewerRef.current?.cesiumElement
+
+    // Sync Cesium clock cursor to acquisition start time
+    if (focusedStartTime) {
+      try {
+        const t = JulianDate.fromIso8601(focusedStartTime)
+        setClockTime(t)
+      } catch {
+        // invalid ISO — skip
+      }
+    }
+
+    // Fly camera to target location
+    if (viewer?.camera && focusedTargetCoords) {
+      const { lat, lon } = focusedTargetCoords
+      try {
+        viewer.camera.flyTo({
+          destination: Cartesian3.fromDegrees(lon, lat, 1_200_000),
+          duration: 1.5,
+        })
+      } catch {
+        // flyTo not available in certain scene states — ignore
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusedAcquisitionId, focusedTargetCoords, focusedStartTime])
 
   // Smart fallback: Only use OSM if Cesium Ion actually fails
   useEffect(() => {

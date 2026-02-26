@@ -4,7 +4,7 @@
  * Per UX_MINIMAL_SPEC.md Section 3.4
  */
 
-import React, { useState, useMemo, useCallback } from 'react'
+import React, { useState, useMemo, useCallback, useEffect } from 'react'
 import { CheckSquare, History, Clock } from 'lucide-react'
 import AcceptedOrders from './AcceptedOrders'
 import ScheduleTimeline from './ScheduleTimeline'
@@ -13,6 +13,8 @@ import { AcceptedOrder } from '../types'
 import { SCHEDULE_TABS, SIMPLE_MODE_SCHEDULE_TABS } from '../constants/simpleMode'
 import type { ScheduledAcquisition } from './ScheduleTimeline'
 import { useMission } from '../context/MissionContext'
+import { useScheduleStore } from '../store/scheduleStore'
+import { useVisStore } from '../store/visStore'
 
 interface SchedulePanelProps {
   orders: AcceptedOrder[]
@@ -30,6 +32,8 @@ interface Tab {
   badgeColor?: 'red' | 'yellow' | 'green'
 }
 
+const POLL_INTERVAL_MS = 15_000
+
 const SchedulePanel: React.FC<SchedulePanelProps> = ({
   orders,
   onOrdersChange,
@@ -42,6 +46,46 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
   // PR-UI-003: Get imaging_type from mission context for optical/SAR badge
   const { state: missionState } = useMission()
   const imagingType = missionState.missionData?.imaging_type ?? 'optical'
+
+  // PR-UI-030: Master schedule store + Cesium sync
+  const scheduleItems = useScheduleStore((s) => s.items)
+  const startPolling = useScheduleStore((s) => s.startPolling)
+  const stopPolling = useScheduleStore((s) => s.stopPolling)
+  const focusAcquisition = useScheduleStore((s) => s.focusAcquisition)
+  const setTimeRangeFromIso = useVisStore((s) => s.setTimeRangeFromIso)
+
+  // PR-UI-030: Polling lifecycle — start when Timeline tab is visible, stop otherwise
+  const workspaceId = missionState.activeWorkspace
+  useEffect(() => {
+    if (activeTab !== SCHEDULE_TABS.TIMELINE || !workspaceId) {
+      stopPolling()
+      return
+    }
+    startPolling(workspaceId, POLL_INTERVAL_MS)
+    return () => stopPolling()
+  }, [activeTab, workspaceId, startPolling, stopPolling])
+
+  // PR-UI-030: Click-to-focus handler — bridge selection to Cesium
+  const handleSelectAcquisition = useCallback(
+    (acq: ScheduledAcquisition) => {
+      focusAcquisition(acq.id, {
+        startTime: acq.start_time,
+        lat: acq.target_lat,
+        lon: acq.target_lon,
+      })
+    },
+    [focusAcquisition],
+  )
+
+  // PR-UI-030: View range change → sync Cesium timeline window
+  const handleViewRangeChange = useCallback(
+    (minMs: number, maxMs: number) => {
+      const start = new Date(minMs).toISOString()
+      const stop = new Date(maxMs).toISOString()
+      setTimeRangeFromIso(start, stop)
+    },
+    [setTimeRangeFromIso],
+  )
 
   // PR-LOCK-OPS-01: Handle lock toggle from timeline
   const handleLockToggle = useCallback(
@@ -62,7 +106,7 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
     return map
   }, [missionState.missionData?.satellites])
 
-  // PR-OPS-REPAIR-DEFAULT-01: Convert orders to timeline acquisitions
+  // PR-OPS-REPAIR-DEFAULT-01: Convert orders to timeline acquisitions (fallback)
   // PR-LOCK-OPS-01: Merge lock levels from lockStore
   // PR-UI-021: Plumb satellite_name + off_nadir_deg for hover tooltip
   const timelineAcquisitions = useMemo((): ScheduledAcquisition[] => {
@@ -92,6 +136,33 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
     return acquisitions
   }, [orders, lockLevels, imagingType, satelliteNameMap])
 
+  // PR-UI-030: Map master schedule items → ScheduledAcquisition for the Timeline tab.
+  // Used as the primary source when scheduleStore has loaded data; falls back to
+  // orders-derived acquisitions when the store is empty (e.g. no workspace).
+  const masterAcquisitions = useMemo((): ScheduledAcquisition[] => {
+    if (scheduleItems.length === 0) return timelineAcquisitions
+    return scheduleItems.map((item) => ({
+      id: item.id,
+      satellite_id: item.satellite_id,
+      target_id: item.target_id,
+      start_time: item.start_time,
+      end_time: item.end_time,
+      lock_level: (lockLevels.get(item.id) ??
+        item.lock_level ??
+        'none') as ScheduledAcquisition['lock_level'],
+      state: item.state,
+      mode: item.mode,
+      order_id: item.order_id,
+      satellite_name:
+        item.satellite_display_name || satelliteNameMap.get(item.satellite_id) || item.satellite_id,
+      off_nadir_deg:
+        item.off_nadir_deg ??
+        (item.geometry?.roll_deg != null ? Math.abs(item.geometry.roll_deg) : undefined),
+      target_lat: item.target_lat ?? undefined,
+      target_lon: item.target_lon ?? undefined,
+    }))
+  }, [scheduleItems, lockLevels, satelliteNameMap, timelineAcquisitions])
+
   const tabs: Tab[] = [
     {
       id: SCHEDULE_TABS.COMMITTED,
@@ -105,7 +176,7 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
       id: SCHEDULE_TABS.TIMELINE,
       label: 'Timeline',
       icon: Clock,
-      badge: timelineAcquisitions.length > 0 ? timelineAcquisitions.length : undefined,
+      badge: masterAcquisitions.length > 0 ? masterAcquisitions.length : undefined,
       badgeColor: 'green',
     },
   ]
@@ -178,11 +249,13 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
           <AcceptedOrders orders={orders} onOrdersChange={onOrdersChange} />
         )}
 
-        {/* PR-UI-006: Timeline tab with mission time window for axis bounds */}
+        {/* PR-UI-006 / PR-UI-030: Timeline tab — uses live master schedule + Cesium sync */}
         {activeTab === SCHEDULE_TABS.TIMELINE && (
           <ScheduleTimeline
-            acquisitions={timelineAcquisitions}
+            acquisitions={masterAcquisitions}
             onLockToggle={handleLockToggle}
+            onSelectAcquisition={handleSelectAcquisition}
+            onViewRangeChange={handleViewRangeChange}
             missionStartTime={missionState.missionData?.start_time}
             missionEndTime={missionState.missionData?.end_time}
           />
