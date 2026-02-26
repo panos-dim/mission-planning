@@ -60,17 +60,33 @@ export function useScheduleSatelliteLayers(
 
   // Track which entity IDs we have touched so we can restore them on cleanup.
   const touchedEntityIdsRef = useRef<Set<string>>(new Set())
+  // Track the previous datasource so we can detect identity changes.
+  const prevDataSourceRef = useRef<DataSource | null>(null)
 
   useEffect(() => {
+    // -----------------------------------------------------------------
+    // Datasource identity change: stale touched IDs from a previous
+    // datasource are no longer valid. Clear them so restoration doesn't
+    // apply overrides to a freshly-loaded datasource's entities.
+    // -----------------------------------------------------------------
+    if (loadedDataSource !== prevDataSourceRef.current) {
+      touchedEntityIdsRef.current.clear()
+      prevDataSourceRef.current = loadedDataSource
+    }
+
     if (!loadedDataSource?.entities) return
 
     const entities = loadedDataSource.entities.values
     const viewer = viewerRef.current?.cesiumElement
 
     // -----------------------------------------------------------------
-    // Non-schedule view: restore defaults for any entities we touched
+    // Non-schedule view: restore defaults for any entities we touched.
+    // Guard with size check to avoid a full entity iteration when there
+    // is nothing to restore (common path when CZML first loads).
     // -----------------------------------------------------------------
     if (!isScheduleView) {
+      if (touchedEntityIdsRef.current.size === 0) return
+
       entities.forEach((entity: Entity) => {
         const id = entity.id ?? ''
         if (!touchedEntityIdsRef.current.has(id)) return
@@ -96,6 +112,7 @@ export function useScheduleSatelliteLayers(
           }
         }
       })
+
       touchedEntityIdsRef.current.clear()
       viewer?.scene?.requestRender()
       return

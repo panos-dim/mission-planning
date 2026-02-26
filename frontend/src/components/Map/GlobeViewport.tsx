@@ -1693,8 +1693,8 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
       {/* Satellite color legend (PR-UI-026) */}
       {viewportId === 'primary' && <SatelliteColorLegend />}
 
-      {/* Schedule satellite layer toggles (PR-UI-031) */}
-      {viewportId === 'primary' && <ScheduleSatelliteLayers />}
+      {/* Schedule satellite layer toggles (PR-UI-031/032) */}
+      {viewportId === 'primary' && <ScheduleSatelliteLayers loadedDataSource={loadedDataSource} />}
     </div>
   )
 }

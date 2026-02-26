@@ -16,6 +16,7 @@
 
 import React, { useState } from 'react'
 import { Satellite, Route, Crosshair, ChevronDown, ChevronUp } from 'lucide-react'
+import { type DataSource } from 'cesium'
 import { cn } from '../ui/utils'
 import { useScheduleStore } from '../../store/scheduleStore'
 import { useVisStore } from '../../store/visStore'
@@ -100,7 +101,11 @@ function SatRow({ satId, displayName, isFocused }: SatRowProps) {
 // Main component
 // ---------------------------------------------------------------------------
 
-export function ScheduleSatelliteLayers() {
+interface ScheduleSatelliteLayersProps {
+  loadedDataSource?: DataSource | null
+}
+
+export function ScheduleSatelliteLayers({ loadedDataSource = null }: ScheduleSatelliteLayersProps) {
   const activeLeftPanel = useVisStore((s) => s.activeLeftPanel)
   const items = useScheduleStore((s) => s.items)
   const tStart = useScheduleStore((s) => s.tStart)
@@ -114,6 +119,8 @@ export function ScheduleSatelliteLayers() {
   const [expanded, setExpanded] = useState(true)
 
   if (activeLeftPanel !== 'schedule') return null
+
+  const czmlLoaded = loadedDataSource !== null
 
   // Compute unique satellites in the visible window
   const inWindowSats = new Map<string, string>()
@@ -132,6 +139,25 @@ export function ScheduleSatelliteLayers() {
   }
 
   const satList = Array.from(inWindowSats.entries())
+
+  // Dev-mode entity counts (only computed in DEV to avoid runtime cost in prod)
+  let satEntitiesFound = 0
+  let groundtrackEntitiesFound = 0
+  if (import.meta.env.DEV && czmlLoaded && loadedDataSource?.entities) {
+    for (const entity of loadedDataSource.entities.values) {
+      const id = entity.id ?? ''
+      if (id.startsWith('sat_') && !id.includes('ground_track')) satEntitiesFound++
+      if (id.startsWith('sat_') && id.endsWith('_ground_track')) groundtrackEntitiesFound++
+    }
+  }
+
+  // Determine empty-state message:
+  //  - items exist (overall) but CZML missing → tell the user why the globe is empty
+  //  - otherwise → truly no acquisitions in the visible window
+  const showCzmlWarning = !czmlLoaded && items.length > 0
+  const emptyStateMsg = showCzmlWarning
+    ? 'CZML not loaded — run mission analysis first.'
+    : 'No acquisitions in visible window.'
 
   return (
     <div
@@ -181,7 +207,7 @@ export function ScheduleSatelliteLayers() {
             />
           </div>
 
-          {/* Per-satellite list */}
+          {/* Per-satellite list (schedule items exist in window) */}
           {satList.length > 0 && (
             <div className="border-t border-gray-700/50 px-2 py-2">
               <p className="px-1 pb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">
@@ -200,10 +226,34 @@ export function ScheduleSatelliteLayers() {
             </div>
           )}
 
+          {/* CZML-not-loaded warning when satellites are in window but globe has no entities */}
+          {satList.length > 0 && !czmlLoaded && (
+            <div className="border-t border-gray-700/50 px-3 py-2">
+              <p className="text-[11px] text-amber-400/80 text-balance">
+                CZML not loaded — run mission analysis to see globe entities.
+              </p>
+            </div>
+          )}
+
+          {/* Empty state: either CZML missing with items overall, or truly no acquisitions */}
           {satList.length === 0 && (
             <div className="border-t border-gray-700/50 px-3 py-2">
-              <p className="text-[11px] text-gray-500 text-balance">
-                No acquisitions in visible window.
+              <p
+                className={cn(
+                  'text-[11px] text-balance',
+                  showCzmlWarning ? 'text-amber-400/80' : 'text-gray-500',
+                )}
+              >
+                {emptyStateMsg}
+              </p>
+            </div>
+          )}
+
+          {/* Dev-only debug summary */}
+          {import.meta.env.DEV && (
+            <div className="border-t border-gray-700/30 px-2 py-1">
+              <p className="text-[9px] text-gray-600 font-mono leading-tight tabular-nums">
+                {`iw:${satList.length} czml:${czmlLoaded ? 1 : 0} sats:${satEntitiesFound} gt:${groundtrackEntitiesFound}`}
               </p>
             </div>
           )}
