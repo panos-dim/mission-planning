@@ -58,6 +58,8 @@ import {
 import { useMission } from '../../context/MissionContext'
 import { useGroundStations } from '../../hooks/queries'
 import { useScheduleStore } from '../../store/scheduleStore'
+import { formatDateTimeDDMMYYYY } from '../../utils/date'
+import { fmt1 } from '../../utils/format'
 import type { TreeNodeType } from '../../types/explorer'
 
 // =============================================================================
@@ -557,6 +559,68 @@ const ImportSourceInspector: React.FC<{
   </>
 )
 
+// =============================================================================
+// PR-UI-039: Target Acquisitions Section
+// Shows scheduled acquisitions for the currently selected target.
+// =============================================================================
+
+interface AcquisitionRow {
+  id: string
+  target_id: string
+  start_time: string
+  satellite_name: string
+  off_nadir_deg?: number
+}
+
+interface TargetAcquisitionsSectionProps {
+  targetId: string
+  rows: AcquisitionRow[]
+}
+
+const TargetAcquisitionsSection: React.FC<TargetAcquisitionsSectionProps> = ({
+  targetId,
+  rows,
+}) => {
+  const targetAcqs = useMemo(() => {
+    return rows
+      .filter((r) => r.target_id === targetId)
+      .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())
+  }, [rows, targetId])
+
+  if (targetAcqs.length === 0) {
+    return (
+      <InspectorSection title={`Acquisitions (0)`} icon="Calendar">
+        <p className="text-xs text-gray-500">No scheduled acquisitions in current window</p>
+      </InspectorSection>
+    )
+  }
+
+  return (
+    <InspectorSection title={`Acquisitions (${targetAcqs.length})`} icon="Calendar">
+      <div className="space-y-1.5">
+        {targetAcqs.map((acq) => (
+          <div
+            key={acq.id}
+            className="flex items-center justify-between text-xs py-1 border-b border-gray-800 last:border-b-0"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="font-mono text-gray-300 tabular-nums">
+                {formatDateTimeDDMMYYYY(acq.start_time)}
+              </div>
+              <div className="text-gray-500 truncate">{acq.satellite_name}</div>
+            </div>
+            {acq.off_nadir_deg != null && (
+              <span className="text-gray-400 tabular-nums ml-2 flex-shrink-0">
+                {fmt1(acq.off_nadir_deg)}°
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    </InspectorSection>
+  )
+}
+
 const SatelliteInspector: React.FC<{
   metadata?: Record<string, unknown>
   onAction?: (action: string) => void
@@ -595,62 +659,70 @@ const SatelliteInspector: React.FC<{
 const TargetInspector: React.FC<{
   metadata?: Record<string, unknown>
   onAction?: (action: string) => void
-}> = ({ metadata, onAction }) => (
-  <>
-    <InspectorSection title="Properties" icon="Target">
-      <Field label="Priority" value={metadata?.priority as number} />
-      {typeof metadata?.color === 'string' && (
-        <div className="flex items-center justify-between text-xs">
-          <span className="text-gray-500">Color</span>
-          <div
-            className="w-4 h-4 rounded border border-gray-600"
-            style={{ backgroundColor: metadata.color }}
+  acquisitionRows?: AcquisitionRow[]
+}> = ({ metadata, onAction, acquisitionRows }) => {
+  const targetId = metadata?.name as string | undefined
+  return (
+    <>
+      <InspectorSection title="Properties" icon="Target">
+        <Field label="Priority" value={metadata?.priority as number} />
+        {typeof metadata?.color === 'string' && (
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-gray-500">Color</span>
+            <div
+              className="w-4 h-4 rounded border border-gray-600"
+              style={{ backgroundColor: metadata.color }}
+            />
+          </div>
+        )}
+      </InspectorSection>
+      <InspectorSection title="Location" icon="MapPin">
+        {metadata?.latitude !== undefined && metadata?.longitude !== undefined && (
+          <CoordinateField
+            label="Position"
+            latitude={metadata.latitude as number}
+            longitude={metadata.longitude as number}
+          />
+        )}
+      </InspectorSection>
+      <InspectorSection title="Statistics" icon="BarChart2">
+        <Field label="Opportunities" value={metadata?.opportunitiesCount as number} />
+        <Field
+          label="Best Off-Nadir"
+          value={
+            typeof metadata?.bestElevation === 'number'
+              ? (90 - (metadata.bestElevation as number)).toFixed(1)
+              : undefined
+          }
+          unit="°"
+        />
+        <Field
+          label="Mean Off-Nadir"
+          value={
+            typeof metadata?.meanElevation === 'number'
+              ? (90 - (metadata.meanElevation as number)).toFixed(1)
+              : undefined
+          }
+          unit="°"
+        />
+      </InspectorSection>
+      {/* PR-UI-039: Acquisitions list for tree-selected targets */}
+      {targetId && acquisitionRows && (
+        <TargetAcquisitionsSection targetId={targetId} rows={acquisitionRows} />
+      )}
+      {onAction && (
+        <div className="px-4 py-3 flex gap-2">
+          <ActionButton label="Fly To" icon="Navigation" onClick={() => onAction('flyTo')} />
+          <ActionButton
+            label="Filter Opps"
+            icon="Filter"
+            onClick={() => onAction('filterOpportunities')}
           />
         </div>
       )}
-    </InspectorSection>
-    <InspectorSection title="Location" icon="MapPin">
-      {metadata?.latitude !== undefined && metadata?.longitude !== undefined && (
-        <CoordinateField
-          label="Position"
-          latitude={metadata.latitude as number}
-          longitude={metadata.longitude as number}
-        />
-      )}
-    </InspectorSection>
-    <InspectorSection title="Statistics" icon="BarChart2">
-      <Field label="Opportunities" value={metadata?.opportunitiesCount as number} />
-      <Field
-        label="Best Off-Nadir"
-        value={
-          typeof metadata?.bestElevation === 'number'
-            ? (90 - (metadata.bestElevation as number)).toFixed(1)
-            : undefined
-        }
-        unit="°"
-      />
-      <Field
-        label="Mean Off-Nadir"
-        value={
-          typeof metadata?.meanElevation === 'number'
-            ? (90 - (metadata.meanElevation as number)).toFixed(1)
-            : undefined
-        }
-        unit="°"
-      />
-    </InspectorSection>
-    {onAction && (
-      <div className="px-4 py-3 flex gap-2">
-        <ActionButton label="Fly To" icon="Navigation" onClick={() => onAction('flyTo')} />
-        <ActionButton
-          label="Filter Opps"
-          icon="Filter"
-          onClick={() => onAction('filterOpportunities')}
-        />
-      </div>
-    )}
-  </>
-)
+    </>
+  )
+}
 
 const OpportunityInspector: React.FC<{
   metadata?: Record<string, unknown>
@@ -1265,6 +1337,50 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
   // Schedule items for fallback target metadata resolution
   const scheduleItems = useScheduleStore((s) => s.items)
 
+  // PR-UI-039: Satellite name lookup for orders fallback (mirrors SchedulePanel)
+  const satelliteNameMap = useMemo(() => {
+    const map = new Map<string, string>()
+    if (state.missionData?.satellites) {
+      for (const sat of state.missionData.satellites) {
+        map.set(sat.id, sat.name)
+      }
+    }
+    return map
+  }, [state.missionData?.satellites])
+
+  // PR-UI-039: Unified acquisition rows for the Inspector acquisitions section.
+  // Mirrors SchedulePanel's masterAcquisitions logic: prefer scheduleStore items,
+  // fall back to orders-derived rows when the store is empty.
+  const acquisitionRows = useMemo((): AcquisitionRow[] => {
+    if (scheduleItems.length > 0) {
+      return scheduleItems.map((item) => ({
+        id: item.id,
+        target_id: item.target_id,
+        start_time: item.start_time,
+        satellite_name: item.satellite_display_name || item.satellite_id,
+        off_nadir_deg: item.off_nadir_deg,
+      }))
+    }
+    // Fallback: derive from accepted orders (same source the timeline uses)
+    const rows: AcquisitionRow[] = []
+    const seen = new Set<string>()
+    for (const order of orders) {
+      for (const item of order.schedule || []) {
+        if (seen.has(item.opportunity_id)) continue
+        seen.add(item.opportunity_id)
+        const rawAngle = Math.abs(item.droll_deg)
+        rows.push({
+          id: item.opportunity_id,
+          target_id: item.target_id,
+          start_time: item.start_time,
+          satellite_name: satelliteNameMap.get(item.satellite_id) || item.satellite_id,
+          off_nadir_deg: Number.isFinite(rawAngle) ? rawAngle : undefined,
+        })
+      }
+    }
+    return rows
+  }, [scheduleItems, orders, satelliteNameMap])
+
   // Unified selection store for map/table selections
   const {
     selectedType: unifiedSelectedType,
@@ -1378,6 +1494,19 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
           longitude: schedItem.target_lon,
           type: 'target',
         } as Record<string, unknown>
+      }
+
+      // PR-UI-039: Fallback to orders target_positions when scheduleStore is empty
+      for (const order of orders || []) {
+        const pos = order.target_positions?.find((p) => p.target_id === selectedTargetId)
+        if (pos) {
+          return {
+            name: selectedTargetId,
+            latitude: pos.latitude,
+            longitude: pos.longitude,
+            type: 'target',
+          } as Record<string, unknown>
+        }
       }
 
       // Bare fallback so unified-selection renderer still activates
@@ -1610,17 +1739,23 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
         <div className="flex-1 overflow-y-auto">
           {unifiedSelectedType === 'target' && (
             <>
-              <InspectorSection title="Location" icon="MapPin">
-                <CoordinateField
-                  label="Position"
-                  latitude={metadata.latitude as number}
-                  longitude={metadata.longitude as number}
-                />
-              </InspectorSection>
+              {metadata.latitude != null && metadata.longitude != null && (
+                <InspectorSection title="Location" icon="MapPin">
+                  <CoordinateField
+                    label="Position"
+                    latitude={metadata.latitude as number}
+                    longitude={metadata.longitude as number}
+                  />
+                </InspectorSection>
+              )}
               {metadata.priority !== undefined && (
                 <InspectorSection title="Properties" icon="Settings">
                   <Field label="Priority" value={metadata.priority as number} />
                 </InspectorSection>
+              )}
+              {/* PR-UI-039: Acquisitions list for selected target */}
+              {selectedTargetId && (
+                <TargetAcquisitionsSection targetId={selectedTargetId} rows={acquisitionRows} />
               )}
             </>
           )}
@@ -1905,7 +2040,7 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto">
-        {renderInspectorContent(selectedNodeType!, metadata, handleAction)}
+        {renderInspectorContent(selectedNodeType!, metadata, handleAction, acquisitionRows)}
       </div>
     </div>
   )
@@ -2468,6 +2603,7 @@ function renderInspectorContent(
   nodeType: TreeNodeType,
   metadata: Record<string, unknown> | undefined,
   onAction: (action: string) => void,
+  acquisitionRows?: AcquisitionRow[],
 ): React.ReactNode {
   switch (nodeType) {
     // Top-level containers
@@ -2508,7 +2644,13 @@ function renderInspectorContent(
 
     // Targets children
     case 'target':
-      return <TargetInspector metadata={metadata} onAction={onAction} />
+      return (
+        <TargetInspector
+          metadata={metadata}
+          onAction={onAction}
+          acquisitionRows={acquisitionRows}
+        />
+      )
 
     // Constraints children
     case 'sensor_constraint':

@@ -3,6 +3,7 @@ import { useCesium } from 'resium'
 import { Cartesian3, SceneTransforms } from 'cesium'
 import { useShallow } from 'zustand/react/shallow'
 import { useSlewVisStore } from '../../store/slewVisStore'
+import { useVisStore } from '../../store/visStore'
 import { useMission } from '../../context/MissionContext'
 import { scheduleToSlewArcs } from '../../utils/slewVisualization'
 
@@ -22,10 +23,18 @@ export const SlewCanvasOverlay: React.FC = () => {
     })),
   )
   const { state } = useMission()
+  const activeLeftPanel = useVisStore((s) => s.activeLeftPanel)
   const animationStartTime = useRef<number>(performance.now())
 
   useEffect(() => {
-    if (!viewer || !canvasRef.current || !enabled || !activeSchedule || !state.missionData) {
+    if (
+      !viewer ||
+      !canvasRef.current ||
+      !enabled ||
+      !activeSchedule ||
+      !state.missionData ||
+      activeLeftPanel !== 'planning'
+    ) {
       return
     }
 
@@ -158,9 +167,17 @@ export const SlewCanvasOverlay: React.FC = () => {
       cancelAnimationFrame(rafId)
       resizeObserver.disconnect()
     }
-  }, [viewer, enabled, activeSchedule, state.missionData, showSlewArcs, showSlewLabels])
+  }, [
+    viewer,
+    enabled,
+    activeSchedule,
+    state.missionData,
+    showSlewArcs,
+    showSlewLabels,
+    activeLeftPanel,
+  ])
 
-  if (!enabled) return null
+  if (!enabled || activeLeftPanel !== 'planning') return null
 
   return (
     <canvas

@@ -19,6 +19,7 @@ import {
   Satellite,
 } from 'lucide-react'
 import { useSelectionStore } from '../store/selectionStore'
+import { useScheduleStore } from '../store/scheduleStore'
 import { useLockStore } from '../store/lockStore'
 import type { LockLevel } from '../api/scheduleApi'
 import { fmt1 } from '../utils/format'
@@ -574,6 +575,16 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
   // Selection store
   const selectedAcquisitionId = useSelectionStore((s) => s.selectedAcquisitionId)
   const selectAcquisition = useSelectionStore((s) => s.selectAcquisition)
+  const selectTarget = useSelectionStore((s) => s.selectTarget)
+  const lastSelectionSource = useSelectionStore((s) => s.lastSelectionSource)
+
+  // PR-UI-039: Schedule store — focusedAcquisitionId drives bar highlight after
+  // timeline clicks (selectTarget clears selectedAcquisitionId).
+  // Only use focusedAcquisitionId when the last selection came from the timeline,
+  // otherwise a stale highlight persists when switching to map/tree selection.
+  const focusedAcquisitionId = useScheduleStore((s) => s.focusedAcquisitionId)
+  const activeBarId =
+    selectedAcquisitionId ?? (lastSelectionSource === 'timeline' ? focusedAcquisitionId : null)
 
   // PR-LOCK-OPS-01: Lock store for toggle
   const toggleLock = useLockStore((s) => s.toggleLock)
@@ -794,15 +805,15 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
 
   // Scroll selected acquisition bar into view when selection changes
   useEffect(() => {
-    if (!selectedAcquisitionId || !trackRef.current) return
+    if (!activeBarId || !trackRef.current) return
     const timerId = setTimeout(() => {
-      const el = trackRef.current?.querySelector(`[data-acquisition-id="${selectedAcquisitionId}"]`)
+      const el = trackRef.current?.querySelector(`[data-acquisition-id="${activeBarId}"]`)
       if (el) {
         el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' })
       }
     }, 60)
     return () => clearTimeout(timerId)
-  }, [selectedAcquisitionId])
+  }, [activeBarId])
 
   // Polling refresh: if the selected acquisition was removed, clear selection
   useEffect(() => {
@@ -813,16 +824,28 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
     }
   }, [acquisitions, selectedAcquisitionId, selectAcquisition])
 
+  // PR-UI-039: Clear target selection when focused acquisition is removed by polling
+  useEffect(() => {
+    if (!focusedAcquisitionId) return
+    const stillExists = acquisitions.some((a) => a.id === focusedAcquisitionId)
+    if (!stillExists) {
+      selectTarget(null)
+    }
+  }, [acquisitions, focusedAcquisitionId, selectTarget])
+
   // Handle acquisition selection → opens inspector + focuses Cesium
+  // PR-UI-039: Select the TARGET so Inspector shows target view with acquisitions list.
+  // The schedule store tracks the focused acquisition for Cesium sync + bar highlight.
   const handleSelectAcquisition = useCallback(
     (id: string) => {
-      selectAcquisition(id, 'timeline')
-      onFocusAcquisition?.(id)
-      // PR-UI-030: pass full item back for Cesium timeline + camera sync
       const acq = acquisitions.find((a) => a.id === id)
-      if (acq) onSelectAcquisition?.(acq)
+      if (acq) {
+        selectTarget(acq.target_id, 'timeline')
+        onSelectAcquisition?.(acq)
+      }
+      onFocusAcquisition?.(id)
     },
-    [selectAcquisition, onFocusAcquisition, onSelectAcquisition, acquisitions],
+    [selectTarget, onFocusAcquisition, onSelectAcquisition, acquisitions],
   )
 
   // PR-UI-030: Notify parent of viewRange changes (debounced) for Cesium timeline sync
@@ -973,7 +996,7 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
                   minTs={viewMinTs}
                   maxTs={viewMaxTs}
                   nowTs={Date.now()}
-                  selectedId={selectedAcquisitionId}
+                  selectedId={activeBarId}
                   onSelect={handleSelectAcquisition}
                   onHover={handleHover}
                   onLockToggle={handleLockToggle}
