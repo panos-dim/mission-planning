@@ -310,6 +310,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
             mode: result.schedule[0]?.sar_mode ? 'SAR' : 'OPTICAL',
             lock_level: 'none',
             workspace_id: state.activeWorkspace || 'default',
+            force: true,
           })
 
           if (commitResponse.success) {

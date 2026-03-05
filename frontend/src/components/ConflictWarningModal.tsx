@@ -4,11 +4,25 @@ import { Button } from './ui/Button'
 import { AlertTriangle, CheckCircle, XCircle } from 'lucide-react'
 
 export interface ConflictInfo {
-  type: 'temporal_overlap' | 'slew_infeasible' | 'resource_conflict'
+  type: 'temporal_overlap' | 'slew_infeasible' | 'resource_conflict' | string
   description: string
   satellite_id?: string
   affected_acquisitions?: string[]
-  severity: 'warning' | 'error'
+  severity: 'warning' | 'error' | 'info'
+  /** Human-readable reason explaining WHY this conflict occurs */
+  reason?: string
+  /** Detailed metadata for developer/drill-down view */
+  details?: {
+    overlap_seconds?: number
+    deficit_s?: number
+    required_time_s?: number
+    available_time_s?: number
+    roll_delta_deg?: number
+    pitch_delta_deg?: number
+    acq1_target?: string
+    acq2_target?: string
+    [key: string]: unknown
+  }
 }
 
 export interface CommitPreview {

@@ -448,6 +448,10 @@ class ScheduleDB:
         conn.row_factory = sqlite3.Row
         # Enable foreign keys
         conn.execute("PRAGMA foreign_keys = ON")
+        # WAL mode: allows concurrent reads while writing (critical for FastAPI)
+        conn.execute("PRAGMA journal_mode = WAL")
+        # busy_timeout: wait up to 5s for locks instead of immediate failure
+        conn.execute("PRAGMA busy_timeout = 5000")
         try:
             yield conn
         finally:
@@ -2178,6 +2182,12 @@ class ScheduleDB:
             plan_row = cursor.fetchone()
             if not plan_row:
                 raise ValueError(f"Plan not found: {plan_id}")
+
+            # BUG FIX (PR_SCHED_001): Guard against double-commit.
+            # commit_plan_atomic already has this check but commit_plan did not,
+            # allowing duplicate acquisitions to be created.
+            if plan_row["status"] == "committed":
+                raise ValueError(f"Plan {plan_id} is already committed")
 
             # Get plan items to commit
             if item_ids:

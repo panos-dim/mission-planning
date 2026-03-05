@@ -470,6 +470,24 @@ async def update_order(
     if not existing:
         raise HTTPException(status_code=404, detail=f"Order not found: {order_id}")
 
+    # Enforce valid status transitions
+    VALID_TRANSITIONS: dict[str, set[str]] = {
+        "new": {"planned", "cancelled"},
+        "queued": {"planned", "cancelled"},
+        "planned": {"committed", "cancelled"},
+        "committed": {"completed", "cancelled"},
+        "completed": set(),  # Terminal state
+        "cancelled": {"new"},  # Can reopen
+        "rejected": set(),  # Terminal state
+    }
+    allowed = VALID_TRANSITIONS.get(existing.status, {"cancelled"})
+    if request.status not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status transition: '{existing.status}' → '{request.status}'. "
+            f"Allowed transitions from '{existing.status}': {sorted(allowed) if allowed else 'none (terminal state)'}",
+        )
+
     try:
         success = db.update_order_status(order_id, request.status)
 
@@ -505,6 +523,7 @@ async def delete_order(
     cascade_acquisitions: bool = Query(
         True, description="Also delete acquisitions linked to this order"
     ),
+    force: bool = Query(False, description="Force delete even if committed/completed"),
 ) -> OrderDeleteResponse:
     """
     Delete an order and optionally its associated acquisitions.
@@ -513,8 +532,8 @@ async def delete_order(
     If cascade_acquisitions is True (default), all acquisitions linked
     to this order are also deleted.
 
-    Hard-locked acquisitions linked to the order will also be deleted
-    when cascade is enabled.
+    Committed/completed orders cannot be deleted unless force=true,
+    because their acquisitions are live in the schedule.
     """
     db = get_schedule_db()
 
@@ -522,6 +541,15 @@ async def delete_order(
     existing = db.get_order(order_id)
     if not existing:
         raise HTTPException(status_code=404, detail=f"Order not found: {order_id}")
+
+    # Guard: committed/completed orders have live acquisitions
+    if existing.status in ("committed", "completed") and not force:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete order in '{existing.status}' status. "
+            f"Its acquisitions are live in the schedule. "
+            f"Use force=true to override (dangerous).",
+        )
 
     try:
         result = db.delete_order(

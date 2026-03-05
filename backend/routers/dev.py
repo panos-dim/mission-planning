@@ -339,6 +339,56 @@ async def get_metrics() -> MetricsResponse:
     )
 
 
+# ---------------------------------------------------------------------------
+# Last planning run diagnostics (PR_SCHED_001)
+# ---------------------------------------------------------------------------
+
+
+class LastPlanningRunResponse(BaseModel):
+    """Diagnostics from the last scheduling pipeline run."""
+
+    success: bool
+    has_data: bool
+    run_id: Optional[str] = None
+    workspace_id: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    breadcrumb_count: int = 0
+    breadcrumbs: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+@router.get("/last-planning-run", response_model=LastPlanningRunResponse)
+async def get_last_planning_run() -> LastPlanningRunResponse:
+    """
+    Dev-only endpoint returning diagnostics from the last scheduling pipeline run.
+
+    Returns the full audit trail including:
+    - Chosen mode and reason
+    - Request payload hash
+    - Schedule revision IDs before/after
+    - Acquisition IDs before/after
+    - Diff counts (added/removed/kept)
+    """
+    _check_dev_mode()
+
+    from backend.auto_mode_selection import get_last_planning_run as _get_last
+
+    data = _get_last()
+    if not data:
+        return LastPlanningRunResponse(success=True, has_data=False)
+
+    return LastPlanningRunResponse(
+        success=True,
+        has_data=True,
+        run_id=data.get("run_id"),
+        workspace_id=data.get("workspace_id"),
+        started_at=data.get("started_at"),
+        completed_at=data.get("completed_at"),
+        breadcrumb_count=data.get("breadcrumb_count", 0),
+        breadcrumbs=data.get("breadcrumbs", []),
+    )
+
+
 def record_feasibility_timing(
     duration_seconds: float,
     target_count: int,

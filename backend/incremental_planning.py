@@ -1139,6 +1139,11 @@ def predict_commit_conflicts(
                     "involves_new_item": any(
                         aid.startswith("pseudo_") for aid in conflict.acquisition_ids
                     ),
+                    "reason": (
+                        "Two acquisitions on the same satellite overlap in time. "
+                        "The satellite cannot image two targets simultaneously."
+                    ),
+                    "details": conflict.details,
                 }
             )
 
@@ -1154,6 +1159,11 @@ def predict_commit_conflicts(
                     "involves_new_item": any(
                         aid.startswith("pseudo_") for aid in conflict.acquisition_ids
                     ),
+                    "reason": (
+                        "Insufficient time to repoint the satellite between consecutive "
+                        "acquisitions. The maneuver requires more time than the gap allows."
+                    ),
+                    "details": conflict.details,
                 }
             )
 

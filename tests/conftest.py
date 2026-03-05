@@ -11,7 +11,7 @@ import socket
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, List, Tuple
+from typing import Any, List, Optional, Tuple
 
 import pytest
 from _pytest.config import Config
@@ -39,7 +39,7 @@ def _is_server_running(host: str = "localhost", port: int = 8000) -> bool:
 
 
 # Cache the result once per session so we don't probe the port for every test
-_server_available: bool | None = None
+_server_available: Optional[bool] = None
 
 
 def pytest_collection_modifyitems(config: Config, items: List[Function]) -> None:

@@ -46,6 +46,7 @@ export interface DirectCommitRequest {
   lock_level?: string // none | hard
   workspace_id?: string
   notes?: string
+  force?: boolean // bypass 409 conflict rejection (user already reviewed conflicts)
 }
 
 export interface DirectCommitResponse {
@@ -479,6 +480,9 @@ export interface IncrementalPlanResponse {
     severity: string
     description: string
     acquisition_ids: string[]
+    involves_new_item?: boolean
+    reason?: string
+    details?: Record<string, unknown>
   }>
   commit_preview: CommitPreview
   algorithm_metrics: Record<string, unknown>
@@ -668,6 +672,8 @@ export interface RepairPlanResponse {
     description: string
     acquisition_ids: string[]
     involves_new_item?: boolean
+    reason?: string
+    details?: Record<string, unknown>
   }>
   // Commit preview
   commit_preview: CommitPreview

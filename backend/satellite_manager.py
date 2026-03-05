@@ -39,9 +39,9 @@ class Satellite:
         if self.capabilities is None:
             self.capabilities = ["imaging"]
         if not self.created_at:
-            self.created_at = datetime.now(timezone.utc).isoformat() + "Z"
+            self.created_at = datetime.now(timezone.utc).isoformat()
         if not self.tle_updated_at:
-            self.tle_updated_at = datetime.now(timezone.utc).isoformat() + "Z"
+            self.tle_updated_at = datetime.now(timezone.utc).isoformat()
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -260,7 +260,7 @@ class SatelliteManager:
                 updates = {
                     "line1": tle_data["line1"],
                     "line2": tle_data["line2"],
-                    "tle_updated_at": datetime.now(timezone.utc).isoformat() + "Z",
+                    "tle_updated_at": datetime.now(timezone.utc).isoformat(),
                 }
                 return self.update_satellite(satellite_id, updates)
             else:
@@ -376,9 +376,10 @@ class SatelliteManager:
             return None
 
         try:
-            tle_date = datetime.fromisoformat(
-                satellite.tle_updated_at.replace("Z", "+00:00")
-            )
+            raw = satellite.tle_updated_at.rstrip("Z")
+            if not ("+" in raw[10:] or raw.endswith("00:00")):
+                raw += "+00:00"
+            tle_date = datetime.fromisoformat(raw)
             current_date = datetime.now(timezone.utc).replace(tzinfo=tle_date.tzinfo)
             age = (current_date - tle_date).days
             return age

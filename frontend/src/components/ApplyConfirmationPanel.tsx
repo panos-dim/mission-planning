@@ -405,26 +405,81 @@ export default function ApplyConfirmationPanel({
 
 function ConflictItem({ conflict }: { conflict: ConflictInfo }): JSX.Element {
   const isError = conflict.severity === 'error'
+  const typeLabel =
+    conflict.type === 'temporal_overlap'
+      ? 'Time Overlap'
+      : conflict.type === 'slew_infeasible'
+        ? 'Slew Infeasible'
+        : conflict.type.replace(/_/g, ' ').toUpperCase()
+
   return (
     <div
-      className={`flex items-start gap-2.5 p-2.5 rounded-lg border ${
+      className={`p-2.5 rounded-lg border space-y-1.5 ${
         isError ? 'bg-red-950/15 border-red-800/30' : 'bg-yellow-950/10 border-yellow-800/25'
       }`}
     >
-      {isError ? (
-        <XCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
-      ) : (
-        <AlertTriangle className="w-4 h-4 text-yellow-500 shrink-0 mt-0.5" />
-      )}
-      <div className="flex-1 min-w-0">
-        <div className={`text-xs font-medium ${isError ? 'text-red-300' : 'text-yellow-300'}`}>
-          {conflict.type.replace(/_/g, ' ').toUpperCase()}
-        </div>
-        <div className="text-[11px] text-gray-400 mt-0.5">{conflict.description}</div>
+      {/* Header: severity icon + type label */}
+      <div className="flex items-center gap-2">
+        {isError ? (
+          <XCircle className="w-4 h-4 text-red-400 shrink-0" />
+        ) : (
+          <AlertTriangle className="w-4 h-4 text-yellow-500 shrink-0" />
+        )}
+        <span className={`text-xs font-medium ${isError ? 'text-red-300' : 'text-yellow-300'}`}>
+          {typeLabel}
+        </span>
         {conflict.satellite_id && (
-          <div className="text-[10px] text-gray-500 mt-1">Satellite: {conflict.satellite_id}</div>
+          <span className="text-[10px] text-gray-500 ml-auto">
+            <Satellite className="w-3 h-3 inline mr-0.5 -mt-px" />
+            {conflict.satellite_id}
+          </span>
         )}
       </div>
+
+      {/* Description: what happened */}
+      <div className="text-[11px] text-gray-400">{conflict.description}</div>
+
+      {/* Reason: WHY it happened — key for user understanding */}
+      {conflict.reason && <div className="text-[11px] text-gray-500 italic">{conflict.reason}</div>}
+
+      {/* Metadata pills for key details */}
+      {conflict.details && (
+        <div className="flex flex-wrap gap-1 pt-0.5">
+          {conflict.details.overlap_seconds != null && (
+            <span className="px-1.5 py-0.5 rounded bg-red-900/30 text-[10px] text-red-300 tabular-nums">
+              {conflict.details.overlap_seconds.toFixed(1)}s overlap
+            </span>
+          )}
+          {conflict.details.deficit_s != null && (
+            <span className="px-1.5 py-0.5 rounded bg-orange-900/30 text-[10px] text-orange-300 tabular-nums">
+              {conflict.details.deficit_s.toFixed(1)}s deficit
+            </span>
+          )}
+          {conflict.details.available_time_s != null &&
+            conflict.details.required_time_s != null && (
+              <span className="px-1.5 py-0.5 rounded bg-gray-700/50 text-[10px] text-gray-400 tabular-nums">
+                {conflict.details.available_time_s.toFixed(1)}s available /{' '}
+                {conflict.details.required_time_s.toFixed(1)}s needed
+              </span>
+            )}
+          {conflict.details.available_time_s != null &&
+            conflict.details.required_time_s == null && (
+              <span className="px-1.5 py-0.5 rounded bg-gray-700/50 text-[10px] text-gray-400 tabular-nums">
+                {conflict.details.available_time_s.toFixed(1)}s gap
+              </span>
+            )}
+          {conflict.details.roll_delta_deg != null && conflict.details.roll_delta_deg > 0.1 && (
+            <span className="px-1.5 py-0.5 rounded bg-gray-700/50 text-[10px] text-gray-400 tabular-nums">
+              Δroll {conflict.details.roll_delta_deg.toFixed(1)}°
+            </span>
+          )}
+          {conflict.details.pitch_delta_deg != null && conflict.details.pitch_delta_deg > 0.1 && (
+            <span className="px-1.5 py-0.5 rounded bg-gray-700/50 text-[10px] text-gray-400 tabular-nums">
+              Δpitch {conflict.details.pitch_delta_deg.toFixed(1)}°
+            </span>
+          )}
+        </div>
+      )}
     </div>
   )
 }

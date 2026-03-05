@@ -386,13 +386,16 @@ export default function RepairCommitModal({
                 <AlertTriangle className="w-3 h-3" />
                 Conflict Details (top {topConflicts.length})
               </h4>
-              <div className="space-y-1.5 max-h-28 overflow-y-auto">
+              <div className="space-y-1.5 max-h-40 overflow-y-auto">
                 {topConflicts.map((c, idx) => (
-                  <div key={idx} className="text-xs text-red-300/80 flex items-start gap-1.5">
-                    <span className="text-red-500 shrink-0 mt-0.5">
-                      {c.severity === 'error' ? '●' : '○'}
-                    </span>
-                    <span>{c.description}</span>
+                  <div key={idx} className="text-xs space-y-0.5">
+                    <div className="text-red-300/80 flex items-start gap-1.5">
+                      <span className="text-red-500 shrink-0 mt-0.5">
+                        {c.severity === 'error' ? '●' : '○'}
+                      </span>
+                      <span>{c.description}</span>
+                    </div>
+                    {c.reason && <div className="text-red-400/50 italic pl-4">{c.reason}</div>}
                   </div>
                 ))}
                 {conflicts_if_committed.length > 3 && (

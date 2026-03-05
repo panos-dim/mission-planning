@@ -19,6 +19,12 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from backend.auto_mode_selection import (
+    PipelineAuditTrail,
+    compute_request_hash,
+    record_schedule_diff,
+    select_planning_mode,
+)
 from backend.schedule_persistence import ScheduleDB, get_schedule_db
 
 logger = logging.getLogger(__name__)
@@ -985,7 +991,11 @@ class BulkDeleteAcquisitionsRequest(BaseModel):
     acquisition_ids: List[str] = Field(..., description="Acquisition IDs to delete")
     force: bool = Field(
         default=False,
-        description="Force delete even hard-locked acquisitions",
+        description="Force delete even hard-locked/frozen acquisitions",
+    )
+    workspace_id: Optional[str] = Field(
+        default=None,
+        description="Workspace ID for ownership verification",
     )
 
 
@@ -1005,12 +1015,17 @@ class BulkDeleteAcquisitionsResponse(BaseModel):
 async def delete_acquisition(
     acquisition_id: str,
     force: bool = Query(False, description="Force delete even if hard-locked"),
+    workspace_id: Optional[str] = Query(
+        None, description="Workspace ID for ownership verification"
+    ),
 ) -> DeleteAcquisitionResponse:
     """
     Delete a single acquisition from the schedule.
 
     By default, hard-locked acquisitions cannot be deleted.
-    Use force=true to override this protection.
+    Acquisitions within the freeze window (next 2 hours) are protected.
+    Cross-workspace deletion requires matching workspace_id.
+    Use force=true to override all protections.
     """
     db = get_schedule_db()
 
@@ -1020,6 +1035,37 @@ async def delete_acquisition(
         raise HTTPException(
             status_code=404, detail=f"Acquisition not found: {acquisition_id}"
         )
+
+    # C1-FIX: Workspace isolation — verify ownership
+    if (
+        not force
+        and workspace_id
+        and acq.workspace_id
+        and acq.workspace_id != workspace_id
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Acquisition {acquisition_id} belongs to workspace "
+            f"'{acq.workspace_id}', not '{workspace_id}'. "
+            f"Cross-workspace deletion is not allowed.",
+        )
+
+    # C2-FIX: Freeze cutoff enforcement — protect near-execution acquisitions
+    if not force:
+        now = datetime.now(timezone.utc)
+        freeze_cutoff = now + timedelta(hours=2)
+        try:
+            acq_start = datetime.fromisoformat(acq.start_time.replace("Z", "+00:00"))
+            if acq_start <= freeze_cutoff:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Acquisition {acquisition_id} starts at {acq.start_time} "
+                    f"which is within the freeze window (before "
+                    f"{freeze_cutoff.isoformat()}Z). Acquisitions near execution "
+                    f"cannot be deleted. Use force=true to override.",
+                )
+        except (ValueError, AttributeError):
+            pass  # If time parsing fails, skip freeze check
 
     # Protect hard-locked acquisitions unless force
     if acq.lock_level == "hard" and not force:
@@ -1036,7 +1082,7 @@ async def delete_acquisition(
 
     logger.info(
         f"Deleted acquisition {acquisition_id} "
-        f"(was {acq.state}, lock={acq.lock_level})"
+        f"(was {acq.state}, lock={acq.lock_level}, workspace={acq.workspace_id})"
     )
 
     return DeleteAcquisitionResponse(
@@ -1066,16 +1112,42 @@ async def bulk_delete_acquisitions(
 
     ids_to_delete = list(request.acquisition_ids)
     skipped_hard_locked: List[str] = []
+    skipped_frozen: List[str] = []
+    skipped_workspace: List[str] = []
 
-    # Unless force, filter out hard-locked acquisitions
+    # Unless force, filter out protected acquisitions
     if not request.force:
+        now = datetime.now(timezone.utc)
+        freeze_cutoff = now + timedelta(hours=2)
         filtered_ids: List[str] = []
         for acq_id in ids_to_delete:
             acq = db.get_acquisition(acq_id)
-            if acq and acq.lock_level == "hard":
+            if not acq:
+                filtered_ids.append(acq_id)  # Let bulk_delete handle not-found
+                continue
+            # Workspace isolation
+            if (
+                request.workspace_id
+                and acq.workspace_id
+                and acq.workspace_id != request.workspace_id
+            ):
+                skipped_workspace.append(acq_id)
+                continue
+            # Freeze cutoff
+            try:
+                acq_start = datetime.fromisoformat(
+                    acq.start_time.replace("Z", "+00:00")
+                )
+                if acq_start <= freeze_cutoff:
+                    skipped_frozen.append(acq_id)
+                    continue
+            except (ValueError, AttributeError):
+                pass
+            # Hard-lock
+            if acq.lock_level == "hard":
                 skipped_hard_locked.append(acq_id)
-            else:
-                filtered_ids.append(acq_id)
+                continue
+            filtered_ids.append(acq_id)
         ids_to_delete = filtered_ids
 
     result = db.bulk_delete_acquisitions(ids_to_delete)
@@ -1085,6 +1157,10 @@ async def bulk_delete_acquisitions(
         message += f" ({len(result['failed'])} not found)"
     if skipped_hard_locked:
         message += f" ({len(skipped_hard_locked)} hard-locked skipped)"
+    if skipped_frozen:
+        message += f" ({len(skipped_frozen)} frozen skipped)"
+    if skipped_workspace:
+        message += f" ({len(skipped_workspace)} cross-workspace skipped)"
 
     logger.info(message)
 
@@ -1297,7 +1373,7 @@ def _check_commit_conflicts(
             existing_by_sat[acq.satellite_id] = []
         existing_by_sat[acq.satellite_id].append(acq)
 
-    # Check each new item for conflicts
+    # Check each new item against existing committed acquisitions
     for item in items:
         sat_existing = existing_by_sat.get(item.satellite_id, [])
 
@@ -1320,6 +1396,26 @@ def _check_commit_conflicts(
                 conflicts.append(
                     f"{item.satellite_id}/{item.target_id} overlaps with "
                     f"existing {existing_acq.target_id} at {item.start_time[:19]}"
+                )
+
+    # H2-FIX: Also check new items against each other (intra-batch conflicts).
+    # Without this, two overlapping items in a single commit would both be created.
+    for i in range(len(items)):
+        for j in range(i + 1, len(items)):
+            if items[i].satellite_id != items[j].satellite_id:
+                continue
+            try:
+                s1 = dt.fromisoformat(items[i].start_time.replace("Z", "+00:00"))
+                e1 = dt.fromisoformat(items[i].end_time.replace("Z", "+00:00"))
+                s2 = dt.fromisoformat(items[j].start_time.replace("Z", "+00:00"))
+                e2 = dt.fromisoformat(items[j].end_time.replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                continue
+            if s1 < e2 and s2 < e1:
+                conflicts.append(
+                    f"{items[i].satellite_id}/{items[i].target_id} overlaps with "
+                    f"new {items[j].target_id} at {items[i].start_time[:19]} "
+                    f"(intra-batch conflict)"
                 )
 
     return conflicts
@@ -1412,10 +1508,41 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
         )
 
     try:
-        # Generate run_id and input hash
+        # H1-FIX: Idempotency via content-hash deduplication.
+        # Build a deterministic hash from the actual item content so that
+        # identical payloads (e.g. network retries) are rejected.
+        item_fingerprints = sorted(
+            f"{i.satellite_id}|{i.target_id}|{i.start_time}|{i.end_time}"
+            for i in request.items
+        )
+        content_hash = hashlib.sha256("|".join(item_fingerprints).encode()).hexdigest()[
+            :24
+        ]
+        input_hash = f"sha256:{content_hash}"
+
+        # Check if this exact payload was already committed (dedup guard)
+        with db._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id FROM plans WHERE input_hash = ? AND status = 'committed' LIMIT 1",
+                (input_hash,),
+            )
+            dup_row = cursor.fetchone()
+            if dup_row:
+                dup_plan_id = dup_row["id"]
+                logger.warning(
+                    f"[Direct Commit] Duplicate detected: input_hash={input_hash}, "
+                    f"existing plan={dup_plan_id}"
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Duplicate commit detected. A plan with identical "
+                    f"items was already committed (plan_id={dup_plan_id}). "
+                    f"This may be a network retry.",
+                )
+
+        # Generate run_id
         run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
-        input_data = f"{request.algorithm}:{len(request.items)}:{request.workspace_id}"
-        input_hash = f"sha256:{hashlib.sha256(input_data.encode()).hexdigest()[:16]}"
 
         # Build metrics from items
         metrics = {
@@ -1660,10 +1787,28 @@ async def create_incremental_plan(
             f"Must be 'respect_hard_only' or 'respect_hard_and_soft'",
         )
 
+    # --- Audit trail (dev-only breadcrumbs) ---
+    import uuid as _uuid
+
+    _run_id = f"plan_{now.strftime('%Y%m%d_%H%M%S')}_{_uuid.uuid4().hex[:8]}"
+    _audit = PipelineAuditTrail(
+        run_id=_run_id, workspace_id=request.workspace_id or "default"
+    )
+    _req_hash = compute_request_hash(request.model_dump())
+    _audit.add(
+        "request_received",
+        planning_mode=planning_mode.value,
+        workspace_id=request.workspace_id,
+        horizon_start=horizon_start.isoformat(),
+        horizon_end=horizon_end.isoformat(),
+        request_hash=_req_hash,
+    )
+
     logger.info(
         f"[Incremental Plan] mode={planning_mode.value}, "
         f"workspace={request.workspace_id}, "
-        f"horizon={horizon_start.isoformat()} to {horizon_end.isoformat()}"
+        f"horizon={horizon_start.isoformat()} to {horizon_end.isoformat()}, "
+        f"run_id={_run_id}, request_hash={_req_hash}"
     )
 
     # Initialize response components
@@ -1831,12 +1976,12 @@ async def create_incremental_plan(
     run_id = f"run_{now.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
     input_hash = f"sha256:{hashlib.sha256(run_id.encode()).hexdigest()[:16]}"
 
-    # Only use workspace_id if acquisitions were loaded from it (otherwise FK constraint fails)
-    effective_workspace_id = (
-        request.workspace_id
-        if context and context.loaded_acquisitions_count > 0
-        else None
-    )
+    # BUG FIX (PR_SCHED_001): Always propagate workspace_id to plans.
+    # Previously, effective_workspace_id was set to None for from_scratch plans
+    # (no existing acquisitions loaded). This caused acquisitions committed from
+    # those plans to have NULL workspace_id, leaking into ALL workspace queries
+    # via the "OR workspace_id IS NULL" fallback in persistence layer queries.
+    effective_workspace_id = request.workspace_id or "default"
 
     # Create plan record
     plan = db.create_plan(
@@ -1997,9 +2142,20 @@ async def create_incremental_plan(
     if error_conflicts:
         message += f" - WARNING: {len(error_conflicts)} predicted conflicts"
 
+    # --- Audit trail: finalize ---
+    _audit.add(
+        "plan_created",
+        plan_id=plan.id,
+        planning_mode=planning_mode.value,
+        new_items_count=len(new_items),
+        feasible_opportunities=len(feasible_opportunities),
+        conflicts_predicted=len(conflicts_if_committed),
+    )
+    _audit.finalize()
+
     return IncrementalPlanResponse(
         success=True,
-        message=message,
+        message=f"Plan created: {len(new_items)} items from {len(feasible_opportunities)} feasible opportunities",
         planning_mode=planning_mode.value,
         existing_acquisitions=existing_summary,
         new_plan_items=new_items,
@@ -2244,10 +2400,29 @@ async def create_repair_plan(
             f"Must be 'maximize_score', 'maximize_priority', or 'minimize_changes'",
         )
 
+    # --- Audit trail (dev-only breadcrumbs) ---
+    import uuid as _uuid
+
+    _run_id = f"repair_{now.strftime('%Y%m%d_%H%M%S')}_{_uuid.uuid4().hex[:8]}"
+    _audit = PipelineAuditTrail(
+        run_id=_run_id, workspace_id=request.workspace_id or "default"
+    )
+    _req_hash = compute_request_hash(request.model_dump())
+    _audit.add(
+        "request_received",
+        planning_mode="repair",
+        workspace_id=request.workspace_id,
+        repair_scope=repair_scope.value,
+        objective=objective.value,
+        max_changes=request.max_changes,
+        request_hash=_req_hash,
+    )
+
     logger.info(
         f"[Repair Plan] workspace={request.workspace_id}, "
         f"scope={repair_scope.value}, "
-        f"max_changes={request.max_changes}, objective={objective.value}"
+        f"max_changes={request.max_changes}, objective={objective.value}, "
+        f"run_id={_run_id}, request_hash={_req_hash}"
     )
 
     # Stage A: Load and partition acquisitions
@@ -2414,10 +2589,8 @@ async def create_repair_plan(
     run_id = f"repair_{now.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
     input_hash = f"sha256:{hashlib.sha256(run_id.encode()).hexdigest()[:16]}"
 
-    # Only use workspace_id if acquisitions were loaded from it (otherwise FK constraint fails)
-    effective_workspace_id = (
-        request.workspace_id if repair_context.original_acquisition_count > 0 else None
-    )
+    # BUG FIX (PR_SCHED_001): Always propagate workspace_id — see /plan fix above.
+    effective_workspace_id = request.workspace_id or "default"
 
     plan = db.create_plan(
         algorithm="repair_mode",
@@ -2616,6 +2789,20 @@ async def create_repair_plan(
         "total_targets_covered": len(scheduled_target_ids),
     }
 
+    # --- Audit trail: finalize ---
+    _audit.add(
+        "repair_plan_created",
+        plan_id=plan.id,
+        kept_count=len(repair_diff.kept),
+        dropped_count=len(repair_diff.dropped),
+        added_count=len(repair_diff.added),
+        moved_count=len(repair_diff.moved),
+        score_before=score_before,
+        score_after=score_after,
+        conflicts_predicted=len(conflicts_if_committed),
+    )
+    _audit.finalize()
+
     return RepairPlanResponseModel(
         success=True,
         message=message,
@@ -2718,44 +2905,92 @@ async def commit_repair_plan(request: RepairCommitRequest) -> RepairCommitRespon
             detail=f"Plan {request.plan_id} is already committed",
         )
 
-    # Check for hard lock conflicts before committing
+    # Check for protection conflicts before committing
     warnings: List[str] = []
     hard_lock_conflicts: List[str] = []
+    freeze_conflicts: List[str] = []
+    workspace_conflicts: List[str] = []
 
     if request.drop_acquisition_ids:
+        now = datetime.now(timezone.utc)
+        freeze_cutoff = now + timedelta(hours=2)
+
         for acq_id in request.drop_acquisition_ids:
             acq = db.get_acquisition(acq_id)
-            if acq and acq.lock_level == "hard":
+            if not acq:
+                continue
+            # Workspace isolation check
+            if acq.workspace_id and acq.workspace_id != request.workspace_id:
+                workspace_conflicts.append(
+                    f"Cannot drop acquisition {acq_id} ({acq.target_id}) — "
+                    f"belongs to workspace '{acq.workspace_id}'"
+                )
+            # Freeze cutoff check
+            try:
+                acq_start = datetime.fromisoformat(
+                    acq.start_time.replace("Z", "+00:00")
+                )
+                if acq_start <= freeze_cutoff:
+                    freeze_conflicts.append(
+                        f"Cannot drop acquisition {acq_id} ({acq.target_id}) — "
+                        f"starts at {acq.start_time}, within freeze window"
+                    )
+            except (ValueError, AttributeError):
+                pass
+            # Hard-lock check
+            if acq.lock_level == "hard":
                 hard_lock_conflicts.append(
                     f"Cannot drop hard-locked acquisition {acq_id} ({acq.target_id})"
                 )
 
-    if hard_lock_conflicts and not request.force:
+    all_conflicts = workspace_conflicts + freeze_conflicts + hard_lock_conflicts
+
+    if workspace_conflicts:
+        # Workspace violations are never overridable
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": "Cannot commit: cross-workspace drop detected",
+                "workspace_conflicts": workspace_conflicts,
+            },
+        )
+
+    if (freeze_conflicts or hard_lock_conflicts) and not request.force:
         raise HTTPException(
             status_code=400,
             detail={
-                "message": "Cannot commit: hard lock conflicts detected",
+                "message": f"Cannot commit: {len(all_conflicts)} protection conflict(s) detected",
                 "hard_lock_conflicts": hard_lock_conflicts,
+                "freeze_conflicts": freeze_conflicts,
                 "hint": "Set force=true to override (not recommended), or adjust your repair plan",
             },
         )
 
-    if hard_lock_conflicts and request.force:
+    if (freeze_conflicts or hard_lock_conflicts) and request.force:
         warnings.append(
-            f"Force-committed with {len(hard_lock_conflicts)} hard lock conflicts"
+            f"Force-committed with {len(freeze_conflicts)} freeze + "
+            f"{len(hard_lock_conflicts)} hard lock conflict(s)"
         )
-        # Filter out hard-locked acquisitions from drop list
-        hard_locked_ids = set()
+        # Filter out protected acquisitions from drop list
+        protected_ids: set[str] = set()
         for acq_id in request.drop_acquisition_ids:
             acq = db.get_acquisition(acq_id)
-            if acq and acq.lock_level == "hard":
-                hard_locked_ids.add(acq_id)
+            if not acq:
+                continue
+            if acq.lock_level == "hard":
+                protected_ids.add(acq_id)
+            try:
+                acq_start = datetime.fromisoformat(
+                    acq.start_time.replace("Z", "+00:00")
+                )
+                if acq_start <= freeze_cutoff:
+                    protected_ids.add(acq_id)
+            except (ValueError, AttributeError):
+                pass
         request.drop_acquisition_ids = [
-            aid for aid in request.drop_acquisition_ids if aid not in hard_locked_ids
+            aid for aid in request.drop_acquisition_ids if aid not in protected_ids
         ]
-        warnings.append(
-            f"Skipped dropping {len(hard_locked_ids)} hard-locked acquisitions"
-        )
+        warnings.append(f"Skipped dropping {len(protected_ids)} protected acquisitions")
 
     try:
         # Atomic commit
