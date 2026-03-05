@@ -4,18 +4,19 @@
  */
 
 import { useEffect, useRef, useCallback } from 'react'
-import { 
-  Viewer, 
-  Entity, 
-  ScreenSpaceEventHandler, 
-  ScreenSpaceEventType, 
-  defined, 
+import {
+  Viewer,
+  Entity,
+  ScreenSpaceEventHandler,
+  ScreenSpaceEventType,
+  defined,
   Ellipsoid,
   Math as CesiumMath,
-  Cartesian2
+  Cartesian2,
 } from 'cesium'
 import { useMission } from '../../../context/MissionContext'
 import { useTargetAddStore } from '../../../store/targetAddStore'
+import { usePreFeasibilityOrdersStore } from '../../../store/preFeasibilityOrdersStore'
 import { useMapClickToCartographic } from '../../../hooks/useMapClickToCartographic'
 import type { SceneObject } from '../../../types'
 import debug from '../../../utils/debug'
@@ -29,23 +30,23 @@ interface UseEntitySelectionOptions {
  */
 export function useEntitySelection(
   viewerRef: React.RefObject<{ cesiumElement: Viewer | null } | null>,
-  options: UseEntitySelectionOptions
+  options: UseEntitySelectionOptions,
 ) {
   const { viewportId } = options
   const { state, addSceneObject, selectObject } = useMission()
-  const { isAddMode, setPendingTarget, openDetailsSheet } = useTargetAddStore()
+  const { isAddMode, setLastAddedTarget } = useTargetAddStore()
   const { pickCartographic } = useMapClickToCartographic()
-  
+
   const eventHandlerRef = useRef<ScreenSpaceEventHandler | null>(null)
 
   // Extract position from entity
   const extractEntityPosition = useCallback((entity: Entity, viewer: Viewer) => {
     if (!entity.position) return undefined
-    
+
     try {
       const position = entity.position.getValue(viewer.clock.currentTime)
       if (!position) return undefined
-      
+
       const cartographic = Ellipsoid.WGS84.cartesianToCartographic(position)
       return {
         latitude: CesiumMath.toDegrees(cartographic.latitude),
@@ -58,18 +59,21 @@ export function useEntitySelection(
   }, [])
 
   // Create scene object from entity
-  const createSceneObjectFromEntity = useCallback((entity: Entity, viewer: Viewer): SceneObject => {
-    return {
-      id: `entity_${entity.id}`,
-      name: entity.name || entity.id || 'Unknown Entity',
-      type: entity.name?.includes('Satellite') ? 'satellite' : 'target',
-      entityId: entity.id,
-      position: extractEntityPosition(entity, viewer),
-      visible: true,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    }
-  }, [extractEntityPosition])
+  const createSceneObjectFromEntity = useCallback(
+    (entity: Entity, viewer: Viewer): SceneObject => {
+      return {
+        id: `entity_${entity.id}`,
+        name: entity.name || entity.id || 'Unknown Entity',
+        type: entity.name?.includes('Satellite') ? 'satellite' : 'target',
+        entityId: entity.id,
+        position: extractEntityPosition(entity, viewer),
+        visible: true,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }
+    },
+    [extractEntityPosition],
+  )
 
   // Check if entity is interactive
   const isInteractiveEntity = useCallback((entity: Entity): boolean => {
@@ -81,16 +85,19 @@ export function useEntitySelection(
   }, [])
 
   // Find existing scene object for entity
-  const findExistingObject = useCallback((entity: Entity): SceneObject | undefined => {
-    return state.sceneObjects.find(obj => {
-      if (obj.entityId === entity.id) return true
-      if (obj.name === entity.name) return true
-      if (obj.id === entity.id) return true
-      if (obj.id === `entity_${entity.id}`) return true
-      if (entity.id?.startsWith('target_') && obj.id === entity.id) return true
-      return false
-    })
-  }, [state.sceneObjects])
+  const findExistingObject = useCallback(
+    (entity: Entity): SceneObject | undefined => {
+      return state.sceneObjects.find((obj) => {
+        if (obj.entityId === entity.id) return true
+        if (obj.name === entity.name) return true
+        if (obj.id === entity.id) return true
+        if (obj.id === `entity_${entity.id}`) return true
+        if (entity.id?.startsWith('target_') && obj.id === entity.id) return true
+        return false
+      })
+    },
+    [state.sceneObjects],
+  )
 
   // Set up click handler
   useEffect(() => {
@@ -108,20 +115,42 @@ export function useEntitySelection(
       eventHandlerRef.current = new ScreenSpaceEventHandler(viewer.scene.canvas)
 
       eventHandlerRef.current.setInputAction((click: { position: { x: number; y: number } }) => {
-        // Handle target add mode
+        // PR-UI-036: Inline add target — immediately add to the active order
         if (isAddMode) {
           const windowPosition = new Cartesian2(click.position.x, click.position.y)
           const clickedLocation = pickCartographic(viewer, windowPosition)
 
           if (clickedLocation) {
-            debug.info(`Target placed: ${clickedLocation.formatted.decimal}`)
-            
-            setPendingTarget({
-              id: `pending-${Date.now()}`,
+            debug.info(`Target added inline: ${clickedLocation.formatted.decimal}`)
+
+            const ordersState = usePreFeasibilityOrdersStore.getState()
+            let orderId = ordersState.activeOrderId
+            if (!orderId) {
+              orderId = ordersState.createOrder()
+              usePreFeasibilityOrdersStore.getState().setActiveOrder(orderId)
+            }
+
+            const order = usePreFeasibilityOrdersStore
+              .getState()
+              .orders.find((o) => o.id === orderId)
+            const idx = order ? order.targets.length : 0
+            const autoName = `Target ${idx + 1}`
+
+            ordersState.addTarget(orderId!, {
+              name: autoName,
+              latitude: clickedLocation.latitude,
+              longitude: clickedLocation.longitude,
+              description: '',
+              priority: 5,
+              color: '#3B82F6',
+            })
+
+            setLastAddedTarget({
+              orderId: orderId!,
+              targetIndex: idx,
               latitude: clickedLocation.latitude,
               longitude: clickedLocation.longitude,
             })
-            openDetailsSheet()
           }
           return
         }
@@ -170,11 +199,10 @@ export function useEntitySelection(
       }
     }
   }, [
-    viewportId, 
-    isAddMode, 
-    pickCartographic, 
-    setPendingTarget, 
-    openDetailsSheet,
+    viewportId,
+    isAddMode,
+    pickCartographic,
+    setLastAddedTarget,
     isInteractiveEntity,
     findExistingObject,
     createSceneObjectFromEntity,

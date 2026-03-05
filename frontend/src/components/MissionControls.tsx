@@ -59,7 +59,7 @@ const MissionControls: React.FC = () => {
   const hasAutoSelected = useRef(false)
 
   // Client state: selected satellite IDs + TLE data (Zustand + persist → localStorage)
-  const { selectedSatellites, setSelection } = useSatelliteSelectionStore()
+  const { selectedIds, selectedSatellites, setSelection } = useSatelliteSelectionStore()
 
   // Check if mission has been analyzed (CZML data loaded)
   const isAnalyzed = state.czmlData && state.czmlData.length > 0
@@ -122,6 +122,9 @@ const MissionControls: React.FC = () => {
 
   // Pre-feasibility orders store
   const pfOrders = usePreFeasibilityOrdersStore((s) => s.orders)
+  const [hasAttemptedRun, setHasAttemptedRun] = useState(false)
+
+  // Full validation — gates the Run button and shown after a run attempt
   const validationIssues = useMemo(() => {
     const issues: string[] = []
     if (pfOrders.length === 0) {
@@ -141,6 +144,12 @@ const MissionControls: React.FC = () => {
   }, [pfOrders])
   const hasValidOrders = validationIssues.length === 0
 
+  // Soft validation — shown inline immediately, skips "no targets" for fresh empty orders
+  const softIssues = useMemo(() => {
+    if (hasAttemptedRun) return validationIssues
+    return validationIssues.filter((issue) => !issue.includes('has no targets'))
+  }, [validationIssues, hasAttemptedRun])
+
   // Auto-disable map add mode when running analysis
   const { disableAddMode } = useTargetAddStore.getState()
 
@@ -154,6 +163,7 @@ const MissionControls: React.FC = () => {
     }
 
     if (!hasValidOrders) {
+      setHasAttemptedRun(true)
       alert('Cannot run feasibility:\n\n' + validationIssues.join('\n'))
       return
     }
@@ -208,34 +218,6 @@ const MissionControls: React.FC = () => {
       {/* Scrollable Content */}
       <div className="flex-1 overflow-y-auto">
         <div className="p-4 space-y-6">
-          {/* Selected Constellation Indicator */}
-          <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-3 mb-4">
-            <div className="flex items-center justify-between">
-              <div className="flex-1">
-                <span className="text-xs text-gray-400">
-                  {formData.satellites.length > 1
-                    ? `Constellation (${formData.satellites.length})`
-                    : 'Selected Satellite'}
-                </span>
-                <div className="flex flex-wrap gap-1 mt-1">
-                  {formData.satellites.length > 0 ? (
-                    formData.satellites.map((sat, idx) => (
-                      <span
-                        key={idx}
-                        className="text-xs font-medium text-white bg-blue-600/30 px-2 py-0.5 rounded"
-                      >
-                        {sat.name}
-                      </span>
-                    ))
-                  ) : (
-                    <p className="text-sm font-medium text-gray-500">None selected</p>
-                  )}
-                </div>
-              </div>
-              <span className="text-xs text-gray-500">Change in Admin Panel</span>
-            </div>
-          </div>
-
           {/* Step 1: Orders & Targets */}
           <div>
             <div className="flex items-center space-x-2 mb-3">
@@ -245,13 +227,13 @@ const MissionControls: React.FC = () => {
               <h3 className="text-sm font-semibold text-white">Orders & Targets</h3>
             </div>
             <OrdersPanel disabled={!!isAnalyzed} />
-            {/* Validation summary */}
-            {!isAnalyzed && pfOrders.length > 0 && validationIssues.length > 0 && (
+            {/* Validation summary — soft issues hide "no targets" until user attempts Run */}
+            {!isAnalyzed && pfOrders.length > 0 && softIssues.length > 0 && (
               <div className="mt-2 p-2 bg-red-900/20 border border-red-700/30 rounded-lg">
                 <div className="flex items-start gap-1.5">
                   <AlertCircle className="w-3.5 h-3.5 text-red-400 flex-shrink-0 mt-0.5" />
                   <div className="text-[10px] text-red-400 space-y-0.5">
-                    {validationIssues.map((issue, i) => (
+                    {softIssues.map((issue, i) => (
                       <p key={i}>{issue}</p>
                     ))}
                   </div>
@@ -287,6 +269,13 @@ const MissionControls: React.FC = () => {
               }}
               onChange={(params: Partial<FormData>) => updateFormData(params)}
               disabled={isAnalyzed}
+              allSatellites={allSatellites.map((s) => ({
+                id: s.id,
+                name: s.name,
+                active: s.active,
+                imaging_type: s.imaging_type,
+              }))}
+              selectedSatelliteIds={selectedIds}
             />
           </div>
         </div>

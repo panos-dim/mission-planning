@@ -30,7 +30,7 @@ import {
   type PreFeasibilityOrder,
 } from '../store/preFeasibilityOrdersStore'
 import { usePreviewTargetsStore } from '../store/previewTargetsStore'
-import { useTargetAddStore } from '../store/targetAddStore'
+import { useTargetAddStore, type LastAddedTarget } from '../store/targetAddStore'
 
 // =============================================================================
 // Gulf Area Sample Targets — debugging / demo scenario
@@ -136,10 +136,62 @@ const OrderTargetRow: React.FC<OrderTargetRowProps> = ({
   onUpdate,
   disabled,
 }) => {
+  const [isEditingName, setIsEditingName] = useState(false)
+  const [editName, setEditName] = useState(target.name)
+  const nameInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (isEditingName) {
+      nameInputRef.current?.focus()
+      nameInputRef.current?.select()
+    }
+  }, [isEditingName])
+
+  const commitName = () => {
+    const trimmed = editName.trim()
+    if (trimmed && trimmed !== target.name) {
+      onUpdate({ name: trimmed })
+    } else {
+      setEditName(target.name)
+    }
+    setIsEditingName(false)
+  }
+
+  const cancelName = () => {
+    setEditName(target.name)
+    setIsEditingName(false)
+  }
+
   return (
     <div className="flex items-center gap-2 py-1.5 px-2 bg-gray-800/50 rounded text-xs group">
       <Target className="w-3 h-3 flex-shrink-0 text-blue-500" />
-      <span className="font-medium text-white truncate flex-1 min-w-0">{target.name}</span>
+      {isEditingName && !disabled ? (
+        <input
+          ref={nameInputRef}
+          type="text"
+          value={editName}
+          onChange={(e) => setEditName(e.target.value)}
+          onBlur={commitName}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commitName()
+            if (e.key === 'Escape') cancelName()
+          }}
+          className="input-field flex-1 min-w-0 text-xs py-0"
+        />
+      ) : (
+        <span
+          className={`font-medium text-white truncate flex-1 min-w-0 ${!disabled ? 'cursor-text hover:text-blue-300' : ''}`}
+          onClick={() => {
+            if (!disabled) {
+              setEditName(target.name)
+              setIsEditingName(true)
+            }
+          }}
+          title={disabled ? target.name : 'Click to rename'}
+        >
+          {target.name}
+        </span>
+      )}
       <span className="text-gray-500 flex-shrink-0">
         {target.latitude.toFixed(2)}°, {target.longitude.toFixed(2)}°
       </span>
@@ -170,6 +222,82 @@ const OrderTargetRow: React.FC<OrderTargetRowProps> = ({
 }
 
 // =============================================================================
+// EditableTargetRow — inline editor for a just-added map-click target
+// =============================================================================
+
+interface EditableTargetRowProps {
+  target: TargetData
+  onConfirm: (updates: Partial<TargetData>) => void
+  onDismiss: () => void
+}
+
+const EditableTargetRow: React.FC<EditableTargetRowProps> = ({ target, onConfirm, onDismiss }) => {
+  const [name, setName] = useState(target.name)
+  const [priority, setPriority] = useState(target.priority ?? 5)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    inputRef.current?.focus()
+    inputRef.current?.select()
+  }, [])
+
+  const handleConfirm = () => {
+    onConfirm({ name: name.trim() || target.name, priority })
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') handleConfirm()
+    if (e.key === 'Escape') onDismiss()
+  }
+
+  return (
+    <div className="py-1.5 px-2 bg-blue-900/20 rounded border border-blue-600/40 space-y-1.5">
+      <div className="flex items-center gap-1.5">
+        <Target className="w-3 h-3 flex-shrink-0 text-blue-400" />
+        <input
+          ref={inputRef}
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Target name"
+          className="input-field flex-1 min-w-0 text-xs py-0.5"
+        />
+        <select
+          value={priority}
+          onChange={(e) => setPriority(parseInt(e.target.value))}
+          className="w-10 px-0.5 py-0.5 bg-gray-700 border border-gray-600 rounded text-[10px] text-white focus:border-blue-500 focus:outline-none"
+          title="Priority (1 best → 5 lowest)"
+        >
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="5">5</option>
+        </select>
+        <button
+          onClick={handleConfirm}
+          className="p-0.5 text-green-400 hover:text-green-300 hover:bg-green-900/30 rounded transition-colors"
+          title="Confirm"
+        >
+          <Check className="w-3.5 h-3.5" />
+        </button>
+        <button
+          onClick={onDismiss}
+          className="p-0.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
+          title="Dismiss"
+        >
+          <X className="w-3 h-3" />
+        </button>
+      </div>
+      <div className="text-[10px] text-gray-500 pl-[18px] tabular-nums">
+        {target.latitude.toFixed(4)}°, {target.longitude.toFixed(4)}°
+      </div>
+    </div>
+  )
+}
+
+// =============================================================================
 // InlineTargetAdd — compact target creation inside an order
 // =============================================================================
 
@@ -181,6 +309,7 @@ const InlineTargetAdd: React.FC<InlineTargetAddProps> = ({ onAdd }) => {
   const [name, setName] = useState('')
   const [lat, setLat] = useState('')
   const [lon, setLon] = useState('')
+  const [priority, setPriority] = useState(5)
   const [error, setError] = useState('')
 
   const handleAdd = () => {
@@ -204,12 +333,13 @@ const InlineTargetAdd: React.FC<InlineTargetAddProps> = ({ onAdd }) => {
       name: name.trim(),
       latitude: latNum,
       longitude: lonNum,
-      priority: 5,
+      priority,
       color: '#3B82F6',
     })
     setName('')
     setLat('')
     setLon('')
+    setPriority(5)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -253,6 +383,18 @@ const InlineTargetAdd: React.FC<InlineTargetAddProps> = ({ onAdd }) => {
           step="0.01"
           className="input-field w-16 text-xs py-1"
         />
+        <select
+          value={priority}
+          onChange={(e) => setPriority(parseInt(e.target.value))}
+          className="w-10 px-0.5 py-1 bg-gray-700 border border-gray-600 rounded text-[10px] text-white focus:border-blue-500 focus:outline-none"
+          title="Priority (1 best → 5 lowest)"
+        >
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="5">5</option>
+        </select>
         <button
           onClick={handleAdd}
           disabled={isNameEmpty}
@@ -275,9 +417,17 @@ interface OrderCardProps {
   isMapActive: boolean
   onToggleMap: () => void
   disabled?: boolean
+  /** Reference to the just-added map-click target, if it belongs to this order */
+  lastAdded: LastAddedTarget | null
 }
 
-const OrderCard: React.FC<OrderCardProps> = ({ order, isMapActive, onToggleMap, disabled }) => {
+const OrderCard: React.FC<OrderCardProps> = ({
+  order,
+  isMapActive,
+  onToggleMap,
+  disabled,
+  lastAdded,
+}) => {
   const [expanded, setExpanded] = useState(true)
   const [isEditing, setIsEditing] = useState(false)
   const [editName, setEditName] = useState(order.name)
@@ -527,19 +677,42 @@ const OrderCard: React.FC<OrderCardProps> = ({ order, isMapActive, onToggleMap, 
             </div>
           ) : (
             <div className="space-y-1">
-              {order.targets.map((target, idx) => (
-                <OrderTargetRow
-                  key={`${order.id}-${idx}`}
-                  target={target}
-                  onRemove={() => removeTarget(order.id, idx)}
-                  onUpdate={(updates) => updateTarget(order.id, idx, updates)}
-                  disabled={disabled}
-                />
-              ))}
+              {order.targets.map((target, idx) => {
+                const isEditing =
+                  lastAdded && lastAdded.orderId === order.id && lastAdded.targetIndex === idx
+
+                if (isEditing) {
+                  return (
+                    <EditableTargetRow
+                      key={`${order.id}-${idx}-edit`}
+                      target={target}
+                      onConfirm={(updates) => {
+                        updateTarget(order.id, idx, updates)
+                        useTargetAddStore.getState().clearLastAddedTarget()
+                      }}
+                      onDismiss={() => {
+                        useTargetAddStore.getState().clearLastAddedTarget()
+                      }}
+                    />
+                  )
+                }
+
+                return (
+                  <OrderTargetRow
+                    key={`${order.id}-${idx}`}
+                    target={target}
+                    onRemove={() => removeTarget(order.id, idx)}
+                    onUpdate={(updates) => updateTarget(order.id, idx, updates)}
+                    disabled={disabled}
+                  />
+                )
+              })}
             </div>
           )}
 
-          {!disabled && <InlineTargetAdd onAdd={(target) => addTarget(order.id, target)} />}
+          {!disabled && !isMapActive && (
+            <InlineTargetAdd onAdd={(target) => addTarget(order.id, target)} />
+          )}
         </div>
       )}
     </div>
@@ -557,7 +730,7 @@ interface OrdersPanelProps {
 const OrdersPanel: React.FC<OrdersPanelProps> = ({ disabled = false }) => {
   const { orders, createOrder, activeOrderId, setActiveOrder } = usePreFeasibilityOrdersStore()
   const { setTargets: setPreviewTargets } = usePreviewTargetsStore()
-  const { isAddMode, toggleAddMode, disableAddMode } = useTargetAddStore()
+  const { isAddMode, toggleAddMode, disableAddMode, lastAddedTarget } = useTargetAddStore()
 
   // Sync all order targets to preview store for map display
   const allTargets = useMemo(() => orders.flatMap((o) => o.targets), [orders])
@@ -608,6 +781,7 @@ const OrdersPanel: React.FC<OrdersPanelProps> = ({ disabled = false }) => {
               isMapActive={isAddMode && activeOrderId === order.id}
               onToggleMap={() => handleToggleMapForOrder(order.id)}
               disabled={disabled}
+              lastAdded={lastAddedTarget?.orderId === order.id ? lastAddedTarget : null}
             />
           ))}
         </div>

@@ -30,6 +30,62 @@ export function formatDateTimeDDMMYYYY(iso: string): string {
 }
 
 /**
+ * Parse an end-time offset string like "+6h", "+1d", "+2w", "+1m"
+ * and return the resulting ISO datetime (YYYY-MM-DDTHH:mm) relative to `startIso`.
+ *
+ * Supported suffixes:
+ *   h — hours   (e.g. +6h  → 6 hours after start)
+ *   d — days    (e.g. +1d  → 24 hours after start)
+ *   w — weeks   (e.g. +2w  → 14 days after start)
+ *   m — months  (e.g. +1m  → 1 calendar month after start)
+ *
+ * Returns `null` when the input cannot be parsed.
+ */
+export function parseEndTimeOffset(raw: string, startIso: string): string | null {
+  const trimmed = raw.trim().toLowerCase()
+  const match = trimmed.match(/^\+(\d+(?:\.\d+)?)\s*(h|d|w|m)$/)
+  if (!match) return null
+
+  const value = parseFloat(match[1])
+  const unit = match[2]
+  if (value <= 0 || !isFinite(value)) return null
+
+  const start = new Date(startIso)
+  if (isNaN(start.getTime())) return null
+
+  let end: Date
+  switch (unit) {
+    case 'h':
+      end = new Date(start.getTime() + value * 3_600_000)
+      break
+    case 'd':
+      end = new Date(start.getTime() + value * 86_400_000)
+      break
+    case 'w':
+      end = new Date(start.getTime() + value * 7 * 86_400_000)
+      break
+    case 'm': {
+      end = new Date(start)
+      end.setMonth(end.getMonth() + Math.floor(value))
+      const fractionalDays = (value % 1) * 30
+      if (fractionalDays > 0) {
+        end = new Date(end.getTime() + fractionalDays * 86_400_000)
+      }
+      break
+    }
+    default:
+      return null
+  }
+
+  const y = end.getFullYear()
+  const mo = String(end.getMonth() + 1).padStart(2, '0')
+  const d = String(end.getDate()).padStart(2, '0')
+  const h = String(end.getHours()).padStart(2, '0')
+  const mi = String(end.getMinutes()).padStart(2, '0')
+  return `${y}-${mo}-${d}T${h}:${mi}`
+}
+
+/**
  * Format an ISO date string to "DD-MM-YYYY HH:MM UTC" (no seconds).
  */
 export function formatDateTimeShort(iso: string): string {

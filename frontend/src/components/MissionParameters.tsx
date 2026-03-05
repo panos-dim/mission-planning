@@ -1,18 +1,9 @@
-import React, { useCallback, useEffect } from 'react'
-import {
-  Calendar,
-  Clock,
-  Eye,
-  Radar,
-  ChevronDown,
-  ChevronUp,
-  AlertCircle,
-  Timer,
-} from 'lucide-react'
+import React, { useCallback, useState } from 'react'
+import { Calendar, Clock, Eye, Radar, ChevronDown, ChevronUp, Satellite } from 'lucide-react'
 import DateTimePicker from './DateTimePicker'
 import type { SARImagingMode, SARLookSide, SARPassDirection } from '../types'
 import { LABELS } from '../constants/labels'
-import { formatDateTimeShort } from '../utils/date'
+import { parseEndTimeOffset } from '../utils/date'
 import { useSarModes } from '../hooks/queries'
 
 interface SARParams {
@@ -21,6 +12,13 @@ interface SARParams {
   incidence_max_deg?: number
   look_side: SARLookSide
   pass_direction: SARPassDirection
+}
+
+export interface SatelliteSelectorItem {
+  id: string
+  name: string
+  active: boolean
+  imaging_type: string
 }
 
 interface MissionParametersProps {
@@ -37,6 +35,9 @@ interface MissionParametersProps {
   onChange: (params: Partial<MissionParametersProps['parameters']>) => void
   disabled?: boolean
   maxSatelliteRoll?: number // From selected satellite's bus config
+  // Satellite display (read-only, set via Admin config)
+  allSatellites?: SatelliteSelectorItem[]
+  selectedSatelliteIds?: string[]
 }
 
 // Fallback SAR mode defaults (used if backend not available)
@@ -50,99 +51,29 @@ const FALLBACK_SAR_DEFAULTS: Record<
   dwell: { incMin: 20, incMax: 40, desc: 'Extended dwell, change detection' },
 }
 
-type TimeRangeMode = 'absolute' | 'duration'
-
-interface DurationPreset {
-  label: string
-  hours: number
-}
-
-const DURATION_PRESETS: DurationPreset[] = [
-  { label: '+6h', hours: 6 },
-  { label: '+12h', hours: 12 },
-  { label: '+1d', hours: 24 },
-  { label: '+2d', hours: 48 },
-  { label: '+3d', hours: 72 },
-  { label: '+1w', hours: 168 },
-]
-
-const computeEndTime = (startTime: string, durationHours: number): string => {
-  const start = new Date(startTime)
-  if (isNaN(start.getTime())) return startTime
-  const end = new Date(start.getTime() + durationHours * 3600_000)
-  const y = end.getFullYear()
-  const mo = String(end.getMonth() + 1).padStart(2, '0')
-  const d = String(end.getDate()).padStart(2, '0')
-  const h = String(end.getHours()).padStart(2, '0')
-  const mi = String(end.getMinutes()).padStart(2, '0')
-  return `${y}-${mo}-${d}T${h}:${mi}`
-}
-
-const formatDurationSummary = (hours: number): string => {
-  if (hours < 24) return `${hours}h`
-  const days = hours / 24
-  if (Number.isInteger(days)) return days === 7 ? '1 week' : `${days}d`
-  return `${hours}h (~${days.toFixed(1)}d)`
-}
-
 const MissionParameters: React.FC<MissionParametersProps> = ({
   parameters,
   onChange,
   disabled = false,
   maxSatelliteRoll = 45, // Default if not provided
+  allSatellites = [],
+  selectedSatelliteIds = [],
 }) => {
   const [showAdvancedSAR, setShowAdvancedSAR] = React.useState(false)
-  const [timeRangeMode, setTimeRangeMode] = React.useState<TimeRangeMode>('absolute')
-  const [durationHours, setDurationHours] = React.useState(24)
-  const [customDuration, setCustomDuration] = React.useState('')
+  const [satDropdownOpen, setSatDropdownOpen] = useState(false)
 
-  // Re-compute endTime whenever startTime or durationHours change in duration mode
-  useEffect(() => {
-    if (timeRangeMode === 'duration' && parameters.startTime) {
-      const newEnd = computeEndTime(parameters.startTime, durationHours)
-      if (newEnd !== parameters.endTime) {
-        onChange({ endTime: newEnd })
+  // Intercept raw text typed into the End Time picker: if it looks like
+  // an offset string (+1d, +6h, +2w, +1m) resolve it from startTime.
+  const handleEndTimeRawInput = useCallback(
+    (raw: string): boolean => {
+      const result = parseEndTimeOffset(raw, parameters.startTime)
+      if (result) {
+        onChange({ endTime: result })
+        return true
       }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timeRangeMode, parameters.startTime, durationHours])
-
-  const handlePresetClick = useCallback((hours: number) => {
-    setDurationHours(hours)
-    setCustomDuration('')
-  }, [])
-
-  const handleCustomDurationChange = useCallback((value: string) => {
-    setCustomDuration(value)
-    const parsed = parseFloat(value)
-    if (!isNaN(parsed) && parsed > 0) {
-      setDurationHours(parsed)
-    }
-  }, [])
-
-  const handleModeSwitch = useCallback(
-    (mode: TimeRangeMode) => {
-      setTimeRangeMode(mode)
-      if (mode === 'duration') {
-        // Infer duration from current start/end
-        const start = new Date(parameters.startTime)
-        const end = new Date(parameters.endTime)
-        if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
-          const diffH = (end.getTime() - start.getTime()) / 3600_000
-          if (diffH > 0) {
-            setDurationHours(diffH)
-            // Set custom field only if it doesn't match a preset
-            if (!DURATION_PRESETS.some((p) => p.hours === diffH)) {
-              setCustomDuration(String(diffH))
-            } else {
-              setCustomDuration('')
-            }
-          }
-        }
-      }
-      // eslint-disable-next-line react-hooks/exhaustive-deps
+      return false
     },
-    [parameters.startTime, parameters.endTime],
+    [parameters.startTime, onChange],
   )
 
   // SAR modes from backend (React Query — cached, deduped, StrictMode-safe)
@@ -239,53 +170,59 @@ const MissionParameters: React.FC<MissionParametersProps> = ({
           </div>
         </div>
 
-        {/* Start + End Time — same row, responsive wrap */}
+        {/* Satellites — read-only display (configured in Admin) */}
+        {selectedSatelliteIds.length > 0 && (
+          <div>
+            <button
+              type="button"
+              onClick={() => setSatDropdownOpen((o) => !o)}
+              className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm border border-gray-700 bg-gray-800/40 text-gray-300 hover:border-gray-500 transition-colors"
+            >
+              <span className="flex items-center gap-2">
+                <Satellite className="w-3.5 h-3.5 text-gray-400" />
+                <span>
+                  {selectedSatelliteIds.length === 1
+                    ? (allSatellites.find((s) => selectedSatelliteIds.includes(s.id))?.name ??
+                      '1 satellite')
+                    : `${selectedSatelliteIds.length} satellites`}
+                </span>
+              </span>
+              <ChevronDown
+                className={`w-3.5 h-3.5 text-gray-400 transition-transform ${satDropdownOpen ? 'rotate-180' : ''}`}
+              />
+            </button>
+
+            {satDropdownOpen && (
+              <div className="mt-1 rounded-lg border border-gray-700 bg-gray-800 overflow-hidden">
+                {allSatellites
+                  .filter((s) => selectedSatelliteIds.includes(s.id))
+                  .map((sat) => (
+                    <div
+                      key={sat.id}
+                      className="flex items-center gap-2 px-3 py-1.5 text-xs text-gray-300"
+                    >
+                      <span className="size-1.5 rounded-full bg-blue-400 flex-shrink-0" />
+                      <span className="truncate">{sat.name}</span>
+                      <span className="ml-auto text-[10px] text-gray-500">{sat.imaging_type}</span>
+                    </div>
+                  ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Start + End Time */}
         <div className="space-y-1">
-          {/* Shared label row */}
+          {/* Label row */}
           <div className="flex items-center">
             <label className="flex-1 min-w-[180px] text-xs font-medium text-gray-400">
               <Calendar className="w-3 h-3 inline mr-1" />
               Start Time (UTC)
             </label>
-            <div className="flex-1 min-w-[180px] flex items-center justify-between">
-              <label className="text-xs font-medium text-gray-400">
-                {timeRangeMode === 'absolute' ? (
-                  <>
-                    <Clock className="w-3 h-3 inline mr-1" />
-                    End Time (UTC)
-                  </>
-                ) : (
-                  <>
-                    <Timer className="w-3 h-3 inline mr-1" />
-                    Duration
-                  </>
-                )}
-              </label>
-              <div className="flex rounded-md overflow-hidden border border-gray-600">
-                <button
-                  onClick={() => handleModeSwitch('duration')}
-                  disabled={disabled}
-                  className={`px-1.5 py-0.5 text-[9px] font-medium transition-colors ${
-                    timeRangeMode === 'duration'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-800 text-gray-400 hover:text-gray-200'
-                  } ${disabled ? 'cursor-not-allowed' : ''}`}
-                >
-                  +Δt
-                </button>
-                <button
-                  onClick={() => handleModeSwitch('absolute')}
-                  disabled={disabled}
-                  className={`px-1.5 py-0.5 text-[9px] font-medium transition-colors ${
-                    timeRangeMode === 'absolute'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-800 text-gray-400 hover:text-gray-200'
-                  } ${disabled ? 'cursor-not-allowed' : ''}`}
-                >
-                  Date
-                </button>
-              </div>
-            </div>
+            <label className="flex-1 min-w-[180px] text-xs font-medium text-gray-400">
+              <Clock className="w-3 h-3 inline mr-1" />
+              End Time (UTC)
+            </label>
           </div>
           {/* Input row */}
           <div className="flex items-start gap-3">
@@ -298,53 +235,15 @@ const MissionParameters: React.FC<MissionParametersProps> = ({
               />
             </div>
             <div className="flex-1 min-w-[180px]">
-              {timeRangeMode === 'absolute' ? (
-                <DateTimePicker
-                  label=""
-                  value={parameters.endTime}
-                  onChange={(value) => onChange({ endTime: value })}
-                  minDate={parameters.startTime}
-                  disabled={disabled}
-                />
-              ) : (
-                <div className="space-y-1.5">
-                  <div className="grid grid-cols-3 gap-1">
-                    {DURATION_PRESETS.map((preset) => (
-                      <button
-                        key={preset.hours}
-                        onClick={() => handlePresetClick(preset.hours)}
-                        disabled={disabled}
-                        className={`py-1 rounded text-[11px] font-medium text-center transition-colors ${
-                          durationHours === preset.hours && customDuration === ''
-                            ? 'bg-blue-600 text-white'
-                            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                        } ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
-                      >
-                        {preset.label}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="flex items-center gap-1.5 mt-1">
-                    <input
-                      type="number"
-                      min="0.5"
-                      step="0.5"
-                      placeholder="Custom hrs"
-                      value={customDuration}
-                      onChange={(e) => handleCustomDurationChange(e.target.value)}
-                      className="input-field flex-1 py-1 text-[11px] text-center rounded"
-                      disabled={disabled}
-                    />
-                    <span className="text-[10px] text-gray-400 whitespace-nowrap">
-                      = {formatDurationSummary(durationHours)}
-                    </span>
-                  </div>
-                  <div className="text-[10px] text-gray-500 flex items-center gap-1 mt-1">
-                    <Clock className="w-2.5 h-2.5" />
-                    End: {parameters.endTime ? formatDateTimeShort(parameters.endTime) : '—'}
-                  </div>
-                </div>
-              )}
+              <DateTimePicker
+                label=""
+                value={parameters.endTime}
+                onChange={(value) => onChange({ endTime: value })}
+                onRawInput={handleEndTimeRawInput}
+                placeholder="dd-mm-yyyy HH:mm or +1d"
+                minDate={parameters.startTime}
+                disabled={disabled}
+              />
             </div>
           </div>
         </div>
@@ -486,41 +385,59 @@ const MissionParameters: React.FC<MissionParametersProps> = ({
           </div>
         )}
 
-        {/* Optical-specific: Max Off-nadir angle */}
-        {!isSAR && (
-          <div className="p-3 bg-blue-900/20 rounded-lg border border-blue-700/30">
-            <div className="flex items-center justify-between mb-2">
-              <label className="text-xs font-medium text-gray-400">
-                {LABELS.MAX_OFF_NADIR_ANGLE}
-              </label>
-              <span className="text-[10px] text-blue-400">
-                Satellite limit: {maxSatelliteRoll}°
-              </span>
-            </div>
-            <div className="flex items-center space-x-2">
-              <input
-                type="range"
-                min="0"
-                max={maxSatelliteRoll}
-                step="1"
-                value={Math.min(parameters.pointingAngle, maxSatelliteRoll)}
-                onChange={(e) => onChange({ pointingAngle: parseInt(e.target.value) })}
-                className="flex-1"
-                disabled={disabled}
-              />
-              <span className="text-sm text-white w-8 text-right">{parameters.pointingAngle}°</span>
-            </div>
-            {parameters.pointingAngle > maxSatelliteRoll && (
-              <div className="flex items-center space-x-1 mt-2 text-yellow-400 text-xs">
-                <AlertCircle className="w-3 h-3" />
-                <span>Exceeds satellite capability - will be clamped to {maxSatelliteRoll}°</span>
+        {/* Optical-specific: Max Off-Nadir Angle */}
+        {!isSAR &&
+          (() => {
+            const isOverMax = parameters.pointingAngle > maxSatelliteRoll
+            const isUnderMin = parameters.pointingAngle < 0
+            const hasError = isOverMax || isUnderMin
+            return (
+              <div className="space-y-2">
+                <label className="block text-xs font-medium text-gray-400">
+                  {LABELS.MAX_OFF_NADIR_ANGLE_SHORT} (°)
+                </label>
+                <div className="flex items-center gap-3">
+                  <span className="text-[10px] text-gray-500 tabular-nums">0°</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max={maxSatelliteRoll}
+                    step="1"
+                    value={Math.min(Math.max(parameters.pointingAngle, 0), maxSatelliteRoll)}
+                    onChange={(e) => onChange({ pointingAngle: parseInt(e.target.value) })}
+                    className="flex-1"
+                    disabled={disabled}
+                  />
+                  <span className="text-[10px] text-gray-500 tabular-nums">
+                    {maxSatelliteRoll}°
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={maxSatelliteRoll}
+                    step={1}
+                    value={parameters.pointingAngle}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value)
+                      if (!isNaN(v)) onChange({ pointingAngle: v })
+                    }}
+                    disabled={disabled}
+                    className={`w-16 py-1 text-sm text-center tabular-nums rounded border bg-gray-800 ${
+                      hasError ? 'border-red-500 text-red-400' : 'border-gray-600 text-white'
+                    } focus:outline-none focus:ring-1 ${
+                      hasError ? 'focus:ring-red-500' : 'focus:ring-blue-500'
+                    }`}
+                  />
+                </div>
+                {isOverMax && (
+                  <p className="text-xs text-red-400">
+                    Cannot exceed {maxSatelliteRoll}° (satellite capability)
+                  </p>
+                )}
+                {isUnderMin && <p className="text-xs text-red-400">Value must be 0° or greater</p>}
               </div>
-            )}
-            <div className="text-xs text-gray-500 mt-1">
-              Off-nadir angle for target acquisition (constrained by satellite bus)
-            </div>
-          </div>
-        )}
+            )
+          })()}
       </div>
     </div>
   )

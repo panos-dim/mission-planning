@@ -415,7 +415,32 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
   // Filter panels based on Simple Mode configuration
   const panels: SidebarPanel[] = useMemo(() => {
     const allPanels: SidebarPanel[] = [
-      // Object Explorer - visible to all planners
+      // Feasibility Analysis — first entry per MOD placement intent
+      {
+        id: LEFT_SIDEBAR_PANELS.MISSION_ANALYSIS,
+        title: LABELS.FEASIBILITY_ANALYSIS,
+        icon: Satellite,
+        component: <MissionControls key={refreshKey} />,
+      },
+      {
+        id: LEFT_SIDEBAR_PANELS.PLANNING,
+        title: 'Planning',
+        icon: Calendar,
+        component: <MissionPlanning onPromoteToOrders={handlePromoteToOrders} />,
+      },
+      {
+        id: LEFT_SIDEBAR_PANELS.SCHEDULE,
+        title: 'Schedule',
+        icon: CheckSquare,
+        component: (
+          <SchedulePanel
+            orders={orders}
+            onOrdersChange={setOrders}
+            showHistoryTab={isDeveloperMode}
+          />
+        ),
+      },
+      // Object Explorer
       {
         id: LEFT_SIDEBAR_PANELS.EXPLORER,
         title: 'Object Explorer',
@@ -451,37 +476,12 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
           />
         ),
       },
-      // Simple Mode panels (4 visible by default)
       {
         id: LEFT_SIDEBAR_PANELS.WORKSPACES,
         title: 'Workspaces',
         icon: FolderOpen,
         component: (
           <WorkspacePanel hasMissionData={hasMissionData} onWorkspaceLoad={handleWorkspaceLoad} />
-        ),
-      },
-      {
-        id: LEFT_SIDEBAR_PANELS.MISSION_ANALYSIS,
-        title: LABELS.FEASIBILITY_ANALYSIS,
-        icon: Satellite,
-        component: <MissionControls key={refreshKey} />,
-      },
-      {
-        id: LEFT_SIDEBAR_PANELS.PLANNING,
-        title: 'Planning',
-        icon: Calendar,
-        component: <MissionPlanning onPromoteToOrders={handlePromoteToOrders} />,
-      },
-      {
-        id: LEFT_SIDEBAR_PANELS.SCHEDULE,
-        title: 'Schedule',
-        icon: CheckSquare,
-        component: (
-          <SchedulePanel
-            orders={orders}
-            onOrdersChange={setOrders}
-            showHistoryTab={isDeveloperMode}
-          />
         ),
       },
     ]

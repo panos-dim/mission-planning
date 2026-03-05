@@ -1,37 +1,37 @@
 /**
- * Zustand store for managing target add mode state
+ * Zustand store for managing target add mode state.
+ *
+ * PR-UI-036: Inline-add flow — clicking the map adds the target immediately
+ * (auto-generated name, default priority) and opens the right-pane editor so
+ * the operator can refine name + priority without a confirm modal.
  */
 
 import { create } from 'zustand'
 import { devtools } from 'zustand/middleware'
 
-interface PendingTarget {
-  id: string
+/** Reference to the target that was just added to an order, for editing. */
+export interface LastAddedTarget {
+  orderId: string
+  targetIndex: number
   latitude: number
   longitude: number
-  name?: string
-  description?: string
 }
 
 interface TargetAddState {
   // Target add mode
   isAddMode: boolean
-  pendingTarget: PendingTarget | null
-  isDetailsSheetOpen: boolean
 
-  // Live preview state — synced from form for real-time globe updates
-  pendingLabel: string
-  pendingColor: string
+  /** The target that was just added via map click — open editor for it. */
+  lastAddedTarget: LastAddedTarget | null
 
   // Actions
   enableAddMode: () => void
   disableAddMode: () => void
   toggleAddMode: () => void
-  setPendingTarget: (target: PendingTarget | null) => void
-  setPendingPreview: (label: string, color: string) => void
-  openDetailsSheet: () => void
-  closeDetailsSheet: () => void
-  clearPendingTarget: () => void
+  /** Record a just-added target so the editor can open. */
+  setLastAddedTarget: (ref: LastAddedTarget) => void
+  /** Close the editor (user finished editing or dismissed). */
+  clearLastAddedTarget: () => void
 }
 
 export const useTargetAddStore = create<TargetAddState>()(
@@ -39,10 +39,7 @@ export const useTargetAddStore = create<TargetAddState>()(
     (set, get) => ({
       // Initial state
       isAddMode: false,
-      pendingTarget: null,
-      isDetailsSheetOpen: false,
-      pendingLabel: '',
-      pendingColor: '#3B82F6',
+      lastAddedTarget: null,
 
       // Actions
       enableAddMode: () => {
@@ -50,13 +47,9 @@ export const useTargetAddStore = create<TargetAddState>()(
       },
 
       disableAddMode: () => {
-        // Clear pending target when exiting add mode
         set({
           isAddMode: false,
-          pendingTarget: null,
-          isDetailsSheetOpen: false,
-          pendingLabel: '',
-          pendingColor: '#3B82F6',
+          lastAddedTarget: null,
         })
       },
 
@@ -69,29 +62,12 @@ export const useTargetAddStore = create<TargetAddState>()(
         }
       },
 
-      setPendingTarget: (target: PendingTarget | null) => {
-        set({ pendingTarget: target, pendingLabel: '', pendingColor: '#3B82F6' })
+      setLastAddedTarget: (ref: LastAddedTarget) => {
+        set({ lastAddedTarget: ref })
       },
 
-      setPendingPreview: (label: string, color: string) => {
-        set({ pendingLabel: label, pendingColor: color })
-      },
-
-      openDetailsSheet: () => {
-        set({ isDetailsSheetOpen: true })
-      },
-
-      closeDetailsSheet: () => {
-        set({ isDetailsSheetOpen: false })
-      },
-
-      clearPendingTarget: () => {
-        set({
-          pendingTarget: null,
-          isDetailsSheetOpen: false,
-          pendingLabel: '',
-          pendingColor: '#3B82F6',
-        })
+      clearLastAddedTarget: () => {
+        set({ lastAddedTarget: null })
       },
     }),
     { name: 'TargetAddStore', enabled: import.meta.env?.DEV ?? false },

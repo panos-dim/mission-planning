@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState, useCallback, useEffect } from 'react'
 import DatePicker from 'react-datepicker'
 import 'react-datepicker/dist/react-datepicker.css'
 import { Calendar } from 'lucide-react'
@@ -10,7 +10,92 @@ interface DateTimePickerProps {
   minDate?: string
   icon?: React.ReactNode
   disabled?: boolean
+  /** Intercept raw text input (e.g. '+1d' offsets). Return true if handled externally. */
+  onRawInput?: (raw: string) => boolean
+  placeholder?: string
 }
+
+// ---------------------------------------------------------------------------
+// OffsetAwareInput — custom input for DatePicker that supports typing offsets
+// When the user types text starting with '+', the input manages its own value
+// and delegates parsing to onRawInput. On blur/Enter it resets to the
+// resolved date value that DatePicker passes via props.
+// ---------------------------------------------------------------------------
+interface OffsetInputProps {
+  value?: string
+  onClick?: () => void
+  onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void
+  onRawInput?: (raw: string) => boolean
+  className?: string
+  placeholder?: string
+  disabled?: boolean
+}
+
+const OffsetAwareInput = React.forwardRef<HTMLInputElement, OffsetInputProps>(
+  ({ value = '', onClick, onChange, onRawInput, className, placeholder, disabled }, ref) => {
+    const [isOffsetMode, setIsOffsetMode] = useState(false)
+    const [rawText, setRawText] = useState('')
+
+    // Exit offset mode when the parent value changes (offset was resolved)
+    useEffect(() => {
+      if (!isOffsetMode) return
+      // Value changed → offset was resolved, stay in offset mode until blur
+    }, [value, isOffsetMode])
+
+    const handleChange = useCallback(
+      (e: React.ChangeEvent<HTMLInputElement>) => {
+        const val = e.target.value
+
+        if (val.startsWith('+')) {
+          // Offset mode: manage our own text, delegate parsing
+          setIsOffsetMode(true)
+          setRawText(val)
+          onRawInput?.(val)
+        } else {
+          // Normal date text: pass through to DatePicker
+          setIsOffsetMode(false)
+          setRawText('')
+          onChange?.(e)
+        }
+      },
+      [onChange, onRawInput],
+    )
+
+    const exitOffsetMode = useCallback(() => {
+      setIsOffsetMode(false)
+      setRawText('')
+    }, [])
+
+    const handleKeyDown = useCallback(
+      (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === 'Enter' && isOffsetMode) {
+          exitOffsetMode()
+          ;(e.target as HTMLInputElement).blur()
+        }
+        if (e.key === 'Escape') {
+          exitOffsetMode()
+        }
+      },
+      [isOffsetMode, exitOffsetMode],
+    )
+
+    return (
+      <input
+        ref={ref}
+        type="text"
+        value={isOffsetMode ? rawText : value}
+        onClick={isOffsetMode ? undefined : onClick}
+        onChange={handleChange}
+        onBlur={exitOffsetMode}
+        onKeyDown={handleKeyDown}
+        className={className}
+        placeholder={placeholder}
+        disabled={disabled}
+      />
+    )
+  },
+)
+OffsetAwareInput.displayName = 'OffsetAwareInput'
 
 const DateTimePicker: React.FC<DateTimePickerProps> = ({
   label,
@@ -19,6 +104,8 @@ const DateTimePicker: React.FC<DateTimePickerProps> = ({
   minDate,
   icon,
   disabled = false,
+  onRawInput,
+  placeholder,
 }) => {
   // Convert ISO string to Date object
   const dateValue = value ? new Date(value) : new Date()
@@ -94,10 +181,20 @@ const DateTimePicker: React.FC<DateTimePickerProps> = ({
             maxTime: new Date(new Date().setHours(23, 45, 0, 0)),
           })}
           filterTime={filterTime}
+          customInput={
+            onRawInput ? (
+              <OffsetAwareInput
+                onRawInput={onRawInput}
+                className={`input-field w-full text-sm ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+                placeholder={placeholder || 'Select date and time'}
+                disabled={disabled}
+              />
+            ) : undefined
+          }
           className={`input-field w-full text-sm ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
           calendarClassName="datetime-picker-calendar"
           wrapperClassName="w-full"
-          placeholderText="Select date and time"
+          placeholderText={placeholder || 'Select date and time'}
           showPopperArrow={false}
           popperPlacement="bottom-start"
           disabled={disabled}

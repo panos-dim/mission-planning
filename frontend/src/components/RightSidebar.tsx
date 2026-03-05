@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { Layers, ChevronLeft, FileSearch, BarChart2, Bot, Sparkles, MapPin } from 'lucide-react'
 import { Inspector } from './ObjectExplorer'
 import MissionResultsPanel from './MissionResultsPanel'
@@ -7,7 +7,6 @@ import ResizeHandle from './ResizeHandle'
 import SwathLayerControl from './Map/SwathLayerControl'
 import { useMission } from '../context/MissionContext'
 import { useVisStore } from '../store/visStore'
-import { useTargetAddStore } from '../store/targetAddStore'
 import { useSelectionStore } from '../store/selectionStore'
 import {
   RIGHT_SIDEBAR_PANELS,
@@ -28,12 +27,6 @@ const RightSidebar: React.FC = () => {
   const { state, toggleEntityVisibility } = useMission()
   const [activePanel, setActivePanel] = useState<string | null>(null)
   const [isPanelOpen, setIsPanelOpen] = useState(false)
-
-  // Track previous panel so we can restore it after contextual panels close
-  const previousPanelRef = useRef<{ id: string | null; open: boolean }>({ id: null, open: false })
-
-  // Target add mode — auto-open Confirm Target panel when user clicks the map
-  const { pendingTarget, isDetailsSheetOpen } = useTargetAddStore()
 
   // Use visStore for layer states to synchronize across viewports
   const {
@@ -75,28 +68,6 @@ const RightSidebar: React.FC = () => {
   useEffect(() => {
     setRightSidebarOpen(isPanelOpen)
   }, [isPanelOpen, setRightSidebarOpen])
-
-  // Auto-open Confirm Target panel when a pending target appears
-  useEffect(() => {
-    if (pendingTarget && isDetailsSheetOpen) {
-      // Save current state before switching
-      if (activePanel !== RIGHT_SIDEBAR_PANELS.CONFIRM_TARGET) {
-        previousPanelRef.current = { id: activePanel, open: isPanelOpen }
-      }
-      setActivePanel(RIGHT_SIDEBAR_PANELS.CONFIRM_TARGET)
-      setIsPanelOpen(true)
-    } else if (!pendingTarget && activePanel === RIGHT_SIDEBAR_PANELS.CONFIRM_TARGET) {
-      // Restore previous panel when pending target is cleared
-      const prev = previousPanelRef.current
-      if (prev.open && prev.id) {
-        setActivePanel(prev.id)
-      } else {
-        setIsPanelOpen(false)
-        setTimeout(() => setActivePanel(null), 300)
-      }
-      previousPanelRef.current = { id: null, open: false }
-    }
-  }, [pendingTarget, isDetailsSheetOpen]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Enable ground stations and mission-specific layers when mission data is loaded
   useEffect(() => {

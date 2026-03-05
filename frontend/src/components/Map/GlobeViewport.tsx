@@ -46,6 +46,7 @@ import TimelineControls from './TimelineControls'
 import { useLockModeStore } from '../../store/lockModeStore'
 import { useLockStore } from '../../store/lockStore'
 import { useOrdersStore } from '../../store/ordersStore'
+import { usePreFeasibilityOrdersStore } from '../../store/preFeasibilityOrdersStore'
 import { usePlanningStore } from '../../store/planningStore'
 import { getScheduleTargetLocations } from '../../api/scheduleApi'
 import { useScheduleStore } from '../../store/scheduleStore'
@@ -142,26 +143,14 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
     })
   })
 
-  // Target add mode state
-  const {
-    isAddMode,
-    pendingTarget,
-    pendingLabel,
-    pendingColor,
-    setPendingTarget,
-    openDetailsSheet,
-  } = useTargetAddStore(
+  // Target add mode state (PR-UI-036: inline-add, no confirm modal)
+  const { isAddMode, setLastAddedTarget } = useTargetAddStore(
     useShallow((s) => ({
       isAddMode: s.isAddMode,
-      pendingTarget: s.pendingTarget,
-      pendingLabel: s.pendingLabel,
-      pendingColor: s.pendingColor,
-      setPendingTarget: s.setPendingTarget,
-      openDetailsSheet: s.openDetailsSheet,
+      setLastAddedTarget: s.setLastAddedTarget,
     })),
   )
   const { pickCartographic } = useMapClickToCartographic()
-  const pendingEntityRef = useRef<string | null>(null)
 
   // Preview targets store for showing targets before mission analysis
   const {
@@ -319,110 +308,6 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
     // Force render
     viewer.scene.requestRender()
   }, [previewTargets, czmlData, hidePreview, setHidePreview])
-
-  // Render pending target marker on the globe (before user confirms in sidebar)
-  // Key pattern: UPDATE position in-place when it already exists instead of
-  // remove+add, which causes a blank frame with Cesium's requestRenderMode.
-  useEffect(() => {
-    const viewer = viewerRef.current?.cesiumElement
-    if (!viewer || !viewer.entities) return
-
-    const PENDING_ID = 'pending_target_marker'
-    const existing = viewer.entities.getById(PENDING_ID)
-
-    if (pendingTarget) {
-      const newPos = Cartesian3.fromDegrees(pendingTarget.longitude, pendingTarget.latitude, 0)
-
-      if (existing) {
-        // Entity already on globe — just move it (no remove+add flicker)
-        existing.position = newPos as never
-        viewer.scene.requestRender()
-      } else {
-        // First click — create the entity
-        const svgPin = [
-          '<svg width="32" height="40" viewBox="0 0 32 40" xmlns="http://www.w3.org/2000/svg">',
-          '<path d="M16 0C9.4 0 4 5.4 4 12c0 8 12 28 12 28s12-20 12-28c0-6.6-5.4-12-12-12z"',
-          '      fill="#06B6D4" stroke="#0891B2" stroke-width="2"/>',
-          '<circle cx="16" cy="12" r="5" fill="#FFFFFF"/>',
-          '<circle cx="16" cy="12" r="9" fill="none" stroke="#FFFFFF" stroke-width="1.5" stroke-dasharray="3 2"/>',
-          '</svg>',
-        ].join('')
-
-        viewer.entities.add({
-          id: PENDING_ID,
-          name: 'Pending target',
-          position: newPos,
-          billboard: {
-            image: 'data:image/svg+xml;base64,' + btoa(svgPin),
-            width: 24,
-            height: 30,
-            verticalOrigin: VerticalOrigin.BOTTOM,
-          },
-          label: {
-            text: 'Pending...',
-            font: '12px sans-serif',
-            fillColor: Color.CYAN,
-            outlineColor: Color.BLACK,
-            outlineWidth: 2,
-            style: LabelStyle.FILL_AND_OUTLINE,
-            horizontalOrigin: HorizontalOrigin.CENTER,
-            verticalOrigin: VerticalOrigin.BOTTOM,
-            pixelOffset: new Cartesian2(0, -35),
-          },
-        })
-
-        pendingEntityRef.current = PENDING_ID
-        viewer.scene.requestRender()
-      }
-    } else {
-      // pendingTarget cleared — remove the marker
-      if (existing) {
-        viewer.entities.remove(existing)
-        pendingEntityRef.current = null
-        viewer.scene.requestRender()
-      }
-    }
-    // No cleanup return — removal is handled by the else branch above
-    // when pendingTarget becomes null (avoids the remove+add race)
-  }, [pendingTarget])
-
-  // Live-preview: update the pending marker's label and color as user types / picks
-  useEffect(() => {
-    const viewer = viewerRef.current?.cesiumElement
-    if (!viewer || !viewer.entities) return
-
-    const entity = viewer.entities.getById('pending_target_marker')
-    if (!entity) return
-
-    // Update label text
-    if (entity.label) {
-      entity.label.text = (pendingLabel.trim() || 'Pending...') as never
-      entity.label.fillColor = (pendingLabel.trim() ? Color.WHITE : Color.CYAN) as never
-    }
-
-    // Update billboard color by rebuilding the SVG with the selected color.
-    // Cesium decodes data-URI images asynchronously — even base64. A single
-    // requestRender() fires before decoding finishes, so we schedule a second
-    // render via requestAnimationFrame to pick up the decoded texture.
-    if (entity.billboard && pendingColor) {
-      const svgPin = [
-        '<svg width="32" height="40" viewBox="0 0 32 40" xmlns="http://www.w3.org/2000/svg">',
-        `<path d="M16 0C9.4 0 4 5.4 4 12c0 8 12 28 12 28s12-20 12-28c0-6.6-5.4-12-12-12z"`,
-        `      fill="${pendingColor}" stroke="${pendingColor}" stroke-width="2" opacity="0.9"/>`,
-        '<circle cx="16" cy="12" r="5" fill="#FFFFFF"/>',
-        '<circle cx="16" cy="12" r="9" fill="none" stroke="#FFFFFF" stroke-width="1.5" stroke-dasharray="3 2"/>',
-        '</svg>',
-      ].join('')
-      entity.billboard.image = ('data:image/svg+xml;base64,' + btoa(svgPin)) as never
-    }
-
-    viewer.scene.requestRender()
-    // Second render after image decode completes (async even for data URIs)
-    const rafId = requestAnimationFrame(() => {
-      viewer.scene.requestRender()
-    })
-    return () => cancelAnimationFrame(rafId)
-  }, [pendingLabel, pendingColor])
 
   // Planning-mode target coloring
   // When Planning tab is active: gray all targets. After scheduler run: acquired → blue, rest → gray.
@@ -1224,23 +1109,42 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
         eventHandlerRef.current = new ScreenSpaceEventHandler(viewer.scene.canvas)
 
         eventHandlerRef.current.setInputAction((click: { position: Cartesian2 }) => {
-          // Handle target add mode
+          // PR-UI-036: Inline add target — immediately add to the active order
           if (isAddMode) {
             const windowPosition = new Cartesian2(click.position.x, click.position.y)
             const clickedLocation = pickCartographic(viewer, windowPosition)
 
             if (clickedLocation) {
-              debug.info(`Target placed: ${clickedLocation.formatted.decimal}`)
+              debug.info(`Target added inline: ${clickedLocation.formatted.decimal}`)
 
-              // Create pending target
-              const pendingTarget = {
-                id: `pending-${Date.now()}`,
-                latitude: clickedLocation.latitude,
-                longitude: clickedLocation.longitude,
+              const ordersState = usePreFeasibilityOrdersStore.getState()
+              let orderId = ordersState.activeOrderId
+              if (!orderId) {
+                orderId = ordersState.createOrder()
+                usePreFeasibilityOrdersStore.getState().setActiveOrder(orderId)
               }
 
-              setPendingTarget(pendingTarget)
-              openDetailsSheet()
+              const order = usePreFeasibilityOrdersStore
+                .getState()
+                .orders.find((o) => o.id === orderId)
+              const idx = order ? order.targets.length : 0
+              const autoName = `Target ${idx + 1}`
+
+              ordersState.addTarget(orderId!, {
+                name: autoName,
+                latitude: clickedLocation.latitude,
+                longitude: clickedLocation.longitude,
+                description: '',
+                priority: 5,
+                color: '#3B82F6',
+              })
+
+              setLastAddedTarget({
+                orderId: orderId!,
+                targetIndex: idx,
+                latitude: clickedLocation.latitude,
+                longitude: clickedLocation.longitude,
+              })
             }
             return
           }
@@ -1416,8 +1320,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
     isLockMode,
     toggleLock,
     pickCartographic,
-    setPendingTarget,
-    openDetailsSheet,
+    setLastAddedTarget,
     selectSwath,
     setSelectedOpportunity,
     setHoveredSwath,
