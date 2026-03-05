@@ -15,6 +15,7 @@ import type { ScheduledAcquisition } from './ScheduleTimeline'
 import { useMission } from '../context/MissionContext'
 import { useScheduleStore } from '../store/scheduleStore'
 import { useVisStore } from '../store/visStore'
+import { useSelectionStore } from '../store/selectionStore'
 
 interface SchedulePanelProps {
   orders: AcceptedOrder[]
@@ -52,7 +53,9 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
   const startPolling = useScheduleStore((s) => s.startPolling)
   const stopPolling = useScheduleStore((s) => s.stopPolling)
   const focusAcquisition = useScheduleStore((s) => s.focusAcquisition)
+  const focusedAcquisitionId = useScheduleStore((s) => s.focusedAcquisitionId)
   const setTimeRangeFromIso = useVisStore((s) => s.setTimeRangeFromIso)
+  const clearAcquisitionSelection = useSelectionStore((s) => s.selectAcquisition)
 
   // PR-UI-030: Polling lifecycle — start when Timeline tab is visible, stop otherwise
   const workspaceId = missionState.activeWorkspace
@@ -72,6 +75,8 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
         startTime: acq.start_time,
         lat: acq.target_lat,
         lon: acq.target_lon,
+        satelliteId: acq.satellite_id,
+        targetId: acq.target_id,
       })
     },
     [focusAcquisition],
@@ -162,6 +167,16 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
       target_lon: item.target_lon ?? undefined,
     }))
   }, [scheduleItems, lockLevels, satelliteNameMap, timelineAcquisitions])
+
+  // Selection persistence: if polling removes the focused acquisition, clear both stores
+  useEffect(() => {
+    if (!focusedAcquisitionId) return
+    const stillExists = masterAcquisitions.some((a) => a.id === focusedAcquisitionId)
+    if (!stillExists) {
+      focusAcquisition(null)
+      clearAcquisitionSelection(null)
+    }
+  }, [masterAcquisitions, focusedAcquisitionId, focusAcquisition, clearAcquisitionSelection])
 
   const tabs: Tab[] = [
     {

@@ -57,6 +57,7 @@ import {
 } from '../../adapters/repairReasons'
 import { useMission } from '../../context/MissionContext'
 import { useGroundStations } from '../../hooks/queries'
+import { useScheduleStore } from '../../store/scheduleStore'
 import type { TreeNodeType } from '../../types/explorer'
 
 // =============================================================================
@@ -1261,6 +1262,9 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
   const { data: groundStationsData } = useGroundStations()
   const groundStationsCount = groundStationsData?.ground_stations?.length ?? 0
 
+  // Schedule items for fallback target metadata resolution
+  const scheduleItems = useScheduleStore((s) => s.items)
+
   // Unified selection store for map/table selections
   const {
     selectedType: unifiedSelectedType,
@@ -1363,6 +1367,21 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
           type: 'target',
         }
       }
+
+      // Fallback: resolve from master schedule items (schedule-view targets
+      // may not exist in missionData.targets)
+      const schedItem = scheduleItems.find((i) => i.target_id === selectedTargetId)
+      if (schedItem) {
+        return {
+          name: selectedTargetId,
+          latitude: schedItem.target_lat,
+          longitude: schedItem.target_lon,
+          type: 'target',
+        } as Record<string, unknown>
+      }
+
+      // Bare fallback so unified-selection renderer still activates
+      return { name: selectedTargetId, type: 'target' } as Record<string, unknown>
     }
 
     if (unifiedSelectedType === 'opportunity' && selectedOpportunityId) {
@@ -1426,6 +1445,7 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
     selectedOpportunityId,
     selectedAcquisitionId,
     selectedConflictId,
+    scheduleItems,
   ])
 
   // Handle action from inspector buttons

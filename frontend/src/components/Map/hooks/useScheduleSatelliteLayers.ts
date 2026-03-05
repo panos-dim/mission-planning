@@ -24,6 +24,12 @@ import { type Entity, type DataSource, ColorMaterialProperty, ConstantProperty }
 import { useVisStore } from '../../../store/visStore'
 import { useScheduleStore } from '../../../store/scheduleStore'
 import { getSatColor, getSatColorWithAlpha } from '../../../utils/satelliteColors'
+import {
+  sliceGroundtrackPositions,
+  invalidateGroundtrackCache,
+  _devGroundtrackStats,
+  SLICE_DEBOUNCE_MS,
+} from '../utils/groundtrackSlicing'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -57,21 +63,36 @@ export function useScheduleSatelliteLayers(
   const showSatellites = useScheduleStore((s) => s.schedLayerSatellites)
   const showGroundtracks = useScheduleStore((s) => s.schedLayerGroundtracks)
   const showHighlight = useScheduleStore((s) => s.schedLayerHighlight)
+  const sampleStep = useScheduleStore((s) => s.groundtrackSampleStep)
 
   // Track which entity IDs we have touched so we can restore them on cleanup.
   const touchedEntityIdsRef = useRef<Set<string>>(new Set())
   // Track the previous datasource so we can detect identity changes.
   const prevDataSourceRef = useRef<DataSource | null>(null)
+  // Track viewer-level sliced polyline entity IDs created for temporal window rendering.
+  const slicedEntityIdsRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     // -----------------------------------------------------------------
     // Datasource identity change: stale touched IDs from a previous
     // datasource are no longer valid. Clear them so restoration doesn't
     // apply overrides to a freshly-loaded datasource's entities.
+    // Also remove any sliced polylines that reference the old datasource's
+    // entity positions.
     // -----------------------------------------------------------------
     if (loadedDataSource !== prevDataSourceRef.current) {
       touchedEntityIdsRef.current.clear()
       prevDataSourceRef.current = loadedDataSource
+      // Invalidate the position-slice cache: old SampledPositionProperty refs are stale.
+      invalidateGroundtrackCache()
+      const staleViewer = viewerRef.current?.cesiumElement
+      if (staleViewer && slicedEntityIdsRef.current.size > 0) {
+        slicedEntityIdsRef.current.forEach((slicedId) => {
+          const e = staleViewer.entities.getById(slicedId)
+          if (e) staleViewer.entities.remove(e)
+        })
+        slicedEntityIdsRef.current.clear()
+      }
     }
 
     if (!loadedDataSource?.entities) return
@@ -85,7 +106,7 @@ export function useScheduleSatelliteLayers(
     // is nothing to restore (common path when CZML first loads).
     // -----------------------------------------------------------------
     if (!isScheduleView) {
-      if (touchedEntityIdsRef.current.size === 0) return
+      if (touchedEntityIdsRef.current.size === 0 && slicedEntityIdsRef.current.size === 0) return
 
       entities.forEach((entity: Entity) => {
         const id = entity.id ?? ''
@@ -112,6 +133,15 @@ export function useScheduleSatelliteLayers(
           }
         }
       })
+
+      // Remove sliced polyline entities from the viewer when leaving schedule view.
+      if (viewer && slicedEntityIdsRef.current.size > 0) {
+        slicedEntityIdsRef.current.forEach((slicedId) => {
+          const e = viewer.entities.getById(slicedId)
+          if (e) viewer.entities.remove(e)
+        })
+        slicedEntityIdsRef.current.clear()
+      }
 
       touchedEntityIdsRef.current.clear()
       viewer?.scene?.requestRender()
@@ -141,6 +171,11 @@ export function useScheduleSatelliteLayers(
     }
 
     const focusedCzmlId = focusedSatelliteId ? toCzmlSatId(focusedSatelliteId) : null
+
+    // Always include the focused satellite so it's visible even before items load
+    if (focusedCzmlId) {
+      inWindowCzmlIds.add(focusedCzmlId)
+    }
 
     // -----------------------------------------------------------------
     // Apply visibility overrides
@@ -176,26 +211,21 @@ export function useScheduleSatelliteLayers(
         touchedEntityIdsRef.current.add(id)
 
         if (entity.path) {
+          // Suppress the full clock-relative path arc — the debounced sliced
+          // polyline (Effect 2) renders only the [tStart, tEnd] window segment.
           // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Cesium Property system accepts boolean at runtime
-          ;(entity.path.show as any) = entity.show
-          const isFocused = showHighlight && focusedCzmlId === ownerSatId
-          entity.path.width = new ConstantProperty(
-            isFocused ? HIGHLIGHT_PATH_WIDTH : DEFAULT_PATH_WIDTH,
-          ) as never
-          entity.path.material = new ColorMaterialProperty(
-            isFocused
-              ? getSatColor(ownerSatId).withAlpha(1.0)
-              : getSatColorWithAlpha(ownerSatId, 0.5),
-          ) as never
+          ;(entity.path.show as any) = false
         }
 
-        if (entity.polyline) {
-          const isFocused = showHighlight && focusedCzmlId === ownerSatId
-          entity.polyline.material = new ColorMaterialProperty(
-            isFocused
-              ? getSatColor(ownerSatId).withAlpha(1.0)
-              : getSatColorWithAlpha(ownerSatId, 0.5),
-          ) as never
+        // Immediately remove the sliced polyline for entities leaving the window
+        // so there is no lag between Effect 1 (immediate) and Effect 2 (debounced).
+        if (!isInWindow && viewer) {
+          const slicedId = `${id}_sliced`
+          const slicedEntity = viewer.entities.getById(slicedId)
+          if (slicedEntity) {
+            viewer.entities.remove(slicedEntity)
+            slicedEntityIdsRef.current.delete(slicedId)
+          }
         }
       }
     })
@@ -211,6 +241,161 @@ export function useScheduleSatelliteLayers(
     showSatellites,
     showGroundtracks,
     showHighlight,
+    viewerRef,
+  ])
+
+  // ---------------------------------------------------------------------------
+  // Effect 2 — Debounced temporal slicing
+  //
+  // Builds a static viewer-level polyline for each in-window ground-track that
+  // covers exactly [tStart, tEnd].  Runs with a 300 ms debounce so rapid
+  // timeline pan/zoom events don't trigger expensive position sampling.
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    // When conditions aren't met, clean up any leftover sliced entities.
+    if (!isScheduleView || !showGroundtracks || !loadedDataSource?.entities) {
+      const viewer = viewerRef.current?.cesiumElement
+      if (viewer && slicedEntityIdsRef.current.size > 0) {
+        slicedEntityIdsRef.current.forEach((slicedId) => {
+          const e = viewer.entities.getById(slicedId)
+          if (e) viewer.entities.remove(e)
+        })
+        slicedEntityIdsRef.current.clear()
+        viewer.scene?.requestRender()
+      }
+      return
+    }
+
+    const timer = setTimeout(() => {
+      const viewer = viewerRef.current?.cesiumElement
+      if (!viewer) return
+
+      // Recompute which satellites fall within the visible window.
+      const inWindowCzmlIds = new Set<string>()
+      if (tStart && tEnd) {
+        const tStartMs = new Date(tStart).getTime()
+        const tEndMs = new Date(tEnd).getTime()
+        items.forEach((item) => {
+          const itemStart = new Date(item.start_time).getTime()
+          const itemEnd = new Date(item.end_time).getTime()
+          if (itemEnd >= tStartMs && itemStart <= tEndMs) {
+            inWindowCzmlIds.add(toCzmlSatId(item.satellite_id))
+          }
+        })
+      } else {
+        items.forEach((item) => inWindowCzmlIds.add(toCzmlSatId(item.satellite_id)))
+      }
+
+      const focusedCzmlId = focusedSatelliteId ? toCzmlSatId(focusedSatelliteId) : null
+
+      // Build the set of sliced IDs that should exist after this run.
+      const nextSlicedIds = new Set<string>()
+
+      // Per-rebuild dev counters (written to _devGroundtrackStats after the loop).
+      let rebuildHits = 0
+      let rebuildMisses = 0
+      let rebuildCapTriggered = false
+      let rebuildEffectiveStep: number = sampleStep
+
+      loadedDataSource.entities.values.forEach((entity: Entity) => {
+        const id = entity.id ?? ''
+        if (!id.startsWith('sat_') || !id.endsWith('_ground_track')) return
+
+        const ownerSatId = id.slice(0, -'_ground_track'.length)
+        const isInWindow = inWindowCzmlIds.size > 0 && inWindowCzmlIds.has(ownerSatId)
+        if (!isInWindow || !tStart || !tEnd) return
+
+        // Sample positions within the visible window (cache-aware).
+        const sliceResult = sliceGroundtrackPositions(entity, tStart, tEnd, sampleStep)
+        if (!sliceResult) return
+
+        const { positions, effectiveStep, capTriggered, cacheHit } = sliceResult
+
+        if (import.meta.env.DEV) {
+          if (cacheHit) rebuildHits++
+          else rebuildMisses++
+          if (capTriggered) {
+            rebuildCapTriggered = true
+            rebuildEffectiveStep = effectiveStep
+          }
+        }
+
+        const slicedId = `${id}_sliced`
+        nextSlicedIds.add(slicedId)
+
+        const isFocused = showHighlight && focusedCzmlId === ownerSatId
+        const existing = viewer.entities.getById(slicedId)
+
+        if (existing?.polyline) {
+          // In-place update — avoids Cesium entity churn.
+          if (!cacheHit) {
+            // Positions changed: replace the positions property.
+            existing.polyline.positions = new ConstantProperty(positions) as never
+          }
+          // Always sync visual style; focused state may have changed independently.
+          existing.polyline.width = new ConstantProperty(
+            isFocused ? HIGHLIGHT_PATH_WIDTH : DEFAULT_PATH_WIDTH,
+          ) as never
+          existing.polyline.material = new ColorMaterialProperty(
+            isFocused
+              ? getSatColor(ownerSatId).withAlpha(1.0)
+              : getSatColorWithAlpha(ownerSatId, 0.5),
+          ) as never
+        } else {
+          // Remove stale entity without polyline (edge case) then add fresh.
+          if (existing) viewer.entities.remove(existing)
+          const slicedEntityDef = {
+            id: slicedId,
+            polyline: {
+              positions: new ConstantProperty(positions),
+              width: new ConstantProperty(isFocused ? HIGHLIGHT_PATH_WIDTH : DEFAULT_PATH_WIDTH),
+              material: new ColorMaterialProperty(
+                isFocused
+                  ? getSatColor(ownerSatId).withAlpha(1.0)
+                  : getSatColorWithAlpha(ownerSatId, 0.5),
+              ),
+              clampToGround: new ConstantProperty(false),
+            },
+          }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Cesium Viewer.entities.add does not expose full typed overloads
+          viewer.entities.add(slicedEntityDef as any)
+        }
+      })
+
+      // Flush per-rebuild stats to the diagnostics object (DEV only).
+      if (import.meta.env.DEV) {
+        _devGroundtrackStats.lastHits = rebuildHits
+        _devGroundtrackStats.lastMisses = rebuildMisses
+        _devGroundtrackStats.capTriggered = rebuildCapTriggered
+        _devGroundtrackStats.effectiveStep = rebuildCapTriggered ? rebuildEffectiveStep : sampleStep
+        _devGroundtrackStats.capNote = rebuildCapTriggered
+          ? `step auto-increased to ${rebuildEffectiveStep}s to maintain cap`
+          : null
+      }
+
+      // Remove any previously sliced entities that are no longer needed.
+      slicedEntityIdsRef.current.forEach((slicedId) => {
+        if (!nextSlicedIds.has(slicedId)) {
+          const e = viewer.entities.getById(slicedId)
+          if (e) viewer.entities.remove(e)
+        }
+      })
+      slicedEntityIdsRef.current = nextSlicedIds
+
+      viewer.scene?.requestRender()
+    }, SLICE_DEBOUNCE_MS)
+
+    return () => clearTimeout(timer)
+  }, [
+    isScheduleView,
+    loadedDataSource,
+    items,
+    tStart,
+    tEnd,
+    focusedSatelliteId,
+    showGroundtracks,
+    showHighlight,
+    sampleStep,
     viewerRef,
   ])
 }

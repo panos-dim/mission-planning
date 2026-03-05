@@ -511,11 +511,13 @@ const TargetLane: React.FC<TargetLaneProps> = memo(
                 ? 'bg-purple-500/70 hover:bg-purple-500/90 border-purple-400/50'
                 : 'bg-blue-500/70 hover:bg-blue-500/90 border-blue-400/50'
 
+            // Selected: white ring is unambiguous at high density regardless of bar color.
+            // z-10 ensures the selected bar renders above its neighbours.
             const selectedRing = isSelected
-              ? 'ring-2 ring-blue-400 ring-offset-1 ring-offset-gray-900'
+              ? 'ring-2 ring-white ring-offset-1 ring-offset-blue-600 z-10'
               : ''
 
-            const lockedBorder = isLocked ? 'border-red-500/60' : ''
+            const lockedBorder = isLocked ? 'border-red-400/70' : ''
 
             return (
               <div
@@ -537,10 +539,10 @@ const TargetLane: React.FC<TargetLaneProps> = memo(
                     {acq.satellite_name || acq.satellite_id}
                   </span>
                 )}
-                {/* Lock indicator */}
+                {/* Lock indicator — positioned inside the bar to avoid clipping at narrow widths */}
                 {isLocked && (
-                  <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full flex items-center justify-center">
-                    <Shield size={7} className="text-white" />
+                  <div className="absolute top-0.5 right-0.5 size-3.5 bg-red-500/90 rounded-sm flex items-center justify-center z-10">
+                    <Shield size={8} className="text-white" />
                   </div>
                 )}
               </div>
@@ -684,14 +686,20 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
   const panStartX = useRef(0)
   const panStartRange = useRef({ min: minTs, max: maxTs })
   const trackRef = useRef<HTMLDivElement>(null)
+  // Tracks whether the user has manually panned/zoomed so polling updates
+  // do not reset the view to the full data range (prevents layout jitter).
+  const userHasAdjustedViewRef = useRef(false)
 
-  // Reset view when data bounds change
+  // Reset view when data bounds change, but only if user hasn't zoomed/panned
   useEffect(() => {
-    setViewRange({ min: minTs, max: maxTs })
+    if (!userHasAdjustedViewRef.current) {
+      setViewRange({ min: minTs, max: maxTs })
+    }
   }, [minTs, maxTs])
 
   const zoomAt = useCallback(
     (centerFraction: number, direction: number) => {
+      userHasAdjustedViewRef.current = true
       setViewRange((prev) => {
         const range = prev.max - prev.min
         const delta = range * ZOOM_FACTOR * direction
@@ -730,6 +738,7 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       if (e.button !== 0) return
+      userHasAdjustedViewRef.current = true
       isPanning.current = true
       panStartX.current = e.clientX
       panStartRange.current = viewRange
@@ -756,6 +765,7 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
   }, [])
 
   const resetZoom = useCallback(() => {
+    userHasAdjustedViewRef.current = false
     setViewRange({ min: minTs, max: maxTs })
   }, [minTs, maxTs])
 
@@ -781,6 +791,27 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
       resizeObserverRef.current.observe(node)
     }
   }, [])
+
+  // Scroll selected acquisition bar into view when selection changes
+  useEffect(() => {
+    if (!selectedAcquisitionId || !trackRef.current) return
+    const timerId = setTimeout(() => {
+      const el = trackRef.current?.querySelector(`[data-acquisition-id="${selectedAcquisitionId}"]`)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' })
+      }
+    }, 60)
+    return () => clearTimeout(timerId)
+  }, [selectedAcquisitionId])
+
+  // Polling refresh: if the selected acquisition was removed, clear selection
+  useEffect(() => {
+    if (!selectedAcquisitionId) return
+    const stillExists = acquisitions.some((a) => a.id === selectedAcquisitionId)
+    if (!stillExists) {
+      selectAcquisition(null)
+    }
+  }, [acquisitions, selectedAcquisitionId, selectAcquisition])
 
   // Handle acquisition selection → opens inspector + focuses Cesium
   const handleSelectAcquisition = useCallback(
@@ -904,8 +935,10 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
             onMouseLeave={handleMouseUp}
             style={{ cursor: 'grab' }}
           >
-            {/* Time Axis */}
-            <TimeAxis minTs={viewMinTs} maxTs={viewMaxTs} width={containerWidth} />
+            {/* Time Axis — sticky so it remains visible when scrolling many lanes */}
+            <div className="sticky top-0 z-20 bg-gray-900 pb-px">
+              <TimeAxis minTs={viewMinTs} maxTs={viewMaxTs} width={containerWidth} />
+            </div>
 
             {/* Grid lines + live now-line (share same relative container for correct % positioning) */}
             <div className="relative" style={{ marginLeft: LANE_LABEL_WIDTH }}>
@@ -961,8 +994,8 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
                 <span className="text-[10px] text-gray-400">SAR</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <div className="w-2.5 h-2.5 rounded-full bg-red-500 flex items-center justify-center">
-                  <Shield size={6} className="text-white" />
+                <div className="size-3 rounded-sm bg-red-500/90 flex items-center justify-center">
+                  <Shield size={7} className="text-white" />
                 </div>
                 <span className="text-[10px] text-gray-400">Locked</span>
               </div>

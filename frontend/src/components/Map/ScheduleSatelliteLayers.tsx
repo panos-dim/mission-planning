@@ -15,12 +15,14 @@
  */
 
 import React, { useState } from 'react'
-import { Satellite, Route, Crosshair, ChevronDown, ChevronUp } from 'lucide-react'
+import { Satellite, Route, Crosshair, ChevronDown, ChevronUp, Shield } from 'lucide-react'
 import { type DataSource } from 'cesium'
 import { cn } from '../ui/utils'
 import { useScheduleStore } from '../../store/scheduleStore'
 import { useVisStore } from '../../store/visStore'
+import { useLockStore } from '../../store/lockStore'
 import { getSatCssColor } from '../../utils/satelliteColors'
+import { _devGroundtrackStats, GROUNDTRACK_SAMPLE_STEP_OPTIONS } from './utils/groundtrackSlicing'
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -69,9 +71,10 @@ interface SatRowProps {
   satId: string
   displayName: string
   isFocused: boolean
+  isLocked?: boolean
 }
 
-function SatRow({ satId, displayName, isFocused }: SatRowProps) {
+function SatRow({ satId, displayName, isFocused, isLocked }: SatRowProps) {
   const color = getSatCssColor(satId)
   return (
     <div
@@ -91,7 +94,17 @@ function SatRow({ satId, displayName, isFocused }: SatRowProps) {
         {displayName}
       </span>
       {isFocused && (
-        <span className="ml-auto shrink-0 text-[10px] text-blue-400 font-medium">selected</span>
+        <span className="ml-auto shrink-0 flex items-center gap-1">
+          {isLocked && (
+            <span
+              className="inline-flex items-center gap-0.5 text-[10px] text-red-400 font-medium"
+              title="Focused acquisition is locked"
+            >
+              <Shield className="size-2.5" />
+            </span>
+          )}
+          <span className="text-[10px] text-blue-400 font-medium">selected</span>
+        </span>
       )}
     </div>
   )
@@ -115,6 +128,13 @@ export function ScheduleSatelliteLayers({ loadedDataSource = null }: ScheduleSat
   const showGroundtracks = useScheduleStore((s) => s.schedLayerGroundtracks)
   const showHighlight = useScheduleStore((s) => s.schedLayerHighlight)
   const setSchedLayer = useScheduleStore((s) => s.setSchedLayer)
+  const groundtrackSampleStep = useScheduleStore((s) => s.groundtrackSampleStep)
+  const setGroundtrackSampleStep = useScheduleStore((s) => s.setGroundtrackSampleStep)
+  const focusedAcquisitionId = useScheduleStore((s) => s.focusedAcquisitionId)
+  const getLockLevel = useLockStore((s) => s.getLockLevel)
+
+  const focusedIsLocked =
+    focusedAcquisitionId != null ? getLockLevel(focusedAcquisitionId) === 'hard' : false
 
   const [expanded, setExpanded] = useState(true)
 
@@ -162,7 +182,7 @@ export function ScheduleSatelliteLayers({ loadedDataSource = null }: ScheduleSat
   return (
     <div
       className={cn(
-        'absolute bottom-14 right-2 z-30',
+        'absolute bottom-24 right-2 z-30',
         'bg-gray-900/90 backdrop-blur-md border border-gray-700/60 rounded-lg',
         'shadow-lg text-white w-44',
       )}
@@ -220,6 +240,7 @@ export function ScheduleSatelliteLayers({ loadedDataSource = null }: ScheduleSat
                     satId={satId}
                     displayName={displayName}
                     isFocused={focusedSatelliteId === satId}
+                    isLocked={focusedSatelliteId === satId && focusedIsLocked}
                   />
                 ))}
               </div>
@@ -249,12 +270,55 @@ export function ScheduleSatelliteLayers({ loadedDataSource = null }: ScheduleSat
             </div>
           )}
 
+          {/* Dev-only sample-step selector */}
+          {import.meta.env.DEV && showGroundtracks && (
+            <div className="border-t border-gray-700/50 px-3 py-2">
+              <p className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-gray-500">
+                GT sample step
+              </p>
+              <div className="flex gap-1">
+                {GROUNDTRACK_SAMPLE_STEP_OPTIONS.map((step) => (
+                  <button
+                    key={step}
+                    type="button"
+                    aria-pressed={groundtrackSampleStep === step}
+                    onClick={() => setGroundtrackSampleStep(step)}
+                    className={cn(
+                      'flex-1 rounded py-0.5 text-[9px] font-mono',
+                      groundtrackSampleStep === step
+                        ? 'bg-blue-700 text-white'
+                        : 'bg-gray-700 text-gray-400 hover:bg-gray-600',
+                    )}
+                  >
+                    {step}s
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Dev-only debug summary */}
           {import.meta.env.DEV && (
-            <div className="border-t border-gray-700/30 px-2 py-1">
+            <div className="border-t border-gray-700/30 px-2 py-1 space-y-0.5">
               <p className="text-[9px] text-gray-600 font-mono leading-tight tabular-nums">
                 {`iw:${satList.length} czml:${czmlLoaded ? 1 : 0} sats:${satEntitiesFound} gt:${groundtrackEntitiesFound}`}
               </p>
+              <p className="text-[9px] text-gray-600 font-mono leading-tight tabular-nums">
+                {`hits:${_devGroundtrackStats.lastHits} miss:${_devGroundtrackStats.lastMisses} tot:${_devGroundtrackStats.totalHits}/${_devGroundtrackStats.totalMisses}`}
+              </p>
+              <p
+                className={cn(
+                  'text-[9px] font-mono leading-tight tabular-nums',
+                  _devGroundtrackStats.capTriggered ? 'text-amber-500/80' : 'text-gray-600',
+                )}
+              >
+                {`step:${_devGroundtrackStats.effectiveStep}s${_devGroundtrackStats.capTriggered ? ' ⚡cap' : ''}`}
+              </p>
+              {_devGroundtrackStats.capNote && (
+                <p className="text-[9px] text-amber-500/70 font-mono leading-tight">
+                  {_devGroundtrackStats.capNote}
+                </p>
+              )}
             </div>
           )}
         </>

@@ -49,6 +49,7 @@ import { useOrdersStore } from '../../store/ordersStore'
 import { usePlanningStore } from '../../store/planningStore'
 import { getScheduleTargetLocations } from '../../api/scheduleApi'
 import { useScheduleStore } from '../../store/scheduleStore'
+import { useSelectionStore } from '../../store/selectionStore'
 import debug from '../../utils/debug'
 import { registerSatellites, getSatColor, getSatColorWithAlpha } from '../../utils/satelliteColors'
 
@@ -744,6 +745,8 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
   const focusedTargetCoords = useScheduleStore((s) => s.focusedTargetCoords)
   const focusedStartTime = useScheduleStore((s) => s.focusedStartTime)
   const focusedAcquisitionId = useScheduleStore((s) => s.focusedAcquisitionId)
+  const focusedTargetId = useScheduleStore((s) => s.focusedTargetId)
+  const selectTargetInStore = useSelectionStore((s) => s.selectTarget)
   useEffect(() => {
     if (!focusedAcquisitionId) return
     const viewer = viewerRef.current?.cesiumElement
@@ -770,8 +773,18 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
         // flyTo not available in certain scene states — ignore
       }
     }
+
+    // PR-UI-035: Select the schedule target entity on the map so the
+    // SelectionIndicator highlights it. Also opens Inspector via selectionStore.
+    if (viewer && focusedTargetId) {
+      const schedEntity = viewer.entities.getById(`sched_target_${focusedTargetId}`)
+      if (schedEntity) {
+        viewer.selectedEntity = schedEntity
+      }
+      selectTargetInStore(focusedTargetId, 'timeline')
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusedAcquisitionId, focusedTargetCoords, focusedStartTime])
+  }, [focusedAcquisitionId, focusedTargetCoords, focusedStartTime, focusedTargetId])
 
   // Smart fallback: Only use OSM if Cesium Ion actually fails
   useEffect(() => {
@@ -1304,6 +1317,17 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
 
             debug.verbose(`Entity clicked: ${entity.name || entity.id}`)
 
+            // PR-UI-035: If a target entity is clicked on the map, open Inspector
+            // via selectionStore. Does NOT open the Schedule panel (left sidebar).
+            if (entity.id?.startsWith('sched_target_') || entity.id?.startsWith('target_')) {
+              const targetName = entity.id.startsWith('sched_target_')
+                ? entity.id.slice('sched_target_'.length)
+                : entity.id.slice('target_'.length)
+              if (targetName) {
+                selectTargetInStore(targetName, 'map')
+              }
+            }
+
             // Check for existing object
             const existingObject = state.sceneObjects.find((obj) => {
               if (obj.entityId === entity.id) return true
@@ -1398,6 +1422,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
     setSelectedOpportunity,
     setHoveredSwath,
     updateDebugInfo,
+    selectTargetInStore,
   ])
 
   // Focus on opportunity when selected

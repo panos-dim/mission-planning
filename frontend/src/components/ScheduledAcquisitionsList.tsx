@@ -22,7 +22,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import LockToggle, { BulkLockActions, LockBadge } from './LockToggle'
-import type { LockLevel, AcquisitionSummary } from '../api/scheduleApi'
+import type { LockLevel } from '../api/scheduleApi'
 import {
   updateAcquisitionLock,
   bulkUpdateLocks,
@@ -31,6 +31,7 @@ import {
   bulkDeleteAcquisitions,
 } from '../api/scheduleApi'
 import { useSelectionStore } from '../store/selectionStore'
+import type { AcquisitionSummary } from '../api/scheduleApi'
 import { queryClient, queryKeys } from '../lib/queryClient'
 import { formatDateTimeShort } from '../utils/date'
 
@@ -56,14 +57,17 @@ export default function ScheduledAcquisitionsList({
   const [bulkLoading, setBulkLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Get highlighted acquisition IDs from selection store (e.g., from conflict selection)
+  // Selection store — both conflict highlights and single focused acquisition
   const highlightedAcquisitionIds = useSelectionStore((s) => s.highlightedAcquisitionIds)
+  const focusedAcquisitionId = useSelectionStore((s) => s.selectedAcquisitionId)
+  const selectAcquisitionInStore = useSelectionStore((s) => s.selectAcquisition)
 
-  // Ref to scroll highlighted items into view
+  // Refs for scrolling
   const listContainerRef = useRef<HTMLDivElement>(null)
   const highlightedItemRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  const focusedItemRef = useRef<HTMLDivElement | null>(null)
 
-  // Auto-expand satellites containing highlighted acquisitions
+  // Auto-expand satellites containing highlighted acquisitions (conflict flow)
   useEffect(() => {
     if (highlightedAcquisitionIds.length > 0) {
       const satellitesToExpand = new Set<string>()
@@ -78,10 +82,9 @@ export default function ScheduledAcquisitionsList({
     }
   }, [highlightedAcquisitionIds, acquisitions])
 
-  // Scroll first highlighted item into view
+  // Scroll first highlighted item into view (conflict flow)
   useEffect(() => {
     if (highlightedAcquisitionIds.length > 0) {
-      // Small delay to allow expansion animation
       const timer = setTimeout(() => {
         const firstHighlightedId = highlightedAcquisitionIds[0]
         const element = highlightedItemRefs.current.get(firstHighlightedId)
@@ -92,6 +95,25 @@ export default function ScheduledAcquisitionsList({
       return () => clearTimeout(timer)
     }
   }, [highlightedAcquisitionIds])
+
+  // Auto-expand satellite group and scroll to focused acquisition (cross-view sync)
+  useEffect(() => {
+    if (!focusedAcquisitionId) return
+    const acq = acquisitions.find((a) => a.id === focusedAcquisitionId)
+    if (!acq) return
+    // Expand the satellite group
+    setExpandedSatellites((prev) => {
+      if (prev.has(acq.satellite_id)) return prev
+      return new Set([...prev, acq.satellite_id])
+    })
+    // Scroll into view after expansion renders
+    const timer = setTimeout(() => {
+      if (focusedItemRef.current) {
+        focusedItemRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+      }
+    }, 80)
+    return () => clearTimeout(timer)
+  }, [focusedAcquisitionId, acquisitions])
 
   // Group acquisitions by satellite
   const groupedBySatellite = useMemo(() => {
@@ -411,9 +433,12 @@ export default function ScheduledAcquisitionsList({
                       return (
                         <div
                           key={acq.id}
-                          ref={(el) => {
+                          ref={(el: HTMLDivElement | null) => {
                             if (el && isHighlighted) {
                               highlightedItemRefs.current.set(acq.id, el)
+                            }
+                            if (el && acq.id === focusedAcquisitionId) {
+                              focusedItemRef.current = el
                             }
                           }}
                           className={`
@@ -421,9 +446,11 @@ export default function ScheduledAcquisitionsList({
                           ${
                             isHighlighted
                               ? 'bg-orange-900/30 border-orange-500 ring-1 ring-orange-500/50'
-                              : isSelected
-                                ? 'bg-blue-900/20 border-blue-500'
-                                : 'border-transparent hover:bg-gray-800/30'
+                              : acq.id === focusedAcquisitionId
+                                ? 'bg-blue-900/40 border-blue-400 ring-1 ring-blue-400/40'
+                                : isSelected
+                                  ? 'bg-blue-900/20 border-blue-500'
+                                  : 'border-transparent hover:bg-gray-800/30'
                           }
                         `}
                         >
@@ -446,7 +473,10 @@ export default function ScheduledAcquisitionsList({
                           {/* Main content - clickable */}
                           <div
                             className="flex-1 cursor-pointer"
-                            onClick={() => onAcquisitionClick?.(acq.id)}
+                            onClick={() => {
+                              selectAcquisitionInStore(acq.id, 'table')
+                              onAcquisitionClick?.(acq.id)
+                            }}
                           >
                             <div className="flex items-center gap-2">
                               <Target className="w-3 h-3 text-gray-400" />

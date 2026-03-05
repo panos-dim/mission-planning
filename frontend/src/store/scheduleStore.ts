@@ -43,6 +43,7 @@ interface ScheduleState {
 
   // Selection (for map sync)
   focusedAcquisitionId: string | null
+  focusedTargetId: string | null
   focusedTargetCoords: { lat: number; lon: number } | null
   focusedStartTime: string | null
   focusedSatelliteId: string | null
@@ -51,6 +52,9 @@ interface ScheduleState {
   schedLayerSatellites: boolean
   schedLayerGroundtracks: boolean
   schedLayerHighlight: boolean
+
+  // Groundtrack sampling cadence (seconds); dev-only, reflected in sample-step selector
+  groundtrackSampleStep: 60 | 120 | 300
 
   // Polling state (PR-UI-030)
   pollingWorkspaceId: string | null
@@ -79,7 +83,13 @@ interface ScheduleActions {
    */
   focusAcquisition: (
     id: string | null,
-    overrides?: { startTime?: string; lat?: number; lon?: number },
+    overrides?: {
+      startTime?: string
+      lat?: number
+      lon?: number
+      satelliteId?: string
+      targetId?: string
+    },
   ) => void
 
   /**
@@ -97,6 +107,9 @@ interface ScheduleActions {
    * These are viewer-only and do NOT affect schedule timeline contents.
    */
   setSchedLayer: (key: 'satellites' | 'groundtracks' | 'highlight', visible: boolean) => void
+
+  /** Set the groundtrack polyline sampling cadence (dev-only). */
+  setGroundtrackSampleStep: (step: 60 | 120 | 300) => void
 
   /** Clear all data */
   reset: () => void
@@ -120,12 +133,14 @@ const INITIAL_STATE: ScheduleState = {
   fetchMs: null,
   lastFetchedAt: null,
   focusedAcquisitionId: null,
+  focusedTargetId: null,
   focusedTargetCoords: null,
   focusedStartTime: null,
   focusedSatelliteId: null,
   schedLayerSatellites: true,
   schedLayerGroundtracks: true,
   schedLayerHighlight: true,
+  groundtrackSampleStep: 120 as 60 | 120 | 300,
   pollingWorkspaceId: null,
   pollingIntervalMs: 15000,
 }
@@ -168,6 +183,22 @@ export const useScheduleStore = create<ScheduleStore>()(
             zoom: params.zoom ?? get().zoom,
           })
 
+          // If the currently-focused acquisition was removed by this fetch,
+          // clear all focus state so the map and timeline stay consistent.
+          const { focusedAcquisitionId: currentFocusId } = get()
+          const focusedStillExists =
+            currentFocusId != null ? res.items.some((i) => i.id === currentFocusId) : false
+          const staleFields =
+            currentFocusId != null && !focusedStillExists
+              ? {
+                  focusedAcquisitionId: null as string | null,
+                  focusedTargetId: null as string | null,
+                  focusedTargetCoords: null as { lat: number; lon: number } | null,
+                  focusedStartTime: null as string | null,
+                  focusedSatelliteId: null as string | null,
+                }
+              : {}
+
           set(
             {
               items: res.items,
@@ -179,6 +210,7 @@ export const useScheduleStore = create<ScheduleStore>()(
               fetchMs: res.fetch_ms ?? null,
               loading: false,
               lastFetchedAt: Date.now(),
+              ...staleFields,
             },
             false,
             'fetchMaster/success',
@@ -202,6 +234,7 @@ export const useScheduleStore = create<ScheduleStore>()(
           set(
             {
               focusedAcquisitionId: null,
+              focusedTargetId: null,
               focusedTargetCoords: null,
               focusedStartTime: null,
               focusedSatelliteId: null,
@@ -218,11 +251,13 @@ export const useScheduleStore = create<ScheduleStore>()(
         const lon = overrides?.lon ?? item?.target_lon
         const startTime = overrides?.startTime ?? item?.start_time ?? null
         const coords = lat != null && lon != null ? { lat, lon } : null
-        const satelliteId = item?.satellite_id ?? null
+        const satelliteId = overrides?.satelliteId ?? item?.satellite_id ?? null
+        const targetId = overrides?.targetId ?? item?.target_id ?? null
 
         set(
           {
             focusedAcquisitionId: id,
+            focusedTargetId: targetId,
             focusedTargetCoords: coords,
             focusedStartTime: startTime,
             focusedSatelliteId: satelliteId,
@@ -239,6 +274,10 @@ export const useScheduleStore = create<ScheduleStore>()(
           highlight: 'schedLayerHighlight',
         } as const
         set({ [keyMap[key]]: visible }, false, `setSchedLayer/${key}`)
+      },
+
+      setGroundtrackSampleStep: (step) => {
+        set({ groundtrackSampleStep: step }, false, 'setGroundtrackSampleStep')
       },
 
       startPolling: (workspaceId, intervalMs = 15000) => {
@@ -269,6 +308,8 @@ export const useScheduleStore = create<ScheduleStore>()(
         }
         document.addEventListener('visibilitychange', _visibilityHandler)
 
+        // Immediate first fetch so items are available without waiting a full interval
+        tick()
         _pollingTimerId = setInterval(tick, intervalMs)
       },
 

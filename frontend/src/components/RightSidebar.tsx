@@ -8,6 +8,7 @@ import SwathLayerControl from './Map/SwathLayerControl'
 import { useMission } from '../context/MissionContext'
 import { useVisStore } from '../store/visStore'
 import { useTargetAddStore } from '../store/targetAddStore'
+import { useSelectionStore } from '../store/selectionStore'
 import {
   RIGHT_SIDEBAR_PANELS,
   SIMPLE_MODE_RIGHT_PANELS,
@@ -52,6 +53,23 @@ const RightSidebar: React.FC = () => {
     setIsPanelOpen(true)
     clearRequestedRightPanel()
   }, [requestedRightPanel, clearRequestedRightPanel])
+
+  // Auto-open Inspector when an entity is selected via selectionStore.
+  // We watch the specific IDs so the effect re-fires on every new selection,
+  // even if inspectorOpen was already true (e.g. user closed the sidebar then
+  // clicked another target on the map).
+  const inspectorOpen = useSelectionStore((s) => s.inspectorOpen)
+  const selectedType = useSelectionStore((s) => s.selectedType)
+  const selTargetId = useSelectionStore((s) => s.selectedTargetId)
+  const selAcquisitionId = useSelectionStore((s) => s.selectedAcquisitionId)
+  const selOpportunityId = useSelectionStore((s) => s.selectedOpportunityId)
+  const selConflictId = useSelectionStore((s) => s.selectedConflictId)
+  useEffect(() => {
+    if (inspectorOpen && selectedType) {
+      setActivePanel(RIGHT_SIDEBAR_PANELS.INSPECTOR)
+      setIsPanelOpen(true)
+    }
+  }, [inspectorOpen, selectedType, selTargetId, selAcquisitionId, selOpportunityId, selConflictId])
 
   // Sync panel state to global store
   useEffect(() => {
