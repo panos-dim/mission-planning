@@ -659,7 +659,7 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
         # Prepare SAR parameters if this is a SAR mission
         sar_input_params = None
         if is_sar_mission:
-            from sar_czml import generate_sar_czml
+            from backend.sar_czml import generate_sar_czml
 
             from mission_planner.sar_config import LookSide, PassDirection
             from mission_planner.sar_config import SARInputParams as SARConfigParams
@@ -911,7 +911,7 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
 
         # Add SAR-specific CZML packets if this is a SAR mission
         if is_sar_mission and sar_passes_list:
-            from sar_czml import generate_sar_czml
+            from backend.sar_czml import generate_sar_czml
 
             sar_czml_packets = generate_sar_czml(
                 satellite=satellite,
@@ -2635,11 +2635,16 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
             f"Using max_spacecraft_pitch_deg={max_spacecraft_pitch}° from mission analysis"
         )
 
+        # Get satellite agility from mission analysis config
+        _sat_agility = mission_data.get("satellite_agility", request.max_roll_rate_dps)
+        _agility_source = "config" if "satellite_agility" in mission_data else "request default"
+        logger.info(f"[Plan] Using satellite agility: {_sat_agility}\u00b0/s (from {_agility_source})")
+
         # Create scheduler config
         config = SchedulerConfig(
             imaging_time_s=request.imaging_time_s,
             max_spacecraft_roll_deg=max_spacecraft_roll,  # Use max_spacecraft_roll from mission analysis
-            max_roll_rate_dps=request.max_roll_rate_dps,
+            max_roll_rate_dps=_sat_agility,
             max_roll_accel_dps2=request.max_roll_accel_dps2,
             max_spacecraft_pitch_deg=max_spacecraft_pitch,  # Use pitch from mission analysis
             max_pitch_rate_dps=request.max_pitch_rate_dps,

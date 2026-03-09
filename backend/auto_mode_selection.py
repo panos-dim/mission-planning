@@ -145,13 +145,15 @@ def select_planning_mode(
         _log_mode_selection(result)
         return result
 
-    # Rule 2: FROM_SCRATCH — new targets added (need full re-analysis)
+    # Rule 2: New targets added to existing schedule → INCREMENTAL.
+    # Plan new targets around the existing committed/locked acquisitions
+    # without disturbing them.  This is the core "add on top" workflow.
     if len(new_targets) > 0:
-        result.mode = "from_scratch"
+        result.mode = "incremental"
         result.reason = (
             f"{len(new_targets)} new target(s) detected "
             f"({', '.join(sorted(new_targets)[:5])}). "
-            f"Running full analysis to include new targets alongside "
+            f"Planning incrementally around "
             f"{existing_acquisition_count} existing acquisition(s)."
         )
         _log_mode_selection(result)

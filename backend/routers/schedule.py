@@ -16,7 +16,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.auto_mode_selection import (
@@ -92,7 +92,7 @@ class ScheduleStateMeta(BaseModel):
     """Metadata about schedule state implementation."""
 
     persistence_enabled: bool = True
-    schema_version: str = "2.0"
+    schema_version: str = "2.5"
     implementation_status: str = "active"
 
 
@@ -192,16 +192,37 @@ async def get_schedule_state(
             freeze_cutoff=(now + timedelta(hours=2)).isoformat() + "Z",
         )
 
+    # Query actual conflicts for this workspace
+    conflict_summaries = []
+    try:
+        conflicts = db.list_conflicts(
+            workspace_id=workspace_id, resolved=False, limit=100
+        )
+        conflict_summaries = [
+            ConflictSummary(
+                id=c.id,
+                type=c.type,
+                severity=c.severity,
+                acquisition_ids=json.loads(c.acquisition_ids_json)
+                if c.acquisition_ids_json
+                else [],
+                description=c.description,
+            )
+            for c in conflicts
+        ]
+    except Exception as e:
+        logger.warning(f"[Schedule State] Failed to load conflicts: {e}")
+
     state = ScheduleState(
         acquisitions=acq_summaries,
         orders=order_summaries,
-        conflicts=[],  # Conflict detection not implemented yet
+        conflicts=conflict_summaries,
         horizon=horizon,
     )
 
     meta = ScheduleStateMeta(
         persistence_enabled=True,
-        schema_version="2.0",
+        schema_version="2.5",
         implementation_status="active",
     )
 
@@ -973,6 +994,59 @@ async def hard_lock_all_committed(
 
 
 # =============================================================================
+# Auto Lock Escalation
+# =============================================================================
+
+
+class AutoEscalateLocksRequest(BaseModel):
+    """Request for automatic lock escalation."""
+
+    workspace_id: str = Field(..., description="Workspace to escalate")
+    escalation_window_hours: Optional[int] = Field(
+        default=None,
+        description="Hours before execution to escalate (defaults to freeze window)",
+    )
+
+
+class AutoEscalateLocksResponse(BaseModel):
+    """Response from auto lock escalation."""
+
+    success: bool
+    message: str
+    escalated: int
+    acquisition_ids: List[str] = Field(default_factory=list)
+
+
+@router.post(
+    "/acquisitions/auto-escalate-locks", response_model=AutoEscalateLocksResponse
+)
+async def auto_escalate_locks(
+    request: AutoEscalateLocksRequest,
+) -> AutoEscalateLocksResponse:
+    """
+    Auto-promote unlocked acquisitions approaching execution to hard lock.
+
+    Acquisitions with lock_level='none' that start within the freeze window
+    are promoted to 'hard' lock to prevent repair plans from displacing them.
+
+    This can be called manually or integrated with a cron/background task.
+    """
+    db = get_schedule_db()
+
+    result = db.auto_escalate_locks(
+        workspace_id=request.workspace_id,
+        escalation_window_hours=request.escalation_window_hours,
+    )
+
+    return AutoEscalateLocksResponse(
+        success=True,
+        message=f"Escalated {result['escalated']} acquisitions to hard lock",
+        escalated=result["escalated"],
+        acquisition_ids=result["acquisition_ids"],
+    )
+
+
+# =============================================================================
 # Acquisition Deletion Endpoints
 # =============================================================================
 
@@ -1075,7 +1149,8 @@ async def delete_acquisition(
             f"Use force=true to delete it.",
         )
 
-    success = db.delete_acquisition(acquisition_id)
+    # Pass force=True since the router already validated protections above
+    success = db.delete_acquisition(acquisition_id, force=True)
 
     if not success:
         raise HTTPException(status_code=500, detail="Failed to delete acquisition")
@@ -1150,7 +1225,8 @@ async def bulk_delete_acquisitions(
             filtered_ids.append(acq_id)
         ids_to_delete = filtered_ids
 
-    result = db.bulk_delete_acquisitions(ids_to_delete)
+    # Pass force=True since the router already validated protections above
+    result = db.bulk_delete_acquisitions(ids_to_delete, force=True)
 
     message = f"Deleted {result['deleted']} acquisitions"
     if result["failed"]:
@@ -1186,7 +1262,7 @@ class CommitPlanRequest(BaseModel):
         default=None, description="Specific plan item IDs to commit (all if empty)"
     )
     lock_level: str = Field(
-        default="soft", description="Lock level for acquisitions: soft | hard"
+        default="none", description="Lock level for acquisitions: none | hard"
     )
     mode: str = Field(default="OPTICAL", description="Mission mode: OPTICAL | SAR")
     workspace_id: Optional[str] = Field(
@@ -1260,6 +1336,48 @@ async def commit_plan(request: CommitPlanRequest) -> CommitPlanResponse:
             detail=f"Plan {request.plan_id} is already committed",
         )
 
+    # Pre-commit conflict prediction: reject if error-severity conflicts
+    # would be introduced, unless force=true
+    if not request.force and request.workspace_id:
+        from backend.incremental_planning import predict_commit_conflicts
+
+        plan_items = db.get_plan_items(request.plan_id)
+        if plan_items:
+            items_as_dicts = [
+                {
+                    "satellite_id": item.satellite_id,
+                    "target_id": item.target_id,
+                    "start_time": item.start_time,
+                    "end_time": item.end_time,
+                    "roll_angle_deg": item.roll_angle_deg,
+                    "pitch_angle_deg": item.pitch_angle_deg,
+                }
+                for item in plan_items
+            ]
+            now = datetime.now(timezone.utc)
+            predicted, count = predict_commit_conflicts(
+                db=db,
+                workspace_id=request.workspace_id,
+                new_items=items_as_dicts,
+                horizon_start=now,
+                horizon_end=now + timedelta(days=7),
+            )
+            error_predicted = [
+                c for c in predicted if c.get("severity") == "error"
+            ]
+            if error_predicted:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": (
+                            f"Commit would introduce {len(error_predicted)} "
+                            f"error-severity conflict(s)"
+                        ),
+                        "predicted_conflicts": error_predicted,
+                        "hint": "Set force=true to commit anyway, or adjust your plan",
+                    },
+                )
+
     try:
         result = db.commit_plan(
             plan_id=request.plan_id,
@@ -1274,7 +1392,7 @@ async def commit_plan(request: CommitPlanRequest) -> CommitPlanResponse:
             f"{result['committed']} acquisitions created"
         )
 
-        # Recompute conflicts if requested and workspace is specified
+        # Post-commit: recompute and persist conflicts for monitoring
         conflicts_detected = 0
         conflict_ids: List[str] = []
 
@@ -1292,14 +1410,6 @@ async def commit_plan(request: CommitPlanRequest) -> CommitPlanResponse:
 
             conflicts_detected = len(detected_conflicts)
             conflict_ids = new_conflict_ids
-
-            # Check if we have error-severity conflicts and force wasn't set
-            error_conflicts = [c for c in detected_conflicts if c.severity == "error"]
-            if error_conflicts and not request.force:
-                logger.warning(
-                    f"[Commit Plan] Commit succeeded but {len(error_conflicts)} "
-                    f"error-severity conflicts detected"
-                )
 
         message = (
             f"Committed {result['committed']} acquisitions from plan {request.plan_id}"
@@ -1521,25 +1631,27 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
         input_hash = f"sha256:{content_hash}"
 
         # Check if this exact payload was already committed (dedup guard)
-        with db._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT id FROM plans WHERE input_hash = ? AND status = 'committed' LIMIT 1",
-                (input_hash,),
-            )
-            dup_row = cursor.fetchone()
-            if dup_row:
-                dup_plan_id = dup_row["id"]
-                logger.warning(
-                    f"[Direct Commit] Duplicate detected: input_hash={input_hash}, "
-                    f"existing plan={dup_plan_id}"
+        # force=True bypasses dedup (user explicitly wants to recommit)
+        if not request.force:
+            with db._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT id FROM plans WHERE input_hash = ? AND status = 'committed' LIMIT 1",
+                    (input_hash,),
                 )
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"Duplicate commit detected. A plan with identical "
-                    f"items was already committed (plan_id={dup_plan_id}). "
-                    f"This may be a network retry.",
-                )
+                dup_row = cursor.fetchone()
+                if dup_row:
+                    dup_plan_id = dup_row["id"]
+                    logger.warning(
+                        f"[Direct Commit] Duplicate detected: input_hash={input_hash}, "
+                        f"existing plan={dup_plan_id}"
+                    )
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Duplicate commit detected. A plan with identical "
+                        f"items was already committed (plan_id={dup_plan_id}). "
+                        f"This may be a network retry.",
+                    )
 
         # Generate run_id
         run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
@@ -1598,6 +1710,8 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
             acquisition_ids=[a["id"] for a in result["acquisitions_created"]],
         )
 
+    except HTTPException:
+        raise  # Don't swallow 409/4xx as 500
     except Exception as e:
         logger.error(f"Failed direct commit: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1614,7 +1728,8 @@ class IncrementalPlanRequest(BaseModel):
     # Planning mode
     planning_mode: str = Field(
         default="from_scratch",
-        description="Planning mode: 'from_scratch' or 'incremental'",
+        description="Planning mode: 'from_scratch', 'incremental', or 'repair'. "
+        "Default auto-selects based on workspace state.",
     )
 
     # Horizon parameters
@@ -1775,7 +1890,7 @@ async def create_incremental_plan(
         raise HTTPException(
             status_code=400,
             detail=f"Invalid planning_mode: {request.planning_mode}. "
-            f"Must be 'from_scratch' or 'incremental'",
+            f"Must be 'from_scratch', 'incremental', or 'repair'",
         )
 
     try:
@@ -1822,42 +1937,15 @@ async def create_incremental_plan(
         "include_tentative": request.include_tentative,
     }
 
-    # Load blocked intervals for incremental mode
+    # Get satellite agility from cached mission data (used for slew config)
+    from backend.main import app as main_app
+    _mission_data = getattr(main_app.state, "current_mission_data", {}).get("mission_data", {})
+    _sat_agility = _mission_data.get("satellite_agility", request.max_roll_rate_dps)
+    _agility_source = "config" if "satellite_agility" in _mission_data else "request default"
+    logger.info(f"[Plan] Using satellite agility: {_sat_agility}°/s (from {_agility_source})")
+
+    # Blocked intervals context — loaded after auto-mode selection below
     context: Optional[IncrementalPlanningContext] = None
-
-    if planning_mode == PlanningMode.INCREMENTAL and request.workspace_id:
-        context = load_blocked_intervals(
-            db=db,
-            workspace_id=request.workspace_id,
-            horizon_start=horizon_start,
-            horizon_end=horizon_end,
-            lock_policy=lock_policy,
-            include_tentative=request.include_tentative,
-        )
-
-        # Build existing acquisitions summary
-        all_acq_ids = []
-        by_satellite: Dict[str, int] = {}
-
-        for sat_id, intervals in context.blocked_intervals.items():
-            by_satellite[sat_id] = len(intervals)
-            all_acq_ids.extend([i.acquisition_id for i in intervals])
-
-        existing_summary = ExistingAcquisitionsSummaryResponse(
-            count=context.loaded_acquisitions_count,
-            by_state=context.loaded_acquisitions_by_state,
-            by_satellite=by_satellite,
-            acquisition_ids=all_acq_ids,
-            horizon_start=horizon_start.isoformat() + "Z",
-            horizon_end=horizon_end.isoformat() + "Z",
-        )
-
-        schedule_context["loaded_acquisitions"] = context.loaded_acquisitions_count
-        schedule_context["blocked_satellites"] = list(context.blocked_intervals.keys())
-
-        logger.info(
-            f"[Incremental Plan] Loaded {context.loaded_acquisitions_count} blocked acquisitions"
-        )
 
     # Get opportunities from the planning store
     # In a full implementation, opportunities would be passed via request or session
@@ -1925,6 +2013,134 @@ async def create_incremental_plan(
             "Run mission analysis first to generate opportunities."
         )
 
+    # =========================================================================
+    # AUTO-MODE SELECTION: Determine planning mode from workspace state.
+    # The client-sent mode is treated as a force override only when it
+    # differs from the default "from_scratch".  Otherwise, the system
+    # inspects existing acquisitions vs. current targets to auto-pick
+    # FROM_SCRATCH / INCREMENTAL / REPAIR.
+    # =========================================================================
+    _auto_workspace = request.workspace_id or "default"
+    _existing_acqs_for_mode = []
+    try:
+        _existing_acqs_for_mode = db.get_acquisitions_in_horizon(
+            start_time=horizon_start.isoformat(),
+            end_time=horizon_end.isoformat(),
+            workspace_id=_auto_workspace,
+        )
+    except Exception as e:
+        logger.warning(f"[Auto Mode] Failed to query existing acquisitions: {e}")
+
+    _active_existing = [
+        a for a in _existing_acqs_for_mode
+        if a.state not in ("failed", "cancelled")
+    ]
+    _existing_target_ids = {a.target_id for a in _active_existing}
+    _current_target_ids = {
+        opp["target_id"] if isinstance(opp, dict) else getattr(opp, "target_id", "")
+        for opp in raw_opportunities
+    }
+
+    # Use client mode as force_mode only when explicitly non-default
+    _force_mode = None
+    if request.planning_mode != "from_scratch":
+        _force_mode = request.planning_mode
+
+    mode_result = select_planning_mode(
+        workspace_id=_auto_workspace,
+        existing_acquisition_count=len(_active_existing),
+        existing_target_ids=_existing_target_ids,
+        current_target_ids=_current_target_ids,
+        conflict_count=0,  # TODO: integrate conflict_detection module
+        previous_plan_count=0,  # TODO: count previous committed plans
+        request_payload_hash=_req_hash,
+        force_mode=_force_mode,
+    )
+
+    planning_mode = PlanningMode(mode_result.mode)
+    _audit.add("mode_selection", **mode_result.to_log_dict())
+    schedule_context["planning_mode"] = planning_mode.value
+
+    logger.info(
+        f"[Auto Mode] Selected: {planning_mode.value} | "
+        f"existing={len(_active_existing)}, "
+        f"new_targets={mode_result.new_target_count} | "
+        f"reason={mode_result.reason[:100]}"
+    )
+
+    # Load blocked intervals for INCREMENTAL mode (must happen after mode selection)
+    if planning_mode == PlanningMode.INCREMENTAL and request.workspace_id:
+        context = load_blocked_intervals(
+            db=db,
+            workspace_id=request.workspace_id,
+            horizon_start=horizon_start,
+            horizon_end=horizon_end,
+            lock_policy=lock_policy,
+            include_tentative=request.include_tentative,
+        )
+
+        all_acq_ids = []
+        by_satellite: Dict[str, int] = {}
+
+        for sat_id, intervals in context.blocked_intervals.items():
+            by_satellite[sat_id] = len(intervals)
+            all_acq_ids.extend([i.acquisition_id for i in intervals])
+
+        existing_summary = ExistingAcquisitionsSummaryResponse(
+            count=context.loaded_acquisitions_count,
+            by_state=context.loaded_acquisitions_by_state,
+            by_satellite=by_satellite,
+            acquisition_ids=all_acq_ids,
+            horizon_start=horizon_start.isoformat() + "Z",
+            horizon_end=horizon_end.isoformat() + "Z",
+        )
+
+        schedule_context["loaded_acquisitions"] = context.loaded_acquisitions_count
+        schedule_context["blocked_satellites"] = list(context.blocked_intervals.keys())
+
+        logger.info(
+            f"[Incremental Plan] Loaded {context.loaded_acquisitions_count} blocked acquisitions"
+        )
+
+    # =========================================================================
+    # TARGET DEDUP: Skip opportunities for targets that already have a future
+    # acquisition in this workspace.  Past acquisitions (end_time < now) do NOT
+    # block — the mission planner is allowed to re-schedule a target whose
+    # previous pass is already in the past.
+    # =========================================================================
+    dedup_skipped: List[Dict[str, Any]] = []
+    _dedup_workspace = request.workspace_id or "default"
+    if raw_opportunities and _dedup_workspace:
+        future_sat_targets: set = set()
+        try:
+            existing_acqs = db.get_acquisitions_in_horizon(
+                start_time=now.isoformat(),
+                end_time=horizon_end.isoformat(),
+                workspace_id=_dedup_workspace,
+            )
+            for acq in existing_acqs:
+                # Only block on active future acquisitions
+                if acq.state not in ("failed", "cancelled"):
+                    future_sat_targets.add((acq.satellite_id, acq.target_id))
+        except Exception as e:
+            logger.warning(f"[Plan] Dedup query failed (proceeding without): {e}")
+
+        if future_sat_targets:
+            filtered_opps: List[Dict[str, Any]] = []
+            for opp in raw_opportunities:
+                opp_sat = opp.get("satellite_id", "") if isinstance(opp, dict) else getattr(opp, "satellite_id", "")
+                opp_tgt = opp.get("target_id", "") if isinstance(opp, dict) else getattr(opp, "target_id", "")
+                if (opp_sat, opp_tgt) in future_sat_targets:
+                    dedup_skipped.append(opp if isinstance(opp, dict) else {"satellite_id": opp_sat, "target_id": opp_tgt})
+                else:
+                    filtered_opps.append(opp)
+            logger.info(
+                f"[Plan] Target dedup: {len(dedup_skipped)} opportunities skipped "
+                f"({len(future_sat_targets)} sat-target pairs already scheduled), "
+                f"{len(filtered_opps)} remaining"
+            )
+            raw_opportunities = filtered_opps
+
     # Filter opportunities based on blocked intervals (incremental mode)
     feasible_opportunities: List[Any] = raw_opportunities
     rejected_opportunities: List[Dict[str, Any]] = []
@@ -1940,8 +2156,15 @@ async def create_incremental_plan(
             else:
                 opp_dicts.append(opp)
 
+        # Get satellite agility from cached mission data
+        from backend.main import app as main_app
+        _mission_data = getattr(main_app.state, "current_mission_data", {}).get("mission_data", {})
+        _sat_agility = _mission_data.get("satellite_agility", request.max_roll_rate_dps)
+        _agility_source = "config" if "satellite_agility" in _mission_data else "request default"
+        logger.info(f"[Incremental Plan] Using satellite agility: {_sat_agility}\u00b0/s (from {_agility_source})")
+
         slew_config = SlewConfig(
-            roll_slew_rate_deg_per_sec=request.max_roll_rate_dps,
+            roll_slew_rate_deg_per_sec=_sat_agility,
             pitch_slew_rate_deg_per_sec=request.max_pitch_rate_dps,
             settling_time_s=5.0,
             parallel_slew=True,
@@ -2841,7 +3064,7 @@ class RepairCommitRequest(BaseModel):
         default_factory=list, description="Acquisition IDs to drop"
     )
     lock_level: str = Field(
-        default="soft", description="Lock level for new acquisitions"
+        default="none", description="Lock level for new acquisitions: none | hard"
     )
     mode: str = Field(default="OPTICAL", description="Mission mode")
     force: bool = Field(
@@ -2891,6 +3114,21 @@ async def commit_repair_plan(request: RepairCommitRequest) -> RepairCommitRespon
     from backend.conflict_detection import detect_and_persist_conflicts
 
     db = get_schedule_db()
+
+    # Auto-escalate locks before commit — protect near-execution acquisitions
+    escalation = db.auto_escalate_locks(workspace_id=request.workspace_id)
+    if escalation["escalated"] > 0:
+        logger.info(
+            f"[Repair Commit] Auto-escalated {escalation['escalated']} acquisitions "
+            f"to hard lock before commit"
+        )
+
+    # Validate lock level
+    if request.lock_level not in ["none", "hard"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid lock_level: {request.lock_level}. Must be 'none' or 'hard'",
+        )
 
     # Check plan exists
     plan = db.get_plan(request.plan_id)
@@ -2967,30 +3205,17 @@ async def commit_repair_plan(request: RepairCommitRequest) -> RepairCommitRespon
         )
 
     if (freeze_conflicts or hard_lock_conflicts) and request.force:
+        # Force=true: proceed with the full drop list as requested.
+        # The user explicitly acknowledged they want to override protections.
+        # Log for audit trail but do NOT silently alter the drop list.
         warnings.append(
-            f"Force-committed with {len(freeze_conflicts)} freeze + "
-            f"{len(hard_lock_conflicts)} hard lock conflict(s)"
+            f"Force override: dropping {len(freeze_conflicts)} freeze-protected + "
+            f"{len(hard_lock_conflicts)} hard-locked acquisition(s) as requested"
         )
-        # Filter out protected acquisitions from drop list
-        protected_ids: set[str] = set()
-        for acq_id in request.drop_acquisition_ids:
-            acq = db.get_acquisition(acq_id)
-            if not acq:
-                continue
-            if acq.lock_level == "hard":
-                protected_ids.add(acq_id)
-            try:
-                acq_start = datetime.fromisoformat(
-                    acq.start_time.replace("Z", "+00:00")
-                )
-                if acq_start <= freeze_cutoff:
-                    protected_ids.add(acq_id)
-            except (ValueError, AttributeError):
-                pass
-        request.drop_acquisition_ids = [
-            aid for aid in request.drop_acquisition_ids if aid not in protected_ids
-        ]
-        warnings.append(f"Skipped dropping {len(protected_ids)} protected acquisitions")
+        logger.warning(
+            f"[Repair Commit] Force override by user — dropping protected acquisitions: "
+            f"freeze={freeze_conflicts}, hard_lock={hard_lock_conflicts}"
+        )
 
     try:
         # Atomic commit
@@ -3136,3 +3361,34 @@ async def get_commit_history(
         audit_logs=[AuditLogResponse(**log.to_dict()) for log in audit_logs],
         total=len(audit_logs),
     )
+
+
+# =============================================================================
+# Snapshot / Rollback Endpoints
+# =============================================================================
+
+
+@router.get("/snapshots")
+async def list_snapshots(workspace_id: str = Query(..., description="Workspace ID")):
+    """List available schedule snapshots for rollback."""
+    db = get_schedule_db()
+    snapshots = db.list_snapshots(workspace_id)
+    return {"snapshots": snapshots, "count": len(snapshots)}
+
+
+@router.post("/rollback")
+async def rollback_schedule(
+    snapshot_id: str = Body(..., embed=True),
+    workspace_id: str = Body(..., embed=True),
+):
+    """Rollback workspace schedule to a previous snapshot."""
+    db = get_schedule_db()
+    try:
+        result = db.rollback_to_snapshot(snapshot_id, workspace_id)
+        return {
+            "success": True,
+            "message": f"Rolled back to snapshot {snapshot_id}",
+            **result,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))

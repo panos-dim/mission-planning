@@ -116,7 +116,7 @@ satellites:
     inclination_deg: 97.3
     period_minutes: 93.6
   sar_mode: stripmap
-  satellite_agility: 1.2
+  satellite_agility: 1.0
   sensor_fov_half_angle_deg: 1.5
   tle_updated_at: '2025-12-08T12:00:00Z'
 - active: true
@@ -180,7 +180,7 @@ satellites:
     inclination_deg: 97.5
     period_minutes: 95.8
   sar_mode: spotlight
-  satellite_agility: 2.5
+  satellite_agility: 1.0
   sensor_fov_half_angle_deg: 1.0
   tle_updated_at: '2025-12-08T12:00:00Z'
 - active: true
@@ -201,7 +201,7 @@ satellites:
     inclination_deg: 97.3
     period_minutes: 94.5
   sar_mode: stripmap
-  satellite_agility: 1.5
+  satellite_agility: 1.0
   sensor_fov_half_angle_deg: 0.8
   tle_updated_at: '2025-12-08T12:00:00Z'
 - active: true
@@ -223,7 +223,7 @@ satellites:
     inclination_deg: 45.4
     period_minutes: 94.8
   sar_mode: spotlight
-  satellite_agility: 2.5
+  satellite_agility: 1.0
   sensor_fov_half_angle_deg: 1.0
   tle_updated_at: '2026-01-15T12:22:16.127391Z'
 - active: true
@@ -245,7 +245,7 @@ satellites:
     inclination_deg: 45.4
     period_minutes: 94.8
   sar_mode: spotlight
-  satellite_agility: 2.5
+  satellite_agility: 1.0
   sensor_fov_half_angle_deg: 1.0
   tle_updated_at: '2026-01-15T12:22:14.134970Z'
 - active: true
@@ -267,7 +267,7 @@ satellites:
     inclination_deg: 45.4
     period_minutes: 94.8
   sar_mode: spotlight
-  satellite_agility: 2.5
+  satellite_agility: 1.0
   sensor_fov_half_angle_deg: 1.0
   tle_updated_at: '2026-01-15T12:22:11.909241Z'
 - active: true
@@ -289,7 +289,7 @@ satellites:
     inclination_deg: 97.8
     period_minutes: 96.2
   sar_mode: spotlight
-  satellite_agility: 2.5
+  satellite_agility: 1.0
   sensor_fov_half_angle_deg: 1.0
   tle_updated_at: '2026-01-15T12:22:10.352335Z'
 - active: true
@@ -311,7 +311,7 @@ satellites:
     inclination_deg: 97.8
     period_minutes: 96.3
   sar_mode: spotlight
-  satellite_agility: 2.5
+  satellite_agility: 1.0
   sensor_fov_half_angle_deg: 1.0
   tle_updated_at: '2026-03-05T16:00:46.625533+00:00'
 - active: true
@@ -333,7 +333,7 @@ satellites:
     inclination_deg: 97.8
     period_minutes: 96.3
   sar_mode: spotlight
-  satellite_agility: 2.5
+  satellite_agility: 1.0
   sensor_fov_half_angle_deg: 1.0
   tle_updated_at: '2026-01-15T12:22:06.195002Z'
 - active: true
@@ -355,6 +355,6 @@ satellites:
     inclination_deg: 97.8
     period_minutes: 96.0
   sar_mode: spotlight
-  satellite_agility: 2.5
+  satellite_agility: 1.0
   sensor_fov_half_angle_deg: 1.0
   tle_updated_at: '2026-03-05T16:00:53.124442+00:00'

@@ -35,14 +35,13 @@ class PlanningMode(str, Enum):
 
     FROM_SCRATCH = "from_scratch"  # Ignore existing schedule, plan fresh
     INCREMENTAL = "incremental"  # Plan around existing committed/locked acquisitions
-    REPAIR = "repair"  # Repair existing schedule: keep hard locks, optionally move/replace soft
+    REPAIR = "repair"  # Repair existing schedule: keep hard locks, re-optimize unlocked
 
 
 class LockPolicy(str, Enum):
     """Lock policy determines which acquisition states are treated as blocked."""
 
     RESPECT_HARD_ONLY = "respect_hard_only"  # Only hard-locked items block planning
-    RESPECT_HARD_AND_SOFT = "respect_hard_and_soft"  # Both hard and soft locks block
 
 
 class RepairScope(str, Enum):

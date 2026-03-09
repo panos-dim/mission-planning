@@ -8,9 +8,13 @@ mission planning tasks, enabling significant speedups on multi-core systems.
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import List, Dict, Any, Callable, Optional, Tuple
 from datetime import datetime
+import atexit
 import logging
 import os
 import multiprocessing as mp
+import platform
+import signal
+import sys
 from functools import partial
 
 logger = logging.getLogger(__name__)
@@ -50,62 +54,136 @@ def get_optimal_workers(max_workers: Optional[int] = None, num_targets: int = 0)
     return cpu_count
 
 
+def _get_mp_context():
+    """
+    Get the appropriate multiprocessing context for the current platform.
+
+    On macOS, 'fork' is deprecated (Apple warns about it since Ventura) and
+    can leave orphan processes when the parent is killed.  Use 'forkserver'
+    which forks from a clean server process and propagates termination.
+    On Linux, 'forkserver' also works well.
+    On Windows, only 'spawn' is available.
+    """
+    if not hasattr(mp, "get_context"):
+        return None
+
+    if platform.system() == "Darwin":
+        # macOS: avoid raw 'fork' — orphaned children don't receive death
+        # signals.  'forkserver' is fastest safe alternative.
+        try:
+            ctx = mp.get_context("forkserver")
+            logger.debug("Using 'forkserver' context (macOS safe)")
+            return ctx
+        except ValueError:
+            pass
+
+    # Linux / fallback: 'forkserver' preferred, 'fork' acceptable
+    for method in ("forkserver", "fork"):
+        try:
+            ctx = mp.get_context(method)
+            logger.debug(f"Using '{method}' context")
+            return ctx
+        except ValueError:
+            continue
+
+    logger.debug("Using default 'spawn' context")
+    return None
+
+
 def get_or_create_process_pool(max_workers: int) -> ProcessPoolExecutor:
     """
     Get or create a reusable process pool to avoid repeated spawn overhead.
-    
+
+    Safety features:
+    - Uses 'forkserver' on macOS to prevent orphan worker processes.
+    - Registers atexit + SIGTERM handlers so the pool is cleaned up even
+      if the application doesn't go through a graceful ASGI shutdown.
+
     Args:
         max_workers: Number of worker processes
-        
+
     Returns:
         ProcessPoolExecutor instance
     """
     global _process_pool, _pool_max_workers
-    
+
     # Reuse existing pool if same size
     if _process_pool is not None and _pool_max_workers == max_workers:
         return _process_pool
-    
+
     # Shutdown old pool if different size
     if _process_pool is not None:
         _process_pool.shutdown(wait=False)
-    
-    # Create new pool with mp_context='fork' on Unix systems for faster startup
-    # Note: 'fork' is faster but may have issues with certain libraries
-    # Fall back to 'spawn' if 'fork' unavailable
-    mp_context = None
-    if hasattr(mp, 'get_context'):
-        try:
-            mp_context = mp.get_context('fork')
-            logger.debug("Using 'fork' context for faster worker startup")
-        except ValueError:
-            # 'fork' not available (Windows), use default
-            logger.debug("'fork' context not available, using default 'spawn'")
-            pass
-    
+
+    mp_context = _get_mp_context()
+
     _process_pool = ProcessPoolExecutor(
         max_workers=max_workers,
-        mp_context=mp_context
+        mp_context=mp_context,
     )
     _pool_max_workers = max_workers
-    
+
+    # Register safety-net cleanup so workers don't outlive the parent
+    atexit.register(cleanup_process_pool)
+    _install_signal_cleanup()
+
     return _process_pool
 
 
 def cleanup_process_pool():
     """
     Clean up the global process pool on shutdown.
-    
+
     Call this when the application is shutting down to gracefully
-    terminate worker processes.
+    terminate worker processes.  Safe to call multiple times.
     """
     global _process_pool, _pool_max_workers
-    
+
     if _process_pool is not None:
         logger.info("Shutting down process pool...")
-        _process_pool.shutdown(wait=True)
+        try:
+            _process_pool.shutdown(wait=True, cancel_futures=True)
+        except TypeError:
+            # Python < 3.9 doesn't support cancel_futures
+            _process_pool.shutdown(wait=True)
         _process_pool = None
         _pool_max_workers = None
+
+
+_signal_installed = False
+
+
+def _install_signal_cleanup():
+    """
+    Install SIGTERM/SIGINT handlers that clean up the process pool before
+    the default handler runs.  This prevents orphan worker processes when
+    uvicorn is terminated with ``kill <pid>`` (SIGTERM).
+
+    Only installs once; safe to call repeatedly.  Chains with any existing
+    handler so uvicorn's own signal logic still fires.
+    """
+    global _signal_installed
+    if _signal_installed:
+        return
+    _signal_installed = True
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        prev_handler = signal.getsignal(sig)
+
+        def _handler(signum, frame, _prev=prev_handler):
+            cleanup_process_pool()
+            # Chain to previous handler (uvicorn's or default)
+            if callable(_prev):
+                _prev(signum, frame)
+            elif _prev == signal.SIG_DFL:
+                signal.signal(signum, signal.SIG_DFL)
+                os.kill(os.getpid(), signum)
+
+        try:
+            signal.signal(sig, _handler)
+        except (OSError, ValueError):
+            # Can't install signal handlers in non-main thread
+            pass
 
 
 def _compute_target_passes_worker(

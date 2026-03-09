@@ -17,7 +17,7 @@ import sqlite3
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
@@ -497,6 +497,12 @@ class ScheduleDB:
 
             if current_version < "2.5":
                 self._migrate_to_v2_5(conn)
+
+            if current_version < "2.6":
+                self._migrate_to_v2_6(conn)
+
+            if current_version < "2.7":
+                self._migrate_to_v2_7(conn)
 
             conn.commit()
 
@@ -1070,6 +1076,182 @@ class ScheduleDB:
 
         logger.info("Migration to schema v2.5 complete")
 
+    def _migrate_to_v2_6(self, conn: sqlite3.Connection) -> None:
+        """Migrate database schema to v2.6 — workspace_id cleanup, schedule revision, UNIQUE constraint.
+
+        Changes:
+        1. Backfill NULL workspace_id to 'default' on acquisitions and conflicts
+        2. Add schedule_revision column to acquisitions for optimistic concurrency
+        3. Add UNIQUE constraint on (satellite_id, target_id, start_time, workspace_id)
+        """
+        cursor = conn.cursor()
+        now = datetime.now(timezone.utc).isoformat() + "Z"
+
+        logger.info("Running migration to schema v2.6 (workspace cleanup + revision)...")
+
+        # Step 1: Backfill NULL workspace_id → 'default'
+        # Use try/except because FK constraints may reference a workspaces table
+        # that doesn't exist in all database configurations (e.g., test DBs)
+        for table in ("acquisitions", "conflicts", "plans"):
+            try:
+                cursor.execute(
+                    f"UPDATE {table} SET workspace_id = 'default' "
+                    f"WHERE workspace_id IS NULL"
+                )
+                if cursor.rowcount > 0:
+                    logger.info(
+                        f"  Backfilled workspace_id for {cursor.rowcount} {table}"
+                    )
+            except sqlite3.OperationalError as e:
+                if "no such table" in str(e):
+                    logger.debug(f"  Skipping {table} backfill: {e}")
+                else:
+                    raise
+
+        # Step 2: Add schedule_revision column for optimistic concurrency control
+        try:
+            cursor.execute(
+                "ALTER TABLE acquisitions ADD COLUMN schedule_revision INTEGER DEFAULT 1"
+            )
+            logger.info("  Added column acquisitions.schedule_revision")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        # Step 3: Create a workspace_schedule_revision table for tracking
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS workspace_schedule_revision (
+                workspace_id TEXT PRIMARY KEY,
+                revision INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL
+            )
+        """
+        )
+
+        # Seed revision for existing workspaces
+        cursor.execute(
+            "SELECT DISTINCT workspace_id FROM acquisitions WHERE workspace_id IS NOT NULL"
+        )
+        for row in cursor.fetchall():
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO workspace_schedule_revision
+                    (workspace_id, revision, updated_at)
+                VALUES (?, 1, ?)
+            """,
+                (row["workspace_id"], now),
+            )
+
+        # Step 4: Add UNIQUE constraint via index (SQLite can't add constraints after creation)
+        try:
+            cursor.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_acq_unique_pass
+                ON acquisitions(satellite_id, target_id, start_time, workspace_id)
+                WHERE state != 'failed'
+            """
+            )
+            logger.info(
+                "  Created UNIQUE index idx_acq_unique_pass "
+                "(satellite_id, target_id, start_time, workspace_id)"
+            )
+        except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+            if "UNIQUE constraint" in str(e):
+                logger.warning(
+                    f"  UNIQUE index creation failed — duplicate rows exist: {e}. "
+                    f"Deduplicating and retrying..."
+                )
+                # Deduplicate: keep the row with the highest rowid for each group
+                cursor.execute(
+                    """
+                    DELETE FROM acquisitions
+                    WHERE rowid NOT IN (
+                        SELECT MAX(rowid)
+                        FROM acquisitions
+                        WHERE state != 'failed'
+                        GROUP BY satellite_id, target_id, start_time, workspace_id
+                    ) AND state != 'failed'
+                    AND EXISTS (
+                        SELECT 1 FROM acquisitions a2
+                        WHERE a2.satellite_id = acquisitions.satellite_id
+                          AND a2.target_id = acquisitions.target_id
+                          AND a2.start_time = acquisitions.start_time
+                          AND a2.workspace_id = acquisitions.workspace_id
+                          AND a2.rowid > acquisitions.rowid
+                          AND a2.state != 'failed'
+                    )
+                """
+                )
+                deduped = cursor.rowcount
+                if deduped:
+                    logger.info(f"  Removed {deduped} duplicate acquisition rows")
+                # Retry index creation after dedup
+                try:
+                    cursor.execute(
+                        """
+                        CREATE UNIQUE INDEX IF NOT EXISTS idx_acq_unique_pass
+                        ON acquisitions(satellite_id, target_id, start_time, workspace_id)
+                        WHERE state != 'failed'
+                    """
+                    )
+                    logger.info("  UNIQUE index created after deduplication")
+                except (sqlite3.OperationalError, sqlite3.IntegrityError) as e2:
+                    logger.warning(f"  UNIQUE index still failed after dedup: {e2}")
+            else:
+                logger.warning(f"  UNIQUE index creation skipped: {e}")
+
+        # Record migration
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO schema_migrations (version, applied_at, description)
+            VALUES (?, ?, ?)
+        """,
+            (
+                "2.6",
+                now,
+                "Workspace cleanup (NULL→default), schedule_revision, UNIQUE constraint",
+            ),
+        )
+
+        logger.info("Migration to schema v2.6 complete")
+
+    def _migrate_to_v2_7(self, conn: sqlite3.Connection) -> None:
+        """Migrate database schema to v2.7 — schedule snapshots for rollback."""
+        cursor = conn.cursor()
+        now = datetime.now(timezone.utc).isoformat() + "Z"
+
+        logger.info("Running migration to schema v2.7...")
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schedule_snapshots (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                plan_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                snapshot_data TEXT NOT NULL,
+                description TEXT,
+                FOREIGN KEY (workspace_id) REFERENCES workspaces(id)
+            )
+        """
+        )
+        logger.info("  Created schedule_snapshots table")
+
+        # Record migration
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO schema_migrations (version, applied_at, description)
+            VALUES (?, ?, ?)
+        """,
+            (
+                "2.7",
+                now,
+                "Add schedule_snapshots table for rollback support",
+            ),
+        )
+
+        logger.info("Migration to schema v2.7 complete")
+
     # =========================================================================
     # Order Operations
     # =========================================================================
@@ -1521,8 +1703,8 @@ class ScheduleDB:
             params: List[Any] = []
 
             if workspace_id:
-                # Include acquisitions with matching workspace_id OR NULL workspace_id
-                query += " AND (workspace_id = ? OR workspace_id IS NULL)"
+                # Filter by workspace_id
+                query += " AND workspace_id = ?"
                 params.append(workspace_id)
             if satellite_id:
                 query += " AND satellite_id = ?"
@@ -1545,18 +1727,80 @@ class ScheduleDB:
             cursor.execute(query, params)
             return [self._row_to_acquisition(row) for row in cursor.fetchall()]
 
-    def delete_acquisition(self, acquisition_id: str) -> bool:
+    # =========================================================================
+    # Freeze Window Enforcement (R1)
+    # =========================================================================
+
+    FREEZE_WINDOW_HOURS = 2  # Acquisitions within this window are protected
+
+    def check_freeze_protection(
+        self,
+        acquisition_id: str,
+        force: bool = False,
+    ) -> Optional[str]:
+        """Check if an acquisition is protected by the freeze window or hard lock.
+
+        Returns None if the acquisition can be modified, or a reason string
+        explaining why it cannot.
+
+        Args:
+            acquisition_id: Acquisition to check
+            force: If True, skip freeze/lock checks (caller has explicit override)
+
+        Returns:
+            None if OK, or a string with the protection reason
+        """
+        if force:
+            return None
+
+        acq = self.get_acquisition(acquisition_id)
+        if not acq:
+            return None  # Doesn't exist — caller decides how to handle
+
+        # Hard lock check
+        if acq.lock_level == "hard":
+            return f"Acquisition {acquisition_id} is hard-locked"
+
+        # Freeze window check
+        try:
+            now = datetime.now(timezone.utc)
+            freeze_cutoff = now + timedelta(hours=self.FREEZE_WINDOW_HOURS)
+            acq_start = datetime.fromisoformat(
+                acq.start_time.replace("Z", "+00:00")
+            )
+            if acq_start <= freeze_cutoff:
+                return (
+                    f"Acquisition {acquisition_id} starts at {acq.start_time}, "
+                    f"within {self.FREEZE_WINDOW_HOURS}h freeze window"
+                )
+        except (ValueError, AttributeError):
+            pass
+
+        return None
+
+    def delete_acquisition(
+        self, acquisition_id: str, force: bool = False
+    ) -> bool:
         """Delete a single acquisition by ID.
 
-        Hard-locked acquisitions cannot be deleted unless force is used
-        at the router level.
+        Enforces freeze window and hard-lock protection at the persistence
+        layer. Set force=True to bypass (caller must have explicit user
+        authorization).
 
         Args:
             acquisition_id: Acquisition to delete
+            force: Bypass freeze/lock checks
 
         Returns:
             True if deleted
+
+        Raises:
+            ValueError: If acquisition is protected and force=False
         """
+        protection = self.check_freeze_protection(acquisition_id, force=force)
+        if protection:
+            raise ValueError(f"Cannot delete: {protection}")
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -1570,24 +1814,39 @@ class ScheduleDB:
             logger.info(f"Deleted acquisition {acquisition_id}")
         return deleted
 
-    def bulk_delete_acquisitions(self, acquisition_ids: List[str]) -> Dict[str, Any]:
+    def bulk_delete_acquisitions(
+        self, acquisition_ids: List[str], force: bool = False
+    ) -> Dict[str, Any]:
         """Delete multiple acquisitions by ID.
+
+        Enforces freeze window and hard-lock protection. Protected acquisitions
+        are skipped (added to 'rejected' list) unless force=True.
 
         Args:
             acquisition_ids: List of acquisition IDs to delete
+            force: Bypass freeze/lock checks
 
         Returns:
-            Dict with {"deleted": int, "failed": list[str]}
+            Dict with {"deleted": int, "failed": list[str], "rejected": list[str]}
         """
         if not acquisition_ids:
-            return {"deleted": 0, "failed": []}
+            return {"deleted": 0, "failed": [], "rejected": []}
 
         deleted_count = 0
         failed: List[str] = []
+        rejected: List[str] = []
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
             for acq_id in acquisition_ids:
+                # Check protection unless force
+                if not force:
+                    protection = self.check_freeze_protection(acq_id, force=False)
+                    if protection:
+                        rejected.append(acq_id)
+                        logger.info(f"Rejected delete of {acq_id}: {protection}")
+                        continue
+
                 cursor.execute(
                     "DELETE FROM acquisitions WHERE id = ?",
                     (acq_id,),
@@ -1599,9 +1858,10 @@ class ScheduleDB:
             conn.commit()
 
         logger.info(
-            f"Bulk deleted {deleted_count} acquisitions " f"({len(failed)} failed)"
+            f"Bulk deleted {deleted_count} acquisitions "
+            f"({len(failed)} failed, {len(rejected)} rejected by protection)"
         )
-        return {"deleted": deleted_count, "failed": failed}
+        return {"deleted": deleted_count, "failed": failed, "rejected": rejected}
 
     def get_acquisitions_in_horizon(
         self,
@@ -1638,9 +1898,8 @@ class ScheduleDB:
             params: List[Any] = [end_time, start_time]
 
             if workspace_id:
-                # Include acquisitions with matching workspace_id OR NULL workspace_id
-                # (NULL workspace_id means "global" or legacy data that belongs to all workspaces)
-                query += " AND (workspace_id = ? OR workspace_id IS NULL)"
+                # Filter by workspace_id
+                query += " AND workspace_id = ?"
                 params.append(workspace_id)
             if satellite_id:
                 query += " AND satellite_id = ?"
@@ -1687,8 +1946,8 @@ class ScheduleDB:
             params: List[Any] = [satellite_id, end_time, start_time]
 
             if workspace_id:
-                # Include acquisitions with matching workspace_id OR NULL workspace_id
-                query += " AND (workspace_id = ? OR workspace_id IS NULL)"
+                # Filter by workspace_id
+                query += " AND workspace_id = ?"
                 params.append(workspace_id)
 
             query += " ORDER BY start_time ASC"
@@ -1741,6 +2000,67 @@ class ScheduleDB:
             )
             conn.commit()
             return cursor.rowcount > 0
+
+    def auto_escalate_locks(
+        self,
+        workspace_id: str,
+        escalation_window_hours: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Auto-promote acquisitions approaching execution to hard lock.
+
+        Acquisitions with lock_level='none' that start within the escalation
+        window are promoted to 'hard'. This prevents repair plans from
+        displacing acquisitions that are about to execute.
+
+        Args:
+            workspace_id: Workspace to escalate
+            escalation_window_hours: Hours before execution to escalate
+                (defaults to FREEZE_WINDOW_HOURS)
+
+        Returns:
+            Dict with {"escalated": int, "acquisition_ids": list[str]}
+        """
+        window_hours = escalation_window_hours or self.FREEZE_WINDOW_HOURS
+        now = datetime.now(timezone.utc)
+        cutoff = (now + timedelta(hours=window_hours)).isoformat() + "Z"
+        now_str = now.isoformat() + "Z"
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Find unlocked acquisitions within the escalation window
+            cursor.execute(
+                """
+                SELECT id FROM acquisitions
+                WHERE workspace_id = ?
+                  AND lock_level = 'none'
+                  AND state NOT IN ('failed', 'completed')
+                  AND start_time <= ?
+                  AND start_time > ?
+            """,
+                (workspace_id, cutoff, now_str),
+            )
+            rows = cursor.fetchall()
+            acq_ids = [row["id"] for row in rows]
+
+            if acq_ids:
+                placeholders = ", ".join(["?"] * len(acq_ids))
+                cursor.execute(
+                    f"""
+                    UPDATE acquisitions
+                    SET lock_level = 'hard', updated_at = ?
+                    WHERE id IN ({placeholders})
+                """,
+                    [now_str] + acq_ids,
+                )
+                conn.commit()
+                logger.info(
+                    f"[Auto Lock Escalation] Promoted {len(acq_ids)} acquisitions "
+                    f"to hard lock in workspace {workspace_id} "
+                    f"(within {window_hours}h of execution)"
+                )
+
+            return {"escalated": len(acq_ids), "acquisition_ids": acq_ids}
 
     def _row_to_acquisition(self, row: sqlite3.Row) -> Acquisition:
         """Convert database row to Acquisition object."""
@@ -1824,7 +2144,7 @@ class ScheduleDB:
             cursor.execute(
                 """
                 SELECT COUNT(*) as cnt FROM acquisitions
-                WHERE (workspace_id = ? OR workspace_id IS NULL)
+                WHERE workspace_id = ?
                   AND start_time < ? AND end_time > ?
                   AND state NOT IN ('failed')
             """,
@@ -1844,7 +2164,7 @@ class ScheduleDB:
                            AVG(target_lon) as avg_lon,
                            AVG(off_nadir_deg) as avg_off_nadir
                     FROM acquisitions
-                    WHERE (workspace_id = ? OR workspace_id IS NULL)
+                    WHERE workspace_id = ?
                       AND start_time < ? AND end_time > ?
                       AND state NOT IN ('failed')
                     GROUP BY target_id, satellite_id
@@ -1883,7 +2203,7 @@ class ScheduleDB:
             cursor.execute(
                 """
                 SELECT * FROM acquisitions
-                WHERE (workspace_id = ? OR workspace_id IS NULL)
+                WHERE workspace_id = ?
                   AND start_time < ? AND end_time > ?
                   AND state NOT IN ('failed')
                 ORDER BY start_time ASC
@@ -2139,6 +2459,133 @@ class ScheduleDB:
             return {}
 
     # =========================================================================
+    # Snapshot Operations (Rollback Support)
+    # =========================================================================
+
+    def _create_snapshot(
+        self,
+        cursor: sqlite3.Cursor,
+        workspace_id: str,
+        plan_id: str,
+        description: str = "",
+    ) -> str:
+        """Create a snapshot of current workspace acquisitions before commit.
+
+        Args:
+            cursor: Active database cursor (within a transaction)
+            workspace_id: Workspace to snapshot
+            plan_id: Plan ID triggering this snapshot
+            description: Human-readable description
+
+        Returns:
+            The generated snapshot ID
+        """
+        cursor.execute(
+            "SELECT * FROM acquisitions WHERE workspace_id = ? AND state != 'failed'",
+            (workspace_id,),
+        )
+        rows = cursor.fetchall()
+        snapshot_data = [dict(row) for row in rows]
+
+        snapshot_id = f"snap_{uuid.uuid4().hex[:12]}"
+        cursor.execute(
+            """INSERT INTO schedule_snapshots
+               (id, workspace_id, plan_id, created_at, snapshot_data, description)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                snapshot_id,
+                workspace_id,
+                plan_id,
+                datetime.now(timezone.utc).isoformat() + "Z",
+                json.dumps(snapshot_data),
+                description,
+            ),
+        )
+        return snapshot_id
+
+    def rollback_to_snapshot(
+        self, snapshot_id: str, workspace_id: str
+    ) -> Dict[str, Any]:
+        """Rollback workspace acquisitions to a previous snapshot state.
+
+        Args:
+            snapshot_id: Snapshot to restore
+            workspace_id: Workspace that owns the snapshot
+
+        Returns:
+            Dict with rollback details (deleted_current, restored, plan_id)
+
+        Raises:
+            ValueError: If snapshot not found for the given workspace
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            cursor.execute(
+                "SELECT * FROM schedule_snapshots WHERE id = ? AND workspace_id = ?",
+                (snapshot_id, workspace_id),
+            )
+            snap = cursor.fetchone()
+            if not snap:
+                raise ValueError(
+                    f"Snapshot {snapshot_id} not found for workspace {workspace_id}"
+                )
+
+            snapshot_data = json.loads(snap["snapshot_data"])
+
+            # Delete current acquisitions for this workspace
+            cursor.execute(
+                "DELETE FROM acquisitions WHERE workspace_id = ?", (workspace_id,)
+            )
+            deleted = cursor.rowcount
+
+            # Restore acquisitions from snapshot
+            restored = 0
+            for acq in snapshot_data:
+                columns = list(acq.keys())
+                placeholders = ",".join("?" * len(columns))
+                col_names = ",".join(columns)
+                cursor.execute(
+                    f"INSERT OR REPLACE INTO acquisitions ({col_names}) VALUES ({placeholders})",
+                    [acq[c] for c in columns],
+                )
+                restored += 1
+
+            conn.commit()
+
+        logger.info(
+            f"Rolled back workspace {workspace_id} to snapshot {snapshot_id}: "
+            f"deleted {deleted}, restored {restored}"
+        )
+
+        return {
+            "snapshot_id": snapshot_id,
+            "deleted_current": deleted,
+            "restored": restored,
+            "plan_id": snap["plan_id"],
+        }
+
+    def list_snapshots(self, workspace_id: str) -> List[Dict[str, Any]]:
+        """List available snapshots for a workspace.
+
+        Args:
+            workspace_id: Workspace to list snapshots for
+
+        Returns:
+            List of snapshot metadata dicts (excludes bulky snapshot_data)
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """SELECT id, workspace_id, plan_id, created_at, description
+                   FROM schedule_snapshots
+                   WHERE workspace_id = ?
+                   ORDER BY created_at DESC""",
+                (workspace_id,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    # =========================================================================
     # Commit Plan Operation
     # =========================================================================
 
@@ -2188,6 +2635,16 @@ class ScheduleDB:
             # allowing duplicate acquisitions to be created.
             if plan_row["status"] == "committed":
                 raise ValueError(f"Plan {plan_id} is already committed")
+
+            # Create pre-commit snapshot for rollback
+            effective_ws = workspace_id or "default"
+            snapshot_id = self._create_snapshot(
+                cursor,
+                effective_ws,
+                plan_id,
+                description=f"Pre-commit snapshot for plan {plan_id}",
+            )
+            logger.info(f"Created pre-commit snapshot {snapshot_id}")
 
             # Get plan items to commit
             if item_ids:
@@ -2316,8 +2773,8 @@ class ScheduleDB:
             params: List[Any] = [end_time, start_time]
 
             if workspace_id:
-                # Include acquisitions with matching workspace_id OR NULL workspace_id
-                base_query += " AND (workspace_id = ? OR workspace_id IS NULL)"
+                # Filter by workspace_id
+                base_query += " AND workspace_id = ?"
                 params.append(workspace_id)
 
             # Total count
@@ -2505,8 +2962,8 @@ class ScheduleDB:
             acq_params: List[Any] = [end_time, start_time]
 
             if workspace_id:
-                # Include acquisitions with matching workspace_id OR NULL workspace_id
-                acq_query += " AND (workspace_id = ? OR workspace_id IS NULL)"
+                # Filter by workspace_id
+                acq_query += " AND workspace_id = ?"
                 acq_params.append(workspace_id)
             if satellite_id:
                 acq_query += " AND satellite_id = ?"
@@ -2523,8 +2980,8 @@ class ScheduleDB:
             conflict_params: List[Any] = []
 
             if workspace_id:
-                # Include conflicts with matching workspace_id OR NULL workspace_id
-                conflict_query += " AND (workspace_id = ? OR workspace_id IS NULL)"
+                # Filter by workspace_id
+                conflict_query += " AND workspace_id = ?"
                 conflict_params.append(workspace_id)
             if not include_resolved:
                 conflict_query += " AND resolved_at IS NULL"
@@ -2655,8 +3112,8 @@ class ScheduleDB:
             params: List[Any] = []
 
             if workspace_id:
-                # Include conflicts with matching workspace_id OR NULL workspace_id
-                base_query += " AND (workspace_id = ? OR workspace_id IS NULL)"
+                # Filter by workspace_id
+                base_query += " AND workspace_id = ?"
                 params.append(workspace_id)
             if not include_resolved:
                 base_query += " AND resolved_at IS NULL"
@@ -3004,6 +3461,7 @@ class ScheduleDB:
         mode: str = "OPTICAL",
         workspace_id: Optional[str] = None,
         drop_acquisition_ids: Optional[List[str]] = None,
+        expected_revision: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Atomically commit plan items and optionally drop acquisitions.
 
@@ -3017,12 +3475,14 @@ class ScheduleDB:
             mode: Mission mode (OPTICAL | SAR)
             workspace_id: Workspace ID for acquisitions
             drop_acquisition_ids: Acquisitions to delete (for repair commits)
+            expected_revision: If set, reject commit if workspace revision has changed
+                (optimistic concurrency control to prevent stale-read conflicts)
 
         Returns:
             Dict with results or raises exception on failure
 
         Raises:
-            ValueError: If plan not found or invalid
+            ValueError: If plan not found, invalid, or revision conflict
             Exception: On database error (transaction rolled back)
         """
         if lock_level not in ["none", "hard"]:
@@ -3038,6 +3498,21 @@ class ScheduleDB:
             try:
                 # Start transaction (implicit with BEGIN)
                 cursor.execute("BEGIN IMMEDIATE")
+
+                # Optimistic concurrency check: reject if revision has changed
+                if expected_revision is not None and workspace_id:
+                    cursor.execute(
+                        "SELECT revision FROM workspace_schedule_revision WHERE workspace_id = ?",
+                        (workspace_id,),
+                    )
+                    rev_row = cursor.fetchone()
+                    current_rev = rev_row["revision"] if rev_row else 1
+                    if current_rev != expected_revision:
+                        raise ValueError(
+                            f"Schedule revision conflict: expected {expected_revision}, "
+                            f"current is {current_rev}. Another commit may have changed "
+                            f"the schedule. Please re-plan and try again."
+                        )
 
                 # Get the plan
                 cursor.execute("SELECT * FROM plans WHERE id = ?", (plan_id,))
@@ -3152,6 +3627,19 @@ class ScheduleDB:
                     ("committed", plan_id),
                 )
 
+                # Step 6: Bump workspace schedule revision
+                if workspace_id:
+                    cursor.execute(
+                        """
+                        INSERT INTO workspace_schedule_revision
+                            (workspace_id, revision, updated_at)
+                        VALUES (?, 1, ?)
+                        ON CONFLICT(workspace_id) DO UPDATE
+                        SET revision = revision + 1, updated_at = ?
+                    """,
+                        (workspace_id, now, now),
+                    )
+
                 # Commit transaction
                 conn.commit()
 
@@ -3174,6 +3662,17 @@ class ScheduleDB:
                 conn.rollback()
                 logger.error(f"Atomic commit failed for plan {plan_id}: {e}")
                 raise
+
+    def get_schedule_revision(self, workspace_id: str) -> int:
+        """Get the current schedule revision for a workspace."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT revision FROM workspace_schedule_revision WHERE workspace_id = ?",
+                (workspace_id,),
+            )
+            row = cursor.fetchone()
+            return row["revision"] if row else 1
 
     # =========================================================================
     # Order Batch Operations (PS2.5)
