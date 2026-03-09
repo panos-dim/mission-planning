@@ -1003,3 +1003,170 @@ class TestTargetDeduplication:
                     requests.delete(f"{API}/workspaces/{ws}", timeout=10)
                 except Exception:
                     pass
+
+
+# =============================================================================
+# Phase 5: Auto-Mode Selection Verification
+# =============================================================================
+
+
+class TestAutoModeSelection:
+    """Verify auto-mode selection fires and picks correct mode."""
+
+    def test_01_fresh_workspace_selects_from_scratch(
+        self, seeded_mission: Dict
+    ) -> None:
+        """Empty workspace → auto-selects FROM_SCRATCH."""
+        ws = _create_workspace(f"automode_fresh_{uuid.uuid4().hex[:6]}")
+        try:
+            plan = _plan(ws)
+            assert plan["success"]
+            assert plan["planning_mode"] == "from_scratch", (
+                f"Expected from_scratch, got {plan['planning_mode']}"
+            )
+            ctx = plan.get("schedule_context", {})
+            assert ctx.get("existing_acquisition_count", -1) == 0
+            print(
+                f"Auto-mode: {plan['planning_mode']} | "
+                f"reason: {ctx.get('mode_selection_reason', '')[:80]}"
+            )
+        finally:
+            requests.delete(f"{API}/workspaces/{ws}", timeout=10)
+
+    def test_02_replan_same_targets_selects_repair(
+        self, seeded_mission: Dict
+    ) -> None:
+        """Existing schedule + same targets → auto-selects REPAIR."""
+        ws = _create_workspace(f"automode_repair_{uuid.uuid4().hex[:6]}")
+        try:
+            # Plan and commit first
+            _plan_commit(ws)
+
+            # Re-plan with same cached opportunities (same targets)
+            plan = _plan(ws)
+            assert plan["success"]
+            assert plan["planning_mode"] == "repair", (
+                f"Expected repair for same targets, got {plan['planning_mode']}. "
+                f"Context: {plan.get('schedule_context', {})}"
+            )
+            ctx = plan.get("schedule_context", {})
+            assert ctx.get("existing_acquisition_count", 0) > 0
+            assert ctx.get("new_target_count", -1) == 0
+            print(
+                f"Auto-mode: {plan['planning_mode']} | "
+                f"existing={ctx.get('existing_acquisition_count')} | "
+                f"reason: {ctx.get('mode_selection_reason', '')[:80]}"
+            )
+        finally:
+            requests.delete(f"{API}/workspaces/{ws}", timeout=10)
+
+    def test_03_new_targets_selects_incremental(
+        self, seeded_mission: Dict
+    ) -> None:
+        """Existing schedule + new targets → auto-selects INCREMENTAL."""
+        ws = _create_workspace(f"automode_incr_{uuid.uuid4().hex[:6]}")
+        try:
+            # Plan and commit with original targets
+            _plan_commit(ws)
+
+            # Re-seed with EXTRA target not in original set
+            extra_targets = TARGETS_PHASE1 + [
+                {"name": "Heraklion", "latitude": 35.3387, "longitude": 25.1442},
+            ]
+            _seed(TLE_SAT1, extra_targets, days=3)
+
+            # Re-plan — auto-mode should detect the new target
+            plan = _plan(ws)
+            assert plan["success"]
+            assert plan["planning_mode"] == "incremental", (
+                f"Expected incremental for new targets, got {plan['planning_mode']}. "
+                f"Context: {plan.get('schedule_context', {})}"
+            )
+            ctx = plan.get("schedule_context", {})
+            assert ctx.get("new_target_count", 0) > 0, (
+                f"Expected new_target_count > 0, got {ctx.get('new_target_count')}"
+            )
+            print(
+                f"Auto-mode: {plan['planning_mode']} | "
+                f"new_targets={ctx.get('new_target_count')} | "
+                f"reason: {ctx.get('mode_selection_reason', '')[:80]}"
+            )
+        finally:
+            # Re-seed with original targets to avoid poisoning
+            _seed(TLE_SAT1, TARGETS_PHASE1, days=3)
+            requests.delete(f"{API}/workspaces/{ws}", timeout=10)
+
+    def test_04_force_mode_overrides_auto(
+        self, seeded_mission: Dict
+    ) -> None:
+        """Explicitly setting mode overrides auto-selection."""
+        ws = _create_workspace(f"automode_force_{uuid.uuid4().hex[:6]}")
+        try:
+            _plan_commit(ws)
+
+            # Force from_scratch even though auto would pick repair
+            plan = _post(
+                "/schedule/plan",
+                {
+                    "planning_mode": "from_scratch",
+                    "workspace_id": ws,
+                },
+            )
+            # from_scratch is the default, so auto-mode runs and picks repair
+            # Only non-default modes act as force override
+            assert plan["planning_mode"] in ("from_scratch", "repair")
+
+            # Force incremental explicitly
+            plan2 = _post(
+                "/schedule/plan",
+                {
+                    "planning_mode": "incremental",
+                    "workspace_id": ws,
+                },
+            )
+            assert plan2["planning_mode"] == "incremental", (
+                f"Forced incremental, got {plan2['planning_mode']}"
+            )
+            print(f"Force override: incremental → {plan2['planning_mode']}")
+        finally:
+            requests.delete(f"{API}/workspaces/{ws}", timeout=10)
+
+    def test_05_schedule_context_has_mode_metadata(
+        self, seeded_mission: Dict
+    ) -> None:
+        """Plan response includes full mode selection metadata."""
+        ws = _create_workspace(f"automode_ctx_{uuid.uuid4().hex[:6]}")
+        try:
+            plan = _plan(ws)
+            assert plan["success"]
+            ctx = plan.get("schedule_context", {})
+
+            # Verify all mode-selection metadata is present
+            assert "planning_mode" in ctx, "Missing planning_mode in context"
+            assert "mode_selection_reason" in ctx, "Missing mode_selection_reason"
+            assert "existing_acquisition_count" in ctx, "Missing existing_acquisition_count"
+            assert "new_target_count" in ctx, "Missing new_target_count"
+            assert "conflict_count" in ctx, "Missing conflict_count"
+            print(
+                f"Context keys verified: {sorted(ctx.keys())}"
+            )
+        finally:
+            requests.delete(f"{API}/workspaces/{ws}", timeout=10)
+
+    def test_06_conflict_count_in_mode_selection(
+        self, seeded_mission: Dict
+    ) -> None:
+        """Conflict count is wired into mode selection context."""
+        ws = _create_workspace(f"automode_conflict_{uuid.uuid4().hex[:6]}")
+        try:
+            _plan_commit(ws)
+
+            # Re-plan and check conflict_count is populated (may be 0 or >0)
+            plan = _plan(ws)
+            ctx = plan.get("schedule_context", {})
+            assert "conflict_count" in ctx, "conflict_count not in schedule_context"
+            # Just verify it's an integer (wired), not that conflicts exist
+            assert isinstance(ctx["conflict_count"], int)
+            print(f"conflict_count wired: {ctx['conflict_count']}")
+        finally:
+            requests.delete(f"{API}/workspaces/{ws}", timeout=10)

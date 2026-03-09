@@ -2041,6 +2041,20 @@ async def create_incremental_plan(
         for opp in raw_opportunities
     }
 
+    # Query active conflict count for this workspace
+    _conflict_count = 0
+    if _active_existing:
+        try:
+            _conflicts = db.get_conflicts_in_horizon(
+                start_time=horizon_start.isoformat(),
+                end_time=horizon_end.isoformat(),
+                workspace_id=_auto_workspace,
+                include_resolved=False,
+            )
+            _conflict_count = len(_conflicts)
+        except Exception as e:
+            logger.warning(f"[Auto Mode] Failed to query conflicts: {e}")
+
     # Use client mode as force_mode only when explicitly non-default
     _force_mode = None
     if request.planning_mode != "from_scratch":
@@ -2051,7 +2065,7 @@ async def create_incremental_plan(
         existing_acquisition_count=len(_active_existing),
         existing_target_ids=_existing_target_ids,
         current_target_ids=_current_target_ids,
-        conflict_count=0,  # TODO: integrate conflict_detection module
+        conflict_count=_conflict_count,
         previous_plan_count=0,  # TODO: count previous committed plans
         request_payload_hash=_req_hash,
         force_mode=_force_mode,
@@ -2060,6 +2074,10 @@ async def create_incremental_plan(
     planning_mode = PlanningMode(mode_result.mode)
     _audit.add("mode_selection", **mode_result.to_log_dict())
     schedule_context["planning_mode"] = planning_mode.value
+    schedule_context["mode_selection_reason"] = mode_result.reason
+    schedule_context["existing_acquisition_count"] = len(_active_existing)
+    schedule_context["new_target_count"] = mode_result.new_target_count
+    schedule_context["conflict_count"] = _conflict_count
 
     logger.info(
         f"[Auto Mode] Selected: {planning_mode.value} | "
