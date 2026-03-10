@@ -942,21 +942,33 @@ async def run_e2e_tests(request: E2ERunRequest = E2ERunRequest()):
             Path(__file__).parent.parent.parent / "tests" / "e2e" / "test_scheduling_e2e.py"
         )
 
-        # Create temp file for JSON report
-        tmp_fd, report_path = tempfile.mkstemp(suffix=".json", prefix="e2e_report_")
-        import os
-        os.close(tmp_fd)
+        # Detect if pytest-json-report plugin is available
+        _has_json_report = False
+        try:
+            import importlib
+            importlib.import_module("pytest_jsonreport")
+            _has_json_report = True
+        except ImportError:
+            pass
+
+        # Create temp file for JSON report (only used if plugin available)
+        report_path = ""
+        if _has_json_report:
+            tmp_fd, report_path = tempfile.mkstemp(suffix=".json", prefix="e2e_report_")
+            import os
+            os.close(tmp_fd)
 
         try:
             cmd = [
                 sys.executable, "-m", "pytest",
                 test_file,
-                "--json-report",
-                f"--json-report-file={report_path}",
                 "-v",
                 "--tb=short",
                 "-o", "addopts=",
             ]
+
+            if _has_json_report:
+                cmd.extend(["--json-report", f"--json-report-file={report_path}"])
 
             if request.test_classes:
                 filter_expr = " or ".join(request.test_classes)
@@ -986,8 +998,7 @@ async def run_e2e_tests(request: E2ERunRequest = E2ERunRequest()):
             stderr_str = stderr_bytes.decode("utf-8", errors="replace")
 
             # Try JSON report first, fallback to text parsing
-            report_file = Path(report_path)
-            if report_file.exists() and report_file.stat().st_size > 0:
+            if report_path and Path(report_path).exists() and Path(report_path).stat().st_size > 0:
                 try:
                     report = _parse_json_report(report_path)
                     if report.summary.total == 0 and (stdout_str or stderr_str):
@@ -1003,7 +1014,8 @@ async def run_e2e_tests(request: E2ERunRequest = E2ERunRequest()):
 
         finally:
             # Clean up temp file
-            try:
-                Path(report_path).unlink(missing_ok=True)
-            except Exception:
-                pass
+            if report_path:
+                try:
+                    Path(report_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
