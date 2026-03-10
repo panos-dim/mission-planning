@@ -278,6 +278,19 @@ const E2ETestSuiteSection: React.FC = () => {
           </div>
         )}
 
+        {/* Report Error (e.g. 0 tests collected) */}
+        {report?.error && (
+          <div className="bg-yellow-900/50 border border-yellow-600 rounded-lg p-4 flex items-start space-x-3">
+            <AlertTriangle className="w-5 h-5 text-yellow-400 mt-0.5" />
+            <div>
+              <h4 className="text-yellow-200 font-medium">Diagnostic Info</h4>
+              <p className="text-yellow-300 text-xs mt-1 font-mono whitespace-pre-wrap break-words">
+                {report.error}
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Report Display */}
         {report && (
           <div className="space-y-3">

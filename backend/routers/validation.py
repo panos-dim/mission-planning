@@ -989,11 +989,17 @@ async def run_e2e_tests(request: E2ERunRequest = E2ERunRequest()):
             report_file = Path(report_path)
             if report_file.exists() and report_file.stat().st_size > 0:
                 try:
-                    return _parse_json_report(report_path)
+                    report = _parse_json_report(report_path)
+                    if report.summary.total == 0 and (stdout_str or stderr_str):
+                        report.error = f"0 tests collected. stderr: {stderr_str[:1000]}"
+                    return report
                 except Exception as e:
                     logger.warning(f"Failed to parse JSON report, falling back to text: {e}")
 
-            return _parse_text_fallback(stdout_str, stderr_str, elapsed)
+            report = _parse_text_fallback(stdout_str, stderr_str, elapsed)
+            if report.summary.total == 0 and (stdout_str or stderr_str):
+                report.error = f"0 tests collected. stderr: {stderr_str[:1000]}"
+            return report
 
         finally:
             # Clean up temp file
