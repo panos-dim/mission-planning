@@ -6,6 +6,7 @@ import {
   WorkflowScenario,
   WorkflowValidationReport,
 } from '../../api/workflowValidation'
+import E2ETestSuiteSection from './E2ETestSuiteSection'
 
 const ValidationTab: React.FC = () => {
   const [scenarios, setScenarios] = useState<WorkflowScenario[]>([])
@@ -212,6 +213,7 @@ const ValidationTab: React.FC = () => {
           </div>
         </div>
       )}
+      <E2ETestSuiteSection />
     </div>
   )
 }
