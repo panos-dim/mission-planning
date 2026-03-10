@@ -733,3 +733,271 @@ def _get_workflow_report(report_id: str) -> Optional[Dict[str, Any]]:
                     logger.error(f"Failed to load report {report_id}: {e}")
 
     return None
+
+
+# =============================================================================
+# E2E Test Runner
+# =============================================================================
+
+import asyncio
+import re
+import tempfile
+import uuid as _uuid
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+_e2e_lock = asyncio.Lock()
+
+
+class E2ERunRequest(BaseModel):
+    """Request body for running E2E tests."""
+    test_classes: List[str] = Field(default_factory=list)
+
+
+class E2ETestResult(BaseModel):
+    """Result of a single E2E test."""
+    name: str
+    outcome: str
+    duration_s: float
+    message: Optional[str] = None
+
+
+class E2ETestClassResult(BaseModel):
+    """Aggregated results for a test class."""
+    name: str
+    passed: int = 0
+    failed: int = 0
+    skipped: int = 0
+    tests: List[E2ETestResult]
+
+
+class E2ESummary(BaseModel):
+    """Summary of an E2E test run."""
+    passed: int
+    failed: int
+    skipped: int
+    total: int
+    duration_s: float
+
+
+class E2ERunReport(BaseModel):
+    """Full report for an E2E test run."""
+    success: bool
+    summary: E2ESummary
+    test_classes: List[E2ETestClassResult]
+    run_id: str
+    timestamp: str
+    error: Optional[str] = None
+
+
+def _parse_json_report(report_path: str) -> E2ERunReport:
+    """Parse a pytest-json-report JSON file into an E2ERunReport."""
+    import json as _json
+
+    with open(report_path, "r") as f:
+        data = _json.load(f)
+
+    now = datetime.now(timezone.utc)
+    short_uuid = _uuid.uuid4().hex[:8]
+    run_id = f"e2e_{now.strftime('%Y%m%d_%H%M%S')}_{short_uuid}"
+
+    raw_summary = data.get("summary", {})
+    summary = E2ESummary(
+        passed=raw_summary.get("passed", 0),
+        failed=raw_summary.get("failed", 0),
+        skipped=raw_summary.get("skipped", 0),
+        total=raw_summary.get("total", 0),
+        duration_s=round(raw_summary.get("duration", 0.0), 3),
+    )
+
+    # Group tests by class name
+    classes_map: Dict[str, List[E2ETestResult]] = {}
+    for test in data.get("tests", []):
+        nodeid = test.get("nodeid", "")
+        parts = nodeid.split("::")
+        class_name = parts[1] if len(parts) > 1 else "Unknown"
+        test_name = parts[-1] if parts else nodeid
+
+        message = None
+        call_info = test.get("call", {})
+        crash = call_info.get("crash", {})
+        if crash:
+            msg = crash.get("message", "")
+            if msg:
+                message = msg[:500]
+
+        result = E2ETestResult(
+            name=test_name,
+            outcome=test.get("outcome", "unknown"),
+            duration_s=round(call_info.get("duration", 0.0), 3),
+            message=message,
+        )
+
+        if class_name not in classes_map:
+            classes_map[class_name] = []
+        classes_map[class_name].append(result)
+
+    # Build class results sorted alphabetically
+    test_classes = []
+    for cls_name in sorted(classes_map.keys()):
+        tests = sorted(classes_map[cls_name], key=lambda t: t.name)
+        passed = sum(1 for t in tests if t.outcome == "passed")
+        failed = sum(1 for t in tests if t.outcome == "failed")
+        skipped = sum(1 for t in tests if t.outcome == "skipped")
+        test_classes.append(E2ETestClassResult(
+            name=cls_name,
+            passed=passed,
+            failed=failed,
+            skipped=skipped,
+            tests=tests,
+        ))
+
+    success = summary.failed == 0
+    return E2ERunReport(
+        success=success,
+        summary=summary,
+        test_classes=test_classes,
+        run_id=run_id,
+        timestamp=now.isoformat(),
+    )
+
+
+def _parse_text_fallback(stdout: str, stderr: str, duration: float) -> E2ERunReport:
+    """Fallback parser when JSON report is unavailable."""
+    now = datetime.now(timezone.utc)
+    short_uuid = _uuid.uuid4().hex[:8]
+    run_id = f"e2e_{now.strftime('%Y%m%d_%H%M%S')}_{short_uuid}"
+
+    # Match lines like ::ClassName::test_name PASSED
+    pattern = re.compile(r"::(\w+)::(\w+)\s+(PASSED|FAILED|SKIPPED|ERROR)")
+    classes_map: Dict[str, List[E2ETestResult]] = {}
+
+    combined = stdout + "\n" + stderr
+    for match in pattern.finditer(combined):
+        class_name = match.group(1)
+        test_name = match.group(2)
+        outcome = match.group(3).lower()
+
+        result = E2ETestResult(
+            name=test_name,
+            outcome=outcome,
+            duration_s=0.0,
+        )
+
+        if class_name not in classes_map:
+            classes_map[class_name] = []
+        classes_map[class_name].append(result)
+
+    test_classes = []
+    total_passed = 0
+    total_failed = 0
+    total_skipped = 0
+    for cls_name in sorted(classes_map.keys()):
+        tests = sorted(classes_map[cls_name], key=lambda t: t.name)
+        passed = sum(1 for t in tests if t.outcome == "passed")
+        failed = sum(1 for t in tests if t.outcome in ("failed", "error"))
+        skipped = sum(1 for t in tests if t.outcome == "skipped")
+        total_passed += passed
+        total_failed += failed
+        total_skipped += skipped
+        test_classes.append(E2ETestClassResult(
+            name=cls_name,
+            passed=passed,
+            failed=failed,
+            skipped=skipped,
+            tests=tests,
+        ))
+
+    total = total_passed + total_failed + total_skipped
+    summary = E2ESummary(
+        passed=total_passed,
+        failed=total_failed,
+        skipped=total_skipped,
+        total=total,
+        duration_s=round(duration, 3),
+    )
+
+    return E2ERunReport(
+        success=total_failed == 0,
+        summary=summary,
+        test_classes=test_classes,
+        run_id=run_id,
+        timestamp=now.isoformat(),
+    )
+
+
+@router.post("/e2e", response_model=E2ERunReport)
+async def run_e2e_tests(request: E2ERunRequest = E2ERunRequest()):
+    """Run E2E scheduling tests and return structured results."""
+    if _e2e_lock.locked():
+        raise HTTPException(
+            status_code=429,
+            detail="An E2E test run is already in progress. Try again later.",
+        )
+
+    async with _e2e_lock:
+        test_file = str(
+            Path(__file__).parent.parent.parent / "tests" / "e2e" / "test_scheduling_e2e.py"
+        )
+
+        # Create temp file for JSON report
+        tmp_fd, report_path = tempfile.mkstemp(suffix=".json", prefix="e2e_report_")
+        import os
+        os.close(tmp_fd)
+
+        try:
+            cmd = [
+                sys.executable, "-m", "pytest",
+                test_file,
+                "--json-report",
+                f"--json-report-file={report_path}",
+                "-v",
+                "--tb=short",
+                "-o", "addopts=",
+            ]
+
+            if request.test_classes:
+                filter_expr = " or ".join(request.test_classes)
+                cmd.extend(["-k", filter_expr])
+
+            start = time.monotonic()
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            try:
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    proc.communicate(), timeout=300
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                raise HTTPException(
+                    status_code=504,
+                    detail="E2E test run timed out after 300 seconds.",
+                )
+
+            elapsed = time.monotonic() - start
+            stdout_str = stdout_bytes.decode("utf-8", errors="replace")
+            stderr_str = stderr_bytes.decode("utf-8", errors="replace")
+
+            # Try JSON report first, fallback to text parsing
+            report_file = Path(report_path)
+            if report_file.exists() and report_file.stat().st_size > 0:
+                try:
+                    return _parse_json_report(report_path)
+                except Exception as e:
+                    logger.warning(f"Failed to parse JSON report, falling back to text: {e}")
+
+            return _parse_text_fallback(stdout_str, stderr_str, elapsed)
+
+        finally:
+            # Clean up temp file
+            try:
+                Path(report_path).unlink(missing_ok=True)
+            except Exception:
+                pass
