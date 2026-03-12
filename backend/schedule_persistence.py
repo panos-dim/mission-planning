@@ -1087,7 +1087,9 @@ class ScheduleDB:
         cursor = conn.cursor()
         now = datetime.now(timezone.utc).isoformat() + "Z"
 
-        logger.info("Running migration to schema v2.6 (workspace cleanup + revision)...")
+        logger.info(
+            "Running migration to schema v2.6 (workspace cleanup + revision)..."
+        )
 
         # Step 1: Backfill NULL workspace_id → 'default'
         # Use try/except because FK constraints may reference a workspaces table
@@ -1765,9 +1767,7 @@ class ScheduleDB:
         try:
             now = datetime.now(timezone.utc)
             freeze_cutoff = now + timedelta(hours=self.FREEZE_WINDOW_HOURS)
-            acq_start = datetime.fromisoformat(
-                acq.start_time.replace("Z", "+00:00")
-            )
+            acq_start = datetime.fromisoformat(acq.start_time.replace("Z", "+00:00"))
             if acq_start <= freeze_cutoff:
                 return (
                     f"Acquisition {acquisition_id} starts at {acq.start_time}, "
@@ -1778,9 +1778,7 @@ class ScheduleDB:
 
         return None
 
-    def delete_acquisition(
-        self, acquisition_id: str, force: bool = False
-    ) -> bool:
+    def delete_acquisition(self, acquisition_id: str, force: bool = False) -> bool:
         """Delete a single acquisition by ID.
 
         Enforces freeze window and hard-lock protection at the persistence
@@ -2675,42 +2673,52 @@ class ScheduleDB:
                 t_lon = coords[1] if coords else None
 
                 # Create acquisition from plan item
-                cursor.execute(
-                    """
-                    INSERT INTO acquisitions (
-                        id, created_at, updated_at, satellite_id, target_id,
-                        start_time, end_time, mode, roll_angle_deg, pitch_angle_deg,
-                        state, lock_level, source, order_id, plan_id, opportunity_id,
-                        quality_score, maneuver_time_s, slack_time_s, workspace_id,
-                        off_nadir_deg, target_lat, target_lon
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                    (
-                        acq_id,
-                        now,
-                        now,
-                        item["satellite_id"],
-                        item["target_id"],
-                        item["start_time"],
-                        item["end_time"],
-                        mode,
-                        item["roll_angle_deg"],
-                        item["pitch_angle_deg"],
-                        "committed",
-                        lock_level,
-                        "auto",
-                        item["order_id"],
-                        plan_id,
-                        item["opportunity_id"],
-                        item["quality_score"],
-                        item["maneuver_time_s"],
-                        item["slack_time_s"],
-                        workspace_id,
-                        off_nadir,
-                        t_lat,
-                        t_lon,
-                    ),
-                )
+                try:
+                    cursor.execute(
+                        """
+                        INSERT INTO acquisitions (
+                            id, created_at, updated_at, satellite_id, target_id,
+                            start_time, end_time, mode, roll_angle_deg, pitch_angle_deg,
+                            state, lock_level, source, order_id, plan_id, opportunity_id,
+                            quality_score, maneuver_time_s, slack_time_s, workspace_id,
+                            off_nadir_deg, target_lat, target_lon
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                        (
+                            acq_id,
+                            now,
+                            now,
+                            item["satellite_id"],
+                            item["target_id"],
+                            item["start_time"],
+                            item["end_time"],
+                            mode,
+                            item["roll_angle_deg"],
+                            item["pitch_angle_deg"],
+                            "committed",
+                            lock_level,
+                            "auto",
+                            item["order_id"],
+                            plan_id,
+                            item["opportunity_id"],
+                            item["quality_score"],
+                            item["maneuver_time_s"],
+                            item["slack_time_s"],
+                            workspace_id,
+                            off_nadir,
+                            t_lat,
+                            t_lon,
+                        ),
+                    )
+                except sqlite3.IntegrityError as exc:
+                    if "UNIQUE constraint failed: acquisitions." not in str(exc):
+                        raise
+                    logger.warning(
+                        "Skipping duplicate acquisition commit for "
+                        f"{item['satellite_id']}/{item['target_id']} at {item['start_time']} "
+                        f"in workspace {workspace_id}"
+                    )
+                    continue
 
                 created_acquisitions.append({"id": acq_id, "plan_item_id": item["id"]})
 

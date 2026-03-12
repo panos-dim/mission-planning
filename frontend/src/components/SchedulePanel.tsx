@@ -118,8 +118,8 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
     const acquisitions: ScheduledAcquisition[] = []
     const seen = new Set<string>()
     for (const order of orders) {
-      for (const item of order.schedule || []) {
-        const acqId = item.opportunity_id
+      for (const [index, item] of (order.schedule || []).entries()) {
+        const acqId = order.backend_acquisition_ids?.[index] || item.opportunity_id
         if (seen.has(acqId)) continue
         seen.add(acqId)
         acquisitions.push({

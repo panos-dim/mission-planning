@@ -164,7 +164,17 @@ class IncrementalPlanningContext:
             interval_end = i_end + timedelta(seconds=margin_s)
 
             # Check for overlap: candidate.start < interval.end AND candidate.end > interval.start
-            if _start < interval_end and _end > interval_start:
+            candidate_is_point = _start == _end
+            interval_is_point = interval_start == interval_end
+            if candidate_is_point and interval_is_point:
+                overlaps = _start == interval_start
+            elif candidate_is_point:
+                overlaps = interval_start <= _start <= interval_end
+            elif interval_is_point:
+                overlaps = _start <= interval_start <= _end
+            else:
+                overlaps = _start < interval_end and _end > interval_start
+            if overlaps:
                 return True, interval
 
         return False, None
@@ -739,17 +749,17 @@ def load_blocked_intervals(
             should_block = True
 
         # Check lock level based on policy
-        if lock_policy == LockPolicy.RESPECT_HARD_ONLY:
+        if acq.lock_level == "hard":
             # Only hard locks are respected as absolute blocks
-            if acq.lock_level == "hard":
-                should_block = True
-            elif acq.state in ("committed", "locked", "executing"):
-                # Still block committed states even without hard lock
-                should_block = True
-        else:
+            should_block = True
             # Respect hard locks only (soft locks no longer exist)
-            if acq.lock_level == "hard":
-                should_block = True
+        elif lock_policy == LockPolicy.RESPECT_HARD_ONLY and acq.state in (
+            "committed",
+            "locked",
+            "executing",
+        ):
+            # Still block committed states even without hard lock
+            should_block = True
 
         # Optionally include tentative
         if include_tentative and acq.state == "tentative":

@@ -20,7 +20,7 @@ Auto-skipped by conftest.py when server is not reachable.
 import uuid
 import warnings
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, Dict, Generator, List, Optional, cast
 
 import pytest
 import requests
@@ -46,6 +46,15 @@ TLE_SAT2 = {
     "line2": "2 64574  97.7613 180.1478 0001209 343.6792  16.4390 14.94873959 38391",
 }
 
+TLE_SAT4 = {
+    "name": "ICEYE-X67",
+    "line1": "1 66302U 25248K   26069.50002314  .00025257  00000+0  15729-2 0  9992",
+    "line2": "2 66302  45.4044 292.6802 0006925 210.4525 343.9970 15.09210416  5829",
+}
+
+CANONICAL_REVIEW_START = "2026-03-08T00:00:00Z"
+CANONICAL_REVIEW_END = "2026-03-11T00:00:00Z"
+
 # Eastern Mediterranean targets — close enough for overlap scenarios
 TARGETS_PHASE1 = [
     {"name": "Athens", "latitude": 37.9838, "longitude": 23.7275},
@@ -57,21 +66,51 @@ TARGETS_PHASE2 = TARGETS_PHASE1 + [
     {"name": "Istanbul", "latitude": 41.0082, "longitude": 28.9784},
 ]
 
+ORBIT_REVIEW_TARGETS = [
+    {"name": "Svalbard", "latitude": 78.2298, "longitude": 15.4078, "priority": 1},
+    {"name": "Athens", "latitude": 37.9838, "longitude": 23.7275, "priority": 3},
+    {"name": "Singapore", "latitude": 1.3521, "longitude": 103.8198, "priority": 2},
+]
+
+STRATEGY_TIMING_TARGET = [
+    {
+        "name": "AthensFocus",
+        "latitude": 37.9838,
+        "longitude": 23.7275,
+        "priority": 3,
+    }
+]
+
+STRATEGY_PRIORITY_TARGETS = [
+    {
+        "name": "PriorityAnchor",
+        "latitude": 37.9838,
+        "longitude": 23.7275,
+        "priority": 1,
+    },
+    {
+        "name": "PriorityShadow",
+        "latitude": 37.9845,
+        "longitude": 23.7280,
+        "priority": 5,
+    },
+]
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _post(
-    path: str, payload: Dict[str, Any], timeout: int = 120
-) -> Dict[str, Any]:
+def _post(path: str, payload: Dict[str, Any], timeout: int = 120) -> Dict[str, Any]:
     """POST to API and assert 200."""
     resp = requests.post(f"{API}{path}", json=payload, timeout=timeout)
-    assert resp.status_code == 200, (
-        f"POST {path} returned {resp.status_code}: {resp.text[:500]}"
-    )
-    return resp.json()
+    assert (
+        resp.status_code == 200
+    ), f"POST {path} returned {resp.status_code}: {resp.text[:500]}"
+    data = resp.json()
+    assert isinstance(data, dict), f"POST {path} did not return a JSON object"
+    return cast(Dict[str, Any], data)
 
 
 def _get(
@@ -79,10 +118,12 @@ def _get(
 ) -> Dict[str, Any]:
     """GET from API and assert 200."""
     resp = requests.get(f"{API}{path}", params=params, timeout=timeout)
-    assert resp.status_code == 200, (
-        f"GET {path} returned {resp.status_code}: {resp.text[:300]}"
-    )
-    return resp.json()
+    assert (
+        resp.status_code == 200
+    ), f"GET {path} returned {resp.status_code}: {resp.text[:300]}"
+    data = resp.json()
+    assert isinstance(data, dict), f"GET {path} did not return a JSON object"
+    return cast(Dict[str, Any], data)
 
 
 def _patch(
@@ -90,10 +131,12 @@ def _patch(
 ) -> Dict[str, Any]:
     """PATCH API and assert 200."""
     resp = requests.patch(f"{API}{path}", params=params, timeout=timeout)
-    assert resp.status_code == 200, (
-        f"PATCH {path} returned {resp.status_code}: {resp.text[:300]}"
-    )
-    return resp.json()
+    assert (
+        resp.status_code == 200
+    ), f"PATCH {path} returned {resp.status_code}: {resp.text[:300]}"
+    data = resp.json()
+    assert isinstance(data, dict), f"PATCH {path} did not return a JSON object"
+    return cast(Dict[str, Any], data)
 
 
 def _seed(
@@ -130,11 +173,48 @@ def _seed_constellation(
     return _post("/mission/analyze", payload, timeout=120)
 
 
+def _analyze_mission(
+    *,
+    targets: List[Dict[str, Any]],
+    tle: Optional[Dict[str, str]] = None,
+    satellites: Optional[List[Dict[str, str]]] = None,
+    start_time: str = CANONICAL_REVIEW_START,
+    end_time: str = CANONICAL_REVIEW_END,
+) -> Dict[str, Any]:
+    """Run mission analysis with explicit canonical inputs."""
+    payload: Dict[str, Any] = {
+        "targets": targets,
+        "start_time": start_time,
+        "end_time": end_time,
+        "mission_type": "imaging",
+        "elevation_mask": 10.0,
+        "pointing_angle": 45.0,
+        "imaging_type": "optical",
+    }
+    if satellites is not None:
+        payload["satellites"] = satellites
+    elif tle is not None:
+        payload["tle"] = tle
+    else:
+        raise AssertionError("Expected tle or satellites for mission analysis")
+    return _post("/mission/analyze", payload, timeout=120)
+
+
+def _extract_mission_passes(response: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Extract mission-analysis passes from either response envelope shape."""
+    mission_data = response.get("data", {}).get("mission_data", {})
+    passes = mission_data.get("passes")
+    if isinstance(passes, list):
+        return passes
+    raw_passes = response.get("passes", [])
+    return raw_passes if isinstance(raw_passes, list) else []
+
+
 def _create_workspace(name: str) -> str:
     """Create workspace and return its ID."""
     resp = _post("/workspaces", {"name": name})
     ws_id = resp.get("workspace_id")
-    assert ws_id, f"No workspace_id in response: {resp}"
+    assert isinstance(ws_id, str) and ws_id, f"No workspace_id in response: {resp}"
     return ws_id
 
 
@@ -143,8 +223,33 @@ def _parse_ts(s: str) -> datetime:
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
-def _safe_cleanup(workspace_id: str, seed_tle: Optional[Dict] = None,
-                  seed_targets: Optional[List] = None) -> None:
+def _run_planning_schedule(**overrides: Any) -> Dict[str, Any]:
+    """Run the planning endpoint using the active analyzed mission."""
+    payload: Dict[str, Any] = {
+        "algorithms": ["roll_pitch_best_fit"],
+        "mode": "from_scratch",
+        "value_source": "target_priority",
+        "quality_model": "monotonic",
+        "look_window_s": 600.0,
+    }
+    payload.update(overrides)
+    return _post("/planning/schedule", payload, timeout=120)
+
+
+def _planning_result(response: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract the active planner result block."""
+    results = response.get("results", {})
+    assert isinstance(results, dict), f"Missing results block: {response}"
+    result = results.get("roll_pitch_best_fit")
+    assert isinstance(result, dict), f"Missing roll_pitch_best_fit result: {response}"
+    return cast(Dict[str, Any], result)
+
+
+def _safe_cleanup(
+    workspace_id: str,
+    seed_tle: Optional[Dict] = None,
+    seed_targets: Optional[List] = None,
+) -> None:
     """Best-effort cleanup: restore seed + delete workspace. Never raises."""
     if seed_tle and seed_targets:
         try:
@@ -174,7 +279,9 @@ def _commit(plan_id: str, workspace_id: str, **kwargs: Any) -> Dict[str, Any]:
 def _state(workspace_id: str) -> Dict[str, Any]:
     """Get schedule state for workspace. Returns the 'state' dict."""
     resp = _get("/schedule/state", {"workspace_id": workspace_id})
-    return resp.get("state", {})
+    state = resp.get("state", {})
+    assert isinstance(state, dict), f"Schedule state is not an object: {resp}"
+    return cast(Dict[str, Any], state)
 
 
 def _acq_ids(state: Dict[str, Any]) -> List[str]:
@@ -191,12 +298,10 @@ def _plan_commit(
     don't fail when cached opportunities produce overlaps.
     """
     plan = _plan(workspace_id)
-    assert plan["success"] and plan.get("new_plan_items"), (
-        f"Plan failed or empty: {plan.get('message')}"
-    )
-    return _commit(
-        plan["plan_id"], workspace_id, lock_level=lock_level, force=force
-    )
+    assert plan["success"] and plan.get(
+        "new_plan_items"
+    ), f"Plan failed or empty: {plan.get('message')}"
+    return _commit(plan["plan_id"], workspace_id, lock_level=lock_level, force=force)
 
 
 # ---------------------------------------------------------------------------
@@ -248,9 +353,7 @@ class TestSingleSatelliteLifecycle:
         print(f"Seeded: {len(passes)} passes")
         assert len(passes) > 0
 
-    def test_03_from_scratch_plan(
-        self, seeded_mission: Dict, workspace: str
-    ) -> None:
+    def test_03_from_scratch_plan(self, seeded_mission: Dict, workspace: str) -> None:
         """FROM_SCRATCH plan produces items with required fields."""
         plan = _plan(workspace)
         assert plan["success"], f"Plan failed: {plan.get('message')}"
@@ -280,9 +383,9 @@ class TestSingleSatelliteLifecycle:
 
         state = _state(workspace)
         acqs = state.get("acquisitions", [])
-        assert len(acqs) == commit["committed"], (
-            f"Expected {commit['committed']} acquisitions, got {len(acqs)}"
-        )
+        assert (
+            len(acqs) == commit["committed"]
+        ), f"Expected {commit['committed']} acquisitions, got {len(acqs)}"
         for a in acqs:
             assert a["lock_level"] == "none"
             assert a["state"] == "committed"
@@ -367,9 +470,7 @@ class TestSingleSatelliteLifecycle:
             f"{len(conflicts)} predicted conflicts"
         )
 
-    def test_08_conflict_recompute(
-        self, seeded_mission: Dict, workspace: str
-    ) -> None:
+    def test_08_conflict_recompute(self, seeded_mission: Dict, workspace: str) -> None:
         """Conflict recompute runs and returns detection results."""
         _plan_commit(workspace)
         result = _post(
@@ -403,17 +504,13 @@ class TestSingleSatelliteLifecycle:
         assert "repair_diff" in repair
         diff = repair["repair_diff"]
         kept = diff.get("kept", [])
-        assert locked_id in kept, (
-            f"Hard-locked {locked_id} not in kept set: {kept}"
-        )
+        assert locked_id in kept, f"Hard-locked {locked_id} not in kept set: {kept}"
         print(
             f"Repair: fixed={repair['fixed_count']}, flex={repair['flex_count']}, "
             f"kept={len(kept)}"
         )
 
-    def test_10_commit_repair(
-        self, seeded_mission: Dict, workspace: str
-    ) -> None:
+    def test_10_commit_repair(self, seeded_mission: Dict, workspace: str) -> None:
         """Repair commit creates/drops acquisitions, preserving locks."""
         _plan_commit(workspace)
         state = _state(workspace)
@@ -462,14 +559,14 @@ class TestSingleSatelliteLifecycle:
         assert plan["success"]
         items = plan.get("new_plan_items", [])
         target_ids = set(it["target_id"] for it in items)
-        print(f"Re-plan with extra target: {len(items)} items, targets={sorted(target_ids)}")
+        print(
+            f"Re-plan with extra target: {len(items)} items, targets={sorted(target_ids)}"
+        )
 
         # Re-seed with original targets to avoid poisoning subsequent tests
         _seed(TLE_SAT1, TARGETS_PHASE1, days=3)
 
-    def test_12_direct_commit(
-        self, seeded_mission: Dict, workspace: str
-    ) -> None:
+    def test_12_direct_commit(self, seeded_mission: Dict, workspace: str) -> None:
         """Direct commit (bypassing plan) creates acquisitions."""
         plan = _plan(workspace)
         assert plan["success"] and plan.get("new_plan_items")
@@ -499,45 +596,31 @@ class TestSingleSatelliteLifecycle:
         assert direct.get("committed", 0) > 0
         print(f"Direct committed {direct['committed']} acquisitions")
 
-    def test_13_schedule_horizon(
-        self, seeded_mission: Dict, workspace: str
-    ) -> None:
+    def test_13_schedule_horizon(self, seeded_mission: Dict, workspace: str) -> None:
         """Schedule horizon returns data."""
         _plan_commit(workspace)
-        horizon = _get(
-            "/schedule/horizon", {"workspace_id": workspace}
-        )
+        horizon = _get("/schedule/horizon", {"workspace_id": workspace})
         assert horizon["success"]
         acqs = horizon.get("acquisitions", [])
         print(f"Horizon: {len(acqs)} acquisitions")
 
-    def test_14_target_locations(
-        self, seeded_mission: Dict, workspace: str
-    ) -> None:
+    def test_14_target_locations(self, seeded_mission: Dict, workspace: str) -> None:
         """Target locations endpoint returns positions."""
         _plan_commit(workspace)
-        locs = _get(
-            "/schedule/target-locations", {"workspace_id": workspace}
-        )
+        locs = _get("/schedule/target-locations", {"workspace_id": workspace})
         assert locs["success"]
         targets = locs.get("targets", [])
         print(f"Target locations: {len(targets)}")
 
-    def test_15_commit_history(
-        self, seeded_mission: Dict, workspace: str
-    ) -> None:
+    def test_15_commit_history(self, seeded_mission: Dict, workspace: str) -> None:
         """Commit history returns audit entries."""
         _plan_commit(workspace)
-        history = _get(
-            "/schedule/commit-history", {"workspace_id": workspace}
-        )
+        history = _get("/schedule/commit-history", {"workspace_id": workspace})
         assert history["success"]
         entries = history.get("audit_logs", [])
         print(f"Commit history: {len(entries)} entries")
 
-    def test_16_workspace_isolation(
-        self, seeded_mission: Dict, workspace: str
-    ) -> None:
+    def test_16_workspace_isolation(self, seeded_mission: Dict, workspace: str) -> None:
         """Acquisitions in one workspace don't leak to another."""
         _plan_commit(workspace)
         state1 = _state(workspace)
@@ -549,16 +632,14 @@ class TestSingleSatelliteLifecycle:
             state2 = _state(ws2_id)
             ids2 = _acq_ids(state2)
             # Second workspace should have 0 acquisitions
-            assert len(ids2) == 0, (
-                f"Workspace {ws2_id} has {len(ids2)} acquisitions (leak!)"
-            )
+            assert (
+                len(ids2) == 0
+            ), f"Workspace {ws2_id} has {len(ids2)} acquisitions (leak!)"
             print("Workspace isolation verified")
         finally:
             _safe_cleanup(ws2_id)
 
-    def test_17_auto_escalate_locks(
-        self, seeded_mission: Dict, workspace: str
-    ) -> None:
+    def test_17_auto_escalate_locks(self, seeded_mission: Dict, workspace: str) -> None:
         """Auto-escalate locks endpoint runs without errors."""
         _plan_commit(workspace)
         result = _post(
@@ -602,13 +683,11 @@ class TestConstellationLifecycle:
     @pytest.fixture(autouse=True, scope="class")
     def seed_constellation(self) -> Dict[str, Any]:
         """Seed constellation mission at class scope."""
-        data = _seed_constellation(
-            [TLE_SAT1, TLE_SAT2], TARGETS_PHASE2, days=3
-        )
+        data = _seed_constellation([TLE_SAT1, TLE_SAT2], TARGETS_PHASE2, days=3)
         passes = data.get("data", {}).get("mission_data", {}).get("passes", [])
-        assert len(passes) > 0, (
-            f"Constellation produced 0 passes. Message: {data.get('message', '')}"
-        )
+        assert (
+            len(passes) > 0
+        ), f"Constellation produced 0 passes. Message: {data.get('message', '')}"
         return data
 
     def test_01_constellation_plan(self, workspace: str) -> None:
@@ -658,9 +737,7 @@ class TestConstellationLifecycle:
         assert result["updated"] == len(ids_to_lock)
         print(f"Locked {len(ids_to_lock)} acquisitions (1 per satellite)")
 
-    def test_04_repair_preserves_constellation_locks(
-        self, workspace: str
-    ) -> None:
+    def test_04_repair_preserves_constellation_locks(self, workspace: str) -> None:
         """Repair preserves hard-locked acquisitions from each satellite."""
         _plan_commit(workspace)
         state = _state(workspace)
@@ -684,9 +761,7 @@ class TestConstellationLifecycle:
         assert repair["success"]
         diff = repair["repair_diff"]
         for lid in locked_ids:
-            assert lid in diff.get("kept", []), (
-                f"Hard-locked {lid} not in kept!"
-            )
+            assert lid in diff.get("kept", []), f"Hard-locked {lid} not in kept!"
 
         repair_commit = _post(
             "/schedule/repair/commit",
@@ -704,9 +779,7 @@ class TestConstellationLifecycle:
             assert lid in remaining
         print(f"Constellation repair: {len(locked_ids)} locks preserved")
 
-    def test_05_conflict_detection_constellation(
-        self, workspace: str
-    ) -> None:
+    def test_05_conflict_detection_constellation(self, workspace: str) -> None:
         """Conflict detection works for constellation."""
         _plan_commit(workspace)
         result = _post(
@@ -737,9 +810,7 @@ class TestConstellationLifecycle:
         assert locked_id in remaining, "Hard-locked was deleted without force!"
         for uid in ids[1:]:
             assert uid not in remaining
-        print(
-            f"Bulk delete: {del_resp['deleted']} deleted, hard-lock preserved"
-        )
+        print(f"Bulk delete: {del_resp['deleted']} deleted, hard-lock preserved")
 
     def test_07_force_delete_hard_locked(self, workspace: str) -> None:
         """Force delete removes even hard-locked acquisitions."""
@@ -789,9 +860,10 @@ class TestEdgeCasesAndInvariants:
             json={"plan_id": plan_id, "workspace_id": workspace},
             timeout=30,
         )
-        assert resp.status_code in [400, 409], (
-            f"Double commit should fail, got {resp.status_code}"
-        )
+        assert resp.status_code in [
+            400,
+            409,
+        ], f"Double commit should fail, got {resp.status_code}"
         print(f"Double commit correctly rejected ({resp.status_code})")
 
     def test_02_invalid_lock_level_rejected(self, workspace: str) -> None:
@@ -809,9 +881,9 @@ class TestEdgeCasesAndInvariants:
             },
             timeout=30,
         )
-        assert resp.status_code == 400, (
-            f"Invalid lock_level should return 400, got {resp.status_code}"
-        )
+        assert (
+            resp.status_code == 400
+        ), f"Invalid lock_level should return 400, got {resp.status_code}"
         print("Invalid lock_level 'soft' correctly rejected")
 
     def test_03_commit_nonexistent_plan(self, workspace: str) -> None:
@@ -862,9 +934,7 @@ class TestEdgeCasesAndInvariants:
             assert a["state"] == "committed"
         print(f"All {len(acqs)} acquisitions have proper fields")
 
-    def test_06_schedule_state_has_conflicts_key(
-        self, workspace: str
-    ) -> None:
+    def test_06_schedule_state_has_conflicts_key(self, workspace: str) -> None:
         """Schedule state includes conflict data (B3 fix validation)."""
         resp = _get("/schedule/state", {"workspace_id": workspace})
         state = resp.get("state", {})
@@ -874,9 +944,7 @@ class TestEdgeCasesAndInvariants:
 
     def test_07_get_conflicts_endpoint(self, workspace: str) -> None:
         """GET /conflicts returns structured conflict data."""
-        conflicts_resp = _get(
-            "/schedule/conflicts", {"workspace_id": workspace}
-        )
+        conflicts_resp = _get("/schedule/conflicts", {"workspace_id": workspace})
         assert conflicts_resp["success"]
         conflict_list = conflicts_resp.get("conflicts", [])
         for c in conflict_list:
@@ -884,39 +952,45 @@ class TestEdgeCasesAndInvariants:
             assert "severity" in c
         print(f"Conflicts endpoint: {len(conflict_list)} conflicts")
 
-    def test_08_commit_with_conflicts_returns_409(
-        self, workspace: str
-    ) -> None:
-        """Committing plan with conflicts returns 409 (not force)."""
-        # Plan + commit to fill schedule
-        _plan_commit(workspace)
-
-        # Re-plan (same opportunities = conflicts)
-        plan2 = _plan(workspace)
-        if not plan2.get("new_plan_items"):
-            pytest.skip("No plan items for conflict test")
-
+    def test_08_commit_with_conflicts_returns_409(self, workspace: str) -> None:
+        """Committing a stale plan into a newly blocked slot returns 409."""
+        plan = _plan(workspace)
+        assert plan["success"] and plan.get(
+            "new_plan_items"
+        ), f"Expected non-empty plan for conflict test: {plan.get('message')}"
+        item = plan["new_plan_items"][0]
+        direct_commit = _direct_commit_synthetic(
+            workspace,
+            item["satellite_id"],
+            f"{item['target_id']}_blocking",
+            item["start_time"],
+            item["end_time"],
+            force=True,
+        )
+        assert direct_commit[
+            "success"
+        ], f"Blocking direct commit failed: {direct_commit}"
         resp = requests.post(
             f"{API}/schedule/commit",
             json={
-                "plan_id": plan2["plan_id"],
+                "plan_id": plan["plan_id"],
                 "workspace_id": workspace,
             },
             timeout=30,
         )
-        if plan2.get("conflicts_if_committed"):
-            assert resp.status_code == 409, (
-                f"Expected 409 for conflicting commit, got {resp.status_code}"
-            )
-            detail = resp.json().get("detail", {})
-            assert "predicted_conflicts" in detail
-            print(
-                f"Conflicting commit correctly rejected (409) with "
-                f"{len(detail['predicted_conflicts'])} conflicts"
-            )
-        else:
-            # No conflicts predicted — commit may succeed
-            print("No conflicts predicted, commit may have succeeded")
+        assert resp.status_code == 409, (
+            f"Expected 409 for conflicting commit, got {resp.status_code}: "
+            f"{resp.text[:300]}"
+        )
+        detail = resp.json().get("detail", {})
+        predicted_conflicts = detail.get("predicted_conflicts", [])
+        assert (
+            predicted_conflicts
+        ), f"Expected predicted_conflicts in 409 detail, got: {detail}"
+        print(
+            f"Conflicting commit correctly rejected (409) with "
+            f"{len(predicted_conflicts)} conflicts"
+        )
 
     def test_09_opportunities_endpoint(self) -> None:
         """GET /planning/opportunities returns cached opportunities."""
@@ -949,9 +1023,7 @@ class TestTargetDeduplication:
         # Second plan — dedup should kick in
         plan2 = _plan(workspace)
         n2 = len(plan2.get("new_plan_items", []))
-        assert n2 < n1, (
-            f"Dedup failed: second plan has {n2} items, first had {n1}"
-        )
+        assert n2 < n1, f"Dedup failed: second plan has {n2} items, first had {n1}"
         print(f"Dedup: {n1} → {n2} items (reduction {n1 - n2})")
 
     def test_02_replan_no_crash_on_commit(self, workspace: str) -> None:
@@ -994,7 +1066,8 @@ class TestTargetDeduplication:
         plan2 = _plan(workspace)
         new_items = plan2.get("new_plan_items", [])
         re_scheduled = [
-            it for it in new_items
+            it
+            for it in new_items
             if it.get("target_id") == deleted_target_id
             and it.get("satellite_id") == deleted_sat_id
         ]
@@ -1024,7 +1097,9 @@ class TestTargetDeduplication:
             # Plan in ws2 — should NOT be deduped by ws1's acquisitions
             plan2 = _plan(ws2)
             n2 = len(plan2.get("new_plan_items", []))
-            assert n2 > 0, "Workspace 2 should have plan items (no cross-workspace dedup)"
+            assert (
+                n2 > 0
+            ), "Workspace 2 should have plan items (no cross-workspace dedup)"
             print(
                 f"Workspace isolation: ws1 committed {n1}, "
                 f"ws2 independently planned {n2}"
@@ -1050,9 +1125,9 @@ class TestAutoModeSelection:
         try:
             plan = _plan(ws)
             assert plan["success"]
-            assert plan["planning_mode"] == "from_scratch", (
-                f"Expected from_scratch, got {plan['planning_mode']}"
-            )
+            assert (
+                plan["planning_mode"] == "from_scratch"
+            ), f"Expected from_scratch, got {plan['planning_mode']}"
             ctx = plan.get("schedule_context", {})
             assert ctx.get("existing_acquisition_count", -1) == 0
             print(
@@ -1062,9 +1137,7 @@ class TestAutoModeSelection:
         finally:
             _safe_cleanup(ws)
 
-    def test_02_replan_same_targets_selects_repair(
-        self, seeded_mission: Dict
-    ) -> None:
+    def test_02_replan_same_targets_selects_repair(self, seeded_mission: Dict) -> None:
         """Existing schedule + same targets → auto-selects REPAIR."""
         ws = _create_workspace(f"automode_repair_{uuid.uuid4().hex[:6]}")
         try:
@@ -1089,9 +1162,7 @@ class TestAutoModeSelection:
         finally:
             _safe_cleanup(ws)
 
-    def test_03_new_targets_selects_incremental(
-        self, seeded_mission: Dict
-    ) -> None:
+    def test_03_new_targets_selects_incremental(self, seeded_mission: Dict) -> None:
         """Existing schedule + new targets → auto-selects INCREMENTAL."""
         ws = _create_workspace(f"automode_incr_{uuid.uuid4().hex[:6]}")
         try:
@@ -1112,9 +1183,9 @@ class TestAutoModeSelection:
                 f"Context: {plan.get('schedule_context', {})}"
             )
             ctx = plan.get("schedule_context", {})
-            assert ctx.get("new_target_count", 0) > 0, (
-                f"Expected new_target_count > 0, got {ctx.get('new_target_count')}"
-            )
+            assert (
+                ctx.get("new_target_count", 0) > 0
+            ), f"Expected new_target_count > 0, got {ctx.get('new_target_count')}"
             print(
                 f"Auto-mode: {plan['planning_mode']} | "
                 f"new_targets={ctx.get('new_target_count')} | "
@@ -1123,9 +1194,7 @@ class TestAutoModeSelection:
         finally:
             _safe_cleanup(ws, TLE_SAT1, TARGETS_PHASE1)
 
-    def test_04_force_mode_overrides_auto(
-        self, seeded_mission: Dict
-    ) -> None:
+    def test_04_force_mode_overrides_auto(self, seeded_mission: Dict) -> None:
         """Explicitly setting mode overrides auto-selection."""
         ws = _create_workspace(f"automode_force_{uuid.uuid4().hex[:6]}")
         try:
@@ -1151,16 +1220,14 @@ class TestAutoModeSelection:
                     "workspace_id": ws,
                 },
             )
-            assert plan2["planning_mode"] == "incremental", (
-                f"Forced incremental, got {plan2['planning_mode']}"
-            )
+            assert (
+                plan2["planning_mode"] == "incremental"
+            ), f"Forced incremental, got {plan2['planning_mode']}"
             print(f"Force override: incremental → {plan2['planning_mode']}")
         finally:
             _safe_cleanup(ws)
 
-    def test_05_schedule_context_has_mode_metadata(
-        self, seeded_mission: Dict
-    ) -> None:
+    def test_05_schedule_context_has_mode_metadata(self, seeded_mission: Dict) -> None:
         """Plan response includes full mode selection metadata."""
         ws = _create_workspace(f"automode_ctx_{uuid.uuid4().hex[:6]}")
         try:
@@ -1171,18 +1238,16 @@ class TestAutoModeSelection:
             # Verify all mode-selection metadata is present
             assert "planning_mode" in ctx, "Missing planning_mode in context"
             assert "mode_selection_reason" in ctx, "Missing mode_selection_reason"
-            assert "existing_acquisition_count" in ctx, "Missing existing_acquisition_count"
+            assert (
+                "existing_acquisition_count" in ctx
+            ), "Missing existing_acquisition_count"
             assert "new_target_count" in ctx, "Missing new_target_count"
             assert "conflict_count" in ctx, "Missing conflict_count"
-            print(
-                f"Context keys verified: {sorted(ctx.keys())}"
-            )
+            print(f"Context keys verified: {sorted(ctx.keys())}")
         finally:
             _safe_cleanup(ws)
 
-    def test_06_conflict_count_in_mode_selection(
-        self, seeded_mission: Dict
-    ) -> None:
+    def test_06_conflict_count_in_mode_selection(self, seeded_mission: Dict) -> None:
         """Conflict count is wired into mode selection context."""
         ws = _create_workspace(f"automode_conflict_{uuid.uuid4().hex[:6]}")
         try:
@@ -1197,6 +1262,114 @@ class TestAutoModeSelection:
             print(f"conflict_count wired: {ctx['conflict_count']}")
         finally:
             _safe_cleanup(ws)
+
+
+class TestPlanningStrategyValidation:
+    """Validate orbit diversity and planner weighting through /planning/schedule."""
+
+    def test_01_orbit_diversity_changes_visibility(self) -> None:
+        """Polar and mid-inclination orbits should not see the same latitude bands."""
+        analysis = _analyze_mission(
+            satellites=[TLE_SAT1, TLE_SAT4],
+            targets=ORBIT_REVIEW_TARGETS,
+        )
+        passes = _extract_mission_passes(analysis)
+        assert passes, "Mission analysis returned no passes for orbit-diversity review"
+
+        counts: Dict[str, Dict[str, int]] = {}
+        for mission_pass in passes:
+            target_name = str(mission_pass["target_name"])
+            satellite_name = str(mission_pass["satellite_name"])
+            target_counts = counts.setdefault(target_name, {})
+            target_counts[satellite_name] = target_counts.get(satellite_name, 0) + 1
+
+        svalbard_counts = counts.get("Svalbard", {})
+        assert (
+            svalbard_counts.get("ICEYE-X53", 0) > 0
+        ), f"Polar orbit should reach Svalbard: {counts}"
+        assert (
+            svalbard_counts.get("ICEYE-X67", 0) == 0
+        ), f"45-degree orbit should not reach Svalbard: {counts}"
+        assert (
+            counts.get("Athens", {}).get("ICEYE-X67", 0) > 0
+        ), f"45-degree orbit should cover Athens: {counts}"
+        assert (
+            counts.get("Singapore", {}).get("ICEYE-X67", 0) > 0
+        ), f"45-degree orbit should cover Singapore: {counts}"
+        print(f"Orbit visibility split verified: {counts}")
+
+    def test_02_quality_first_vs_urgent_changes_single_target_choice(self) -> None:
+        """Urgent should schedule earlier while quality-first should not worsen geometry."""
+        analysis = _analyze_mission(
+            tle=TLE_SAT1,
+            targets=STRATEGY_TIMING_TARGET,
+        )
+        passes = _extract_mission_passes(analysis)
+        assert passes, "Expected at least one pass for timing-vs-geometry review"
+
+        quality_first = _planning_result(
+            _run_planning_schedule(weight_preset="quality_first")
+        )
+        urgent = _planning_result(_run_planning_schedule(weight_preset="urgent"))
+
+        quality_schedule = quality_first.get("schedule", [])
+        urgent_schedule = urgent.get("schedule", [])
+        assert (
+            len(quality_schedule) == 1
+        ), f"Expected exactly one scheduled item for quality_first: {quality_schedule}"
+        assert (
+            len(urgent_schedule) == 1
+        ), f"Expected exactly one scheduled item for urgent: {urgent_schedule}"
+
+        quality_item = quality_schedule[0]
+        urgent_item = urgent_schedule[0]
+        quality_start = _parse_ts(quality_item["start_time"])
+        urgent_start = _parse_ts(urgent_item["start_time"])
+        quality_incidence = abs(float(quality_item.get("incidence_angle", 0.0)))
+        urgent_incidence = abs(float(urgent_item.get("incidence_angle", 0.0)))
+
+        assert urgent_start <= quality_start, (
+            f"Urgent preset should not schedule later than quality-first: "
+            f"urgent={urgent_item['start_time']} quality={quality_item['start_time']}"
+        )
+        assert quality_incidence <= urgent_incidence + 1e-6, (
+            f"Quality-first should not worsen incidence: "
+            f"quality={quality_incidence:.2f} urgent={urgent_incidence:.2f}"
+        )
+        print(
+            f"Urgent picked {urgent_item['opportunity_id']} at {urgent_item['start_time']} "
+            f"vs quality-first {quality_item['opportunity_id']} at "
+            f"{quality_item['start_time']}"
+        )
+
+    def test_03_priority_first_prefers_high_priority_target_under_overlap(self) -> None:
+        """Priority-first should keep the higher-priority target when near-duplicate targets compete."""
+        analysis = _analyze_mission(
+            tle=TLE_SAT1,
+            targets=STRATEGY_PRIORITY_TARGETS,
+            start_time="2026-03-08T00:00:00Z",
+            end_time="2026-03-09T00:00:00Z",
+        )
+        passes = _extract_mission_passes(analysis)
+        assert passes, "Expected at least one pass for priority-overlap review"
+
+        priority_first = _planning_result(
+            _run_planning_schedule(
+                weight_preset="priority_first",
+                imaging_time_s=43200.0,
+            )
+        )
+        schedule = priority_first.get("schedule", [])
+        scheduled_targets = [item["target_id"] for item in schedule]
+
+        assert (
+            len(schedule) == 1
+        ), f"Expected a single surviving target under long overlap: {scheduled_targets}"
+        assert scheduled_targets[0] == "PriorityAnchor", (
+            f"Priority-first should select the higher-priority target, got "
+            f"{scheduled_targets}"
+        )
+        print(f"Priority-first selected {scheduled_targets[0]} under forced overlap")
 
 
 # =============================================================================
@@ -1336,7 +1509,9 @@ class TestScaleSingleSatellite:
             if items_b2:
                 commit2 = _commit(plan2["plan_id"], ws, force=True)
                 assert commit2["success"]
-                print(f"Batch 2 committed: {commit2.get('committed', 0)} new acquisitions")
+                print(
+                    f"Batch 2 committed: {commit2.get('committed', 0)} new acquisitions"
+                )
 
             # --- Add 15 more targets (batch 3) → total 50 → INCREMENTAL ---
             all_targets_50 = all_targets_35 + SCALE_TARGETS_BATCH_3
@@ -1354,15 +1529,17 @@ class TestScaleSingleSatellite:
                 f"new_targets={ctx3.get('new_target_count', '?')} | "
                 f"items={len(plan3.get('new_plan_items', []))}"
             )
-            assert plan3["planning_mode"] == "incremental", (
-                f"Expected incremental for batch 3, got {plan3['planning_mode']}"
-            )
+            assert (
+                plan3["planning_mode"] == "incremental"
+            ), f"Expected incremental for batch 3, got {plan3['planning_mode']}"
 
             items_b3 = plan3.get("new_plan_items", [])
             if items_b3:
                 commit3 = _commit(plan3["plan_id"], ws, force=True)
                 assert commit3["success"]
-                print(f"Batch 3 committed: {commit3.get('committed', 0)} new acquisitions")
+                print(
+                    f"Batch 3 committed: {commit3.get('committed', 0)} new acquisitions"
+                )
 
             # --- Verify final schedule state ---
             final_state = _state(ws)
@@ -1372,9 +1549,9 @@ class TestScaleSingleSatellite:
                 f"\nFinal schedule: {len(final_acqs)} acquisitions | "
                 f"{len(final_targets)} unique targets"
             )
-            assert len(final_acqs) > n_committed, (
-                "Expected more acquisitions after incremental adds"
-            )
+            assert (
+                len(final_acqs) > n_committed
+            ), "Expected more acquisitions after incremental adds"
 
             # --- Replan same targets → REPAIR or INCREMENTAL ---
             # If all targets have acquisitions → REPAIR (no new targets)
@@ -1388,12 +1565,13 @@ class TestScaleSingleSatellite:
                 f"existing={ctx4.get('existing_acquisition_count', '?')} | "
                 f"new_targets={ctx4.get('new_target_count', '?')}"
             )
-            assert plan4["planning_mode"] in ("repair", "incremental"), (
-                f"Expected repair or incremental, got {plan4['planning_mode']}"
-            )
-            assert plan4["planning_mode"] != "from_scratch", (
-                "Should not be from_scratch — schedule has existing acquisitions"
-            )
+            assert plan4["planning_mode"] in (
+                "repair",
+                "incremental",
+            ), f"Expected repair or incremental, got {plan4['planning_mode']}"
+            assert (
+                plan4["planning_mode"] != "from_scratch"
+            ), "Should not be from_scratch — schedule has existing acquisitions"
 
             # --- Delete some unlocked acquisitions and replan ---
             unlocked = [a for a in final_acqs if a.get("lock_level", "none") == "none"]
@@ -1401,7 +1579,11 @@ class TestScaleSingleSatellite:
             assert len(acq_ids_to_delete) > 0, "Need at least 1 unlocked acq to delete"
             del_resp = _post(
                 "/schedule/acquisitions/bulk-delete",
-                {"acquisition_ids": acq_ids_to_delete, "workspace_id": ws, "force": True},
+                {
+                    "acquisition_ids": acq_ids_to_delete,
+                    "workspace_id": ws,
+                    "force": True,
+                },
             )
             deleted = del_resp.get("deleted", 0)
             skipped = len(del_resp.get("skipped_hard_locked", []))
@@ -1427,7 +1609,9 @@ class TestScaleSingleSatellite:
                 f"  Batches: 20 → 35 → 50 targets"
                 f" | Final: {len(final_acqs)} acqs, {len(final_targets)} targets"
             )
-            print(f"  Modes exercised: from_scratch → incremental → incremental → repair")
+            print(
+                f"  Modes exercised: from_scratch → incremental → incremental → repair"
+            )
             print(f"{'='*60}")
 
         finally:
@@ -1445,9 +1629,13 @@ class TestScaleConstellation:
 
             # --- Batch 1: 20 targets, 3 satellites ---
             seed1 = _seed_constellation(sats, SCALE_TARGETS_BATCH_1, days=3)
-            assert seed1["success"], f"Constellation seed failed: {seed1.get('message')}"
+            assert seed1[
+                "success"
+            ], f"Constellation seed failed: {seed1.get('message')}"
             passes1 = seed1.get("data", {}).get("mission_data", {}).get("passes", [])
-            sats_in_data = seed1.get("data", {}).get("mission_data", {}).get("satellites", [])
+            sats_in_data = (
+                seed1.get("data", {}).get("mission_data", {}).get("satellites", [])
+            )
             print(
                 f"Constellation batch 1: {len(passes1)} passes | "
                 f"{len(sats_in_data)} satellites | 20 targets"
@@ -1499,9 +1687,9 @@ class TestScaleConstellation:
                 f"new_targets={ctx2.get('new_target_count', '?')} | "
                 f"items={len(plan2.get('new_plan_items', []))}"
             )
-            assert plan2["planning_mode"] == "incremental", (
-                f"Expected incremental, got {plan2['planning_mode']}. ctx={ctx2}"
-            )
+            assert (
+                plan2["planning_mode"] == "incremental"
+            ), f"Expected incremental, got {plan2['planning_mode']}. ctx={ctx2}"
 
             items2 = plan2.get("new_plan_items", [])
             if items2:
@@ -1538,9 +1726,9 @@ class TestScaleConstellation:
             final_acqs = state_final.get("acquisitions", [])
             final_ids = set(a["id"] for a in final_acqs)
             for lid in lock_ids:
-                assert lid in final_ids, (
-                    f"Hard-locked acquisition {lid} missing after incremental adds!"
-                )
+                assert (
+                    lid in final_ids
+                ), f"Hard-locked acquisition {lid} missing after incremental adds!"
             locked_acqs = [a for a in final_acqs if a.get("lock_level") == "hard"]
             print(f"Hard-locked acquisitions preserved: {len(locked_acqs)}")
 
@@ -1555,13 +1743,16 @@ class TestScaleConstellation:
 
             # --- Delete some and replan → REPAIR ---
             del_candidates = [
-                a["id"] for a in final_acqs
-                if a.get("lock_level") != "hard"
+                a["id"] for a in final_acqs if a.get("lock_level") != "hard"
             ][:5]
             if del_candidates:
                 del_resp = _post(
                     "/schedule/acquisitions/bulk-delete",
-                    {"acquisition_ids": del_candidates, "workspace_id": ws, "force": True},
+                    {
+                        "acquisition_ids": del_candidates,
+                        "workspace_id": ws,
+                        "force": True,
+                    },
                 )
                 print(f"Deleted {del_resp.get('deleted', 0)} unlocked acquisitions")
 
@@ -1573,21 +1764,22 @@ class TestScaleConstellation:
                 f"Post-delete replan: mode={plan4['planning_mode']} | "
                 f"existing={ctx4.get('existing_acquisition_count', '?')}"
             )
-            assert plan4["planning_mode"] in ("repair", "incremental"), (
-                f"Expected repair or incremental, got {plan4['planning_mode']}"
-            )
-            assert plan4["planning_mode"] != "from_scratch", (
-                "Should not be from_scratch — schedule has existing acquisitions"
-            )
+            assert plan4["planning_mode"] in (
+                "repair",
+                "incremental",
+            ), f"Expected repair or incremental, got {plan4['planning_mode']}"
+            assert (
+                plan4["planning_mode"] != "from_scratch"
+            ), "Should not be from_scratch — schedule has existing acquisitions"
 
             # --- Hard-locks still present after everything ---
             post_repair = _state(ws)
             post_acqs = post_repair.get("acquisitions", [])
             post_ids = set(a["id"] for a in post_acqs)
             for lid in lock_ids:
-                assert lid in post_ids, (
-                    f"Hard-locked {lid} vanished after repair cycle!"
-                )
+                assert (
+                    lid in post_ids
+                ), f"Hard-locked {lid} vanished after repair cycle!"
 
             print(f"\n{'='*60}")
             print(f"CONSTELLATION SCALE TEST PASSED")
@@ -1658,9 +1850,9 @@ class TestAdvancedModeSelection:
                 "/schedule/acquisitions/bulk-delete",
                 {"acquisition_ids": all_ids, "workspace_id": ws, "force": True},
             )
-            assert del_resp["deleted"] == n, (
-                f"Expected {n} deleted, got {del_resp['deleted']}"
-            )
+            assert (
+                del_resp["deleted"] == n
+            ), f"Expected {n} deleted, got {del_resp['deleted']}"
             print(f"Deleted all {n} acquisitions")
 
             # Replan — should be FROM_SCRATCH (empty workspace)
@@ -1699,9 +1891,9 @@ class TestAdvancedModeSelection:
             # Step 2: Add targets B → INCREMENTAL
             _seed(TLE_SAT1, MOD_TARGETS_A + MOD_TARGETS_B, days=3)
             p2 = _plan(ws)
-            assert p2["planning_mode"] == "incremental", (
-                f"Expected incremental, got {p2['planning_mode']}"
-            )
+            assert (
+                p2["planning_mode"] == "incremental"
+            ), f"Expected incremental, got {p2['planning_mode']}"
             ctx2 = p2.get("schedule_context", {})
             assert ctx2.get("new_target_count", 0) > 0
             if p2.get("new_plan_items"):
@@ -1711,9 +1903,9 @@ class TestAdvancedModeSelection:
             # Step 3: Add targets C → INCREMENTAL again
             _seed(TLE_SAT1, MOD_TARGETS_A + MOD_TARGETS_B + MOD_TARGETS_C, days=3)
             p3 = _plan(ws)
-            assert p3["planning_mode"] == "incremental", (
-                f"Expected incremental, got {p3['planning_mode']}"
-            )
+            assert (
+                p3["planning_mode"] == "incremental"
+            ), f"Expected incremental, got {p3['planning_mode']}"
             if p3.get("new_plan_items"):
                 c3 = _commit(p3["plan_id"], ws, force=True)
                 print(f"Step 3 INCREMENTAL: {c3['committed']} new")
@@ -1736,9 +1928,9 @@ class TestAdvancedModeSelection:
                 {"acquisition_ids": all_ids, "workspace_id": ws, "force": True},
             )
             p5 = _plan(ws)
-            assert p5["planning_mode"] == "from_scratch", (
-                f"After delete-all, expected from_scratch, got {p5['planning_mode']}"
-            )
+            assert (
+                p5["planning_mode"] == "from_scratch"
+            ), f"After delete-all, expected from_scratch, got {p5['planning_mode']}"
             print(f"Step 5 after delete-all: from_scratch ✓")
 
             print(f"\nLifecycle: FS → INC → INC → REPAIR/INC → FS  ✓")
@@ -1765,17 +1957,25 @@ class TestAdvancedModeSelection:
                     {"planning_mode": forced_mode, "workspace_id": ws},
                 )
                 assert plan["success"]
-                assert plan["planning_mode"] == forced_mode, (
-                    f"Forced {forced_mode}, got {plan['planning_mode']}"
+                assert (
+                    plan["planning_mode"] == forced_mode
+                ), f"Forced {forced_mode}, got {plan['planning_mode']}"
+                reason = plan.get("schedule_context", {}).get(
+                    "mode_selection_reason", ""
                 )
-                reason = plan.get("schedule_context", {}).get("mode_selection_reason", "")
-                assert "Explicitly requested" in reason, (
-                    f"Force reason should say 'Explicitly requested', got: {reason}"
-                )
+                assert (
+                    "Explicitly requested" in reason
+                ), f"Force reason should say 'Explicitly requested', got: {reason}"
                 ctx = plan.get("schedule_context", {})
-                for key in ("planning_mode", "existing_acquisition_count",
-                            "new_target_count", "conflict_count"):
-                    assert key in ctx, f"Missing {key} in context when forcing {forced_mode}"
+                for key in (
+                    "planning_mode",
+                    "existing_acquisition_count",
+                    "new_target_count",
+                    "conflict_count",
+                ):
+                    assert (
+                        key in ctx
+                    ), f"Missing {key} in context when forcing {forced_mode}"
                 print(f"Force {forced_mode}: reason='{reason[:60]}' ✓")
 
             # Force from_scratch — since it's the default, auto-mode runs.
@@ -1785,13 +1985,16 @@ class TestAdvancedModeSelection:
                 {"planning_mode": "from_scratch", "workspace_id": ws},
             )
             # Auto-mode should fire and pick repair (schedule exists, same targets)
-            assert p_fs["planning_mode"] in ("repair", "incremental"), (
-                f"from_scratch default should trigger auto-mode, got {p_fs['planning_mode']}"
+            assert p_fs["planning_mode"] in (
+                "repair",
+                "incremental",
+            ), f"from_scratch default should trigger auto-mode, got {p_fs['planning_mode']}"
+            reason_fs = p_fs.get("schedule_context", {}).get(
+                "mode_selection_reason", ""
             )
-            reason_fs = p_fs.get("schedule_context", {}).get("mode_selection_reason", "")
-            assert "Explicitly requested" not in reason_fs, (
-                "from_scratch (default) should NOT show 'Explicitly requested'"
-            )
+            assert (
+                "Explicitly requested" not in reason_fs
+            ), "from_scratch (default) should NOT show 'Explicitly requested'"
             print(f"Default from_scratch triggers auto: {p_fs['planning_mode']} ✓")
         finally:
             _safe_cleanup(ws, TLE_SAT1, TARGETS_PHASE1)
@@ -1819,15 +2022,15 @@ class TestAdvancedModeSelection:
             ctx2 = p2.get("schedule_context", {})
 
             # ws2 is empty → from_scratch
-            assert p2["planning_mode"] == "from_scratch", (
-                f"Empty ws2 should be from_scratch, got {p2['planning_mode']}"
-            )
+            assert (
+                p2["planning_mode"] == "from_scratch"
+            ), f"Empty ws2 should be from_scratch, got {p2['planning_mode']}"
             assert ctx2.get("existing_acquisition_count", -1) == 0
 
             # ws1 has schedule → repair or incremental (not from_scratch)
-            assert p1["planning_mode"] != "from_scratch", (
-                f"ws1 has schedule, should not be from_scratch"
-            )
+            assert (
+                p1["planning_mode"] != "from_scratch"
+            ), f"ws1 has schedule, should not be from_scratch"
             assert ctx1.get("existing_acquisition_count", 0) > 0
 
             print(
@@ -1869,9 +2072,9 @@ class TestAdvancedModeSelection:
             # Add new targets → should trigger INCREMENTAL
             _seed(TLE_SAT1, MOD_TARGETS_A + MOD_TARGETS_B, days=3)
             p2 = _plan(ws)
-            assert p2["planning_mode"] == "incremental", (
-                f"New targets should trigger incremental, got {p2['planning_mode']}"
-            )
+            assert (
+                p2["planning_mode"] == "incremental"
+            ), f"New targets should trigger incremental, got {p2['planning_mode']}"
             ctx2 = p2.get("schedule_context", {})
             assert ctx2.get("new_target_count", 0) > 0
 
@@ -1884,11 +2087,13 @@ class TestAdvancedModeSelection:
             state_after = _state(ws)
             after_ids = {a["id"] for a in state_after["acquisitions"]}
             for lid in lock_ids:
-                assert lid in after_ids, f"Hard-locked {lid} vanished after incremental!"
+                assert (
+                    lid in after_ids
+                ), f"Hard-locked {lid} vanished after incremental!"
                 acq = next(a for a in state_after["acquisitions"] if a["id"] == lid)
-                assert acq["lock_level"] == "hard", (
-                    f"Lock on {lid} degraded to {acq['lock_level']}!"
-                )
+                assert (
+                    acq["lock_level"] == "hard"
+                ), f"Lock on {lid} degraded to {acq['lock_level']}!"
             print(f"Locks preserved: {lock_ids} ✓")
         finally:
             _safe_cleanup(ws, TLE_SAT1, TARGETS_PHASE1)
@@ -1910,7 +2115,7 @@ class TestAdvancedModeSelection:
 
             # Delete half the acquisitions
             st = _state(ws)
-            half = [a["id"] for a in st["acquisitions"]][:max(1, n1 // 2)]
+            half = [a["id"] for a in st["acquisitions"]][: max(1, n1 // 2)]
             _post(
                 "/schedule/acquisitions/bulk-delete",
                 {"acquisition_ids": half, "workspace_id": ws, "force": True},
@@ -1926,9 +2131,9 @@ class TestAdvancedModeSelection:
                 f"existing={ctx2.get('existing_acquisition_count')} | "
                 f"new_targets={ctx2.get('new_target_count')}"
             )
-            assert p2["planning_mode"] == "incremental", (
-                f"New targets B should trigger incremental, got {p2['planning_mode']}"
-            )
+            assert (
+                p2["planning_mode"] == "incremental"
+            ), f"New targets B should trigger incremental, got {p2['planning_mode']}"
             if p2.get("new_plan_items"):
                 _commit(p2["plan_id"], ws, force=True)
 
@@ -1942,9 +2147,9 @@ class TestAdvancedModeSelection:
                 f"new_targets={ctx3.get('new_target_count')}"
             )
             # C targets are new → should be INCREMENTAL
-            assert p3["planning_mode"] == "incremental", (
-                f"New targets C should trigger incremental, got {p3['planning_mode']}"
-            )
+            assert (
+                p3["planning_mode"] == "incremental"
+            ), f"New targets C should trigger incremental, got {p3['planning_mode']}"
             assert ctx3.get("new_target_count", 0) > 0
 
             print(f"Target churn: A → (A+B) → (A+C) modes correct ✓")
@@ -2036,12 +2241,10 @@ class TestAdvancedModeSelection:
             _seed(TLE_SAT1, MOD_TARGETS_A + MOD_TARGETS_B, days=3)
             p2 = _plan(ws)
             r2 = p2.get("schedule_context", {}).get("mode_selection_reason", "")
-            assert "new target(s) detected" in r2, (
-                f"INCREMENTAL reason wrong: {r2}"
-            )
-            assert "incrementally" in r2.lower(), (
-                f"INCREMENTAL reason should mention 'incrementally': {r2}"
-            )
+            assert "new target(s) detected" in r2, f"INCREMENTAL reason wrong: {r2}"
+            assert (
+                "incrementally" in r2.lower()
+            ), f"INCREMENTAL reason should mention 'incrementally': {r2}"
             print(f"INCREMENTAL reason: '{r2[:70]}' ✓")
 
             # Rule 3 or 4: REPAIR — same targets (existing schedule)
@@ -2050,9 +2253,9 @@ class TestAdvancedModeSelection:
             if p3["planning_mode"] == "repair":
                 r3 = p3.get("schedule_context", {}).get("mode_selection_reason", "")
                 # Rule 3: "conflict(s)" or Rule 4: "existing acquisition(s)"
-                assert "existing" in r3.lower() or "conflict" in r3.lower(), (
-                    f"REPAIR reason should mention existing/conflict: {r3}"
-                )
+                assert (
+                    "existing" in r3.lower() or "conflict" in r3.lower()
+                ), f"REPAIR reason should mention existing/conflict: {r3}"
                 print(f"REPAIR reason: '{r3[:70]}' ✓")
             else:
                 # Some targets may appear new if not fully covered
@@ -2094,9 +2297,9 @@ class TestAdvancedModeSelection:
             _seed_constellation(sats, MOD_TARGETS_A + MOD_TARGETS_C, days=3)
             p2 = _plan(ws)
             ctx2 = p2.get("schedule_context", {})
-            assert p2["planning_mode"] == "incremental", (
-                f"Expected incremental, got {p2['planning_mode']}"
-            )
+            assert (
+                p2["planning_mode"] == "incremental"
+            ), f"Expected incremental, got {p2['planning_mode']}"
             assert ctx2.get("new_target_count", 0) > 0
 
             # Verify multi-sat items in incremental plan
@@ -2194,18 +2397,19 @@ class TestAdvancedModeSelection:
                 f"existing={ctx2.get('existing_acquisition_count')} | "
                 f"new_targets={ctx2.get('new_target_count')}"
             )
-            assert p2["planning_mode"] in ("repair", "incremental"), (
-                f"Expected repair/incremental, got {p2['planning_mode']}"
-            )
+            assert p2["planning_mode"] in (
+                "repair",
+                "incremental",
+            ), f"Expected repair/incremental, got {p2['planning_mode']}"
             assert p2["planning_mode"] != "from_scratch"
 
             # Verify locks still intact
             st2 = _state(ws)
             for a in st2["acquisitions"]:
                 if a["id"] in all_ids:
-                    assert a["lock_level"] == "hard", (
-                        f"Lock on {a['id']} degraded after replan!"
-                    )
+                    assert (
+                        a["lock_level"] == "hard"
+                    ), f"Lock on {a['id']} degraded after replan!"
             print(f"All locks preserved after replan ✓")
         finally:
             _safe_cleanup(ws, TLE_SAT1, TARGETS_PHASE1)
@@ -2266,7 +2470,11 @@ def _horizon(workspace_id: str, days: int = 7) -> List[Dict[str, Any]]:
         "to": (now + timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     resp = _get("/schedule/horizon", params)
-    return resp.get("acquisitions", [])
+    acquisitions = resp.get("acquisitions", [])
+    assert isinstance(
+        acquisitions, list
+    ), f"Schedule horizon acquisitions are not a list: {resp}"
+    return cast(List[Dict[str, Any]], acquisitions)
 
 
 def _direct_commit_synthetic(
@@ -2318,7 +2526,9 @@ class TestFreezeWindow:
             now = datetime.now(timezone.utc)
             t_start = (now + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
             t_end = (now + timedelta(minutes=35)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            dc = _direct_commit_synthetic(ws, "sat_ICEYE-X53", "freeze_target", t_start, t_end)
+            dc = _direct_commit_synthetic(
+                ws, "sat_ICEYE-X53", "freeze_target", t_start, t_end
+            )
             acq_id = dc["acquisition_ids"][0]
             print(f"Created frozen acq {acq_id} starting at {t_start}")
 
@@ -2328,9 +2538,9 @@ class TestFreezeWindow:
                 params={"force": "false", "workspace_id": ws},
                 timeout=15,
             )
-            assert resp.status_code == 409, (
-                f"Expected 409 for frozen acq, got {resp.status_code}: {resp.text[:200]}"
-            )
+            assert (
+                resp.status_code == 409
+            ), f"Expected 409 for frozen acq, got {resp.status_code}: {resp.text[:200]}"
             assert "freeze window" in resp.json().get("detail", "").lower()
             print(f"Frozen delete blocked: 409 ✓")
 
@@ -2340,9 +2550,9 @@ class TestFreezeWindow:
                 params={"force": "true", "workspace_id": ws},
                 timeout=15,
             )
-            assert resp2.status_code == 200, (
-                f"Force delete should succeed, got {resp2.status_code}"
-            )
+            assert (
+                resp2.status_code == 200
+            ), f"Force delete should succeed, got {resp2.status_code}"
             print(f"Force delete of frozen acq: 200 ✓")
         finally:
             _safe_cleanup(ws)
@@ -2359,13 +2569,19 @@ class TestFreezeWindow:
             # Acq 1: 30 min from now (frozen)
             t1_start = (now + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
             t1_end = (now + timedelta(minutes=35)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            dc1 = _direct_commit_synthetic(ws, "sat_ICEYE-X53", "frozen_tgt", t1_start, t1_end)
+            dc1 = _direct_commit_synthetic(
+                ws, "sat_ICEYE-X53", "frozen_tgt", t1_start, t1_end
+            )
             frozen_id = dc1["acquisition_ids"][0]
 
             # Acq 2: 5 hours from now (outside freeze)
             t2_start = (now + timedelta(hours=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            t2_end = (now + timedelta(hours=5, minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            dc2 = _direct_commit_synthetic(ws, "sat_ICEYE-X53", "safe_tgt", t2_start, t2_end)
+            t2_end = (now + timedelta(hours=5, minutes=5)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+            dc2 = _direct_commit_synthetic(
+                ws, "sat_ICEYE-X53", "safe_tgt", t2_start, t2_end
+            )
             safe_id = dc2["acquisition_ids"][0]
 
             print(f"Frozen: {frozen_id} at +30min | Safe: {safe_id} at +5h")
@@ -2373,11 +2589,15 @@ class TestFreezeWindow:
             # Bulk delete without force
             del_resp = _post(
                 "/schedule/acquisitions/bulk-delete",
-                {"acquisition_ids": [frozen_id, safe_id], "workspace_id": ws, "force": False},
+                {
+                    "acquisition_ids": [frozen_id, safe_id],
+                    "workspace_id": ws,
+                    "force": False,
+                },
             )
-            assert del_resp["deleted"] == 1, (
-                f"Expected 1 deleted (safe only), got {del_resp['deleted']}"
-            )
+            assert (
+                del_resp["deleted"] == 1
+            ), f"Expected 1 deleted (safe only), got {del_resp['deleted']}"
             # Frozen one should still exist
             acqs = _horizon(ws)
             remaining_ids = [a["id"] for a in acqs]
@@ -2395,7 +2615,9 @@ class TestFreezeWindow:
             now = datetime.now(timezone.utc)
             t_start = (now + timedelta(minutes=15)).strftime("%Y-%m-%dT%H:%M:%SZ")
             t_end = (now + timedelta(minutes=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            dc = _direct_commit_synthetic(ws, "sat_ICEYE-X53", "force_tgt", t_start, t_end)
+            dc = _direct_commit_synthetic(
+                ws, "sat_ICEYE-X53", "force_tgt", t_start, t_end
+            )
             acq_id = dc["acquisition_ids"][0]
 
             del_resp = _post(
@@ -2415,7 +2637,9 @@ class TestFreezeWindow:
             now = datetime.now(timezone.utc)
             t_start = (now + timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
             t_end = (now + timedelta(hours=3, minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            dc = _direct_commit_synthetic(ws, "sat_ICEYE-X53", "far_tgt", t_start, t_end)
+            dc = _direct_commit_synthetic(
+                ws, "sat_ICEYE-X53", "far_tgt", t_start, t_end
+            )
             acq_id = dc["acquisition_ids"][0]
 
             resp = requests.delete(
@@ -2423,9 +2647,9 @@ class TestFreezeWindow:
                 params={"force": "false", "workspace_id": ws},
                 timeout=15,
             )
-            assert resp.status_code == 200, (
-                f"Acq outside freeze should delete, got {resp.status_code}"
-            )
+            assert (
+                resp.status_code == 200
+            ), f"Acq outside freeze should delete, got {resp.status_code}"
             print(f"Non-frozen acq deleted normally: 200 ✓")
         finally:
             _safe_cleanup(ws)
@@ -2477,9 +2701,9 @@ class TestSnapshotRollback:
 
             snaps2 = _get("/schedule/snapshots", {"workspace_id": ws})
             count2 = snaps2["count"]
-            assert count2 > count1, (
-                f"Expected more snapshots after 2nd commit: {count1} → {count2}"
-            )
+            assert (
+                count2 > count1
+            ), f"Expected more snapshots after 2nd commit: {count1} → {count2}"
             print(f"Snapshots: {count1} → {count2} after 2 commits ✓")
         finally:
             _safe_cleanup(ws, TLE_SAT1, TARGETS_PHASE1)
@@ -2536,9 +2760,9 @@ class TestSnapshotRollback:
 
             # Verify state matches batch 1
             acqs = _horizon(ws)
-            assert len(acqs) == n1, (
-                f"After rollback expected {n1} acqs (batch 1), got {len(acqs)}"
-            )
+            assert (
+                len(acqs) == n1
+            ), f"After rollback expected {n1} acqs (batch 1), got {len(acqs)}"
             print(f"Rollback restored {len(acqs)} acqs (matches batch 1) ✓")
         finally:
             _safe_cleanup(ws, TLE_SAT1, TARGETS_PHASE1)
@@ -2552,9 +2776,9 @@ class TestSnapshotRollback:
                 json={"snapshot_id": "snap_nonexistent", "workspace_id": ws},
                 timeout=15,
             )
-            assert resp.status_code == 404, (
-                f"Expected 404 for bad snapshot, got {resp.status_code}"
-            )
+            assert (
+                resp.status_code == 404
+            ), f"Expected 404 for bad snapshot, got {resp.status_code}"
             print(f"Nonexistent snapshot: 404 ✓")
         finally:
             _safe_cleanup(ws)
@@ -2572,25 +2796,29 @@ class TestSnapshotRollback:
             # Get the first snapshot (pre-first-commit = empty schedule).
             # After only one commit, there's exactly one snapshot. Use it.
             snaps = _get("/schedule/snapshots", {"workspace_id": ws})
-            assert snaps.get("count", 0) >= 1, "Expected at least 1 snapshot after commit"
+            assert (
+                snaps.get("count", 0) >= 1
+            ), "Expected at least 1 snapshot after commit"
             snap_id = snaps["snapshots"][0]["id"]
 
             # Rollback to the snapshot (which captures pre-commit = empty state)
-            rb = _post("/schedule/rollback", {"snapshot_id": snap_id, "workspace_id": ws})
+            rb = _post(
+                "/schedule/rollback", {"snapshot_id": snap_id, "workspace_id": ws}
+            )
             assert rb["success"], f"Rollback failed: {rb}"
 
             # Verify schedule is actually empty after rollback
             post_acqs = _horizon(ws)
-            assert len(post_acqs) == 0, (
-                f"Expected empty schedule after rollback, got {len(post_acqs)} acqs"
-            )
+            assert (
+                len(post_acqs) == 0
+            ), f"Expected empty schedule after rollback, got {len(post_acqs)} acqs"
 
             # Replan → should be FROM_SCRATCH (schedule is now empty)
             p2 = _plan(ws)
             ctx2 = p2.get("schedule_context", {})
-            assert p2["planning_mode"] == "from_scratch", (
-                f"After rollback to empty, expected from_scratch, got {p2['planning_mode']}"
-            )
+            assert (
+                p2["planning_mode"] == "from_scratch"
+            ), f"After rollback to empty, expected from_scratch, got {p2['planning_mode']}"
             assert ctx2.get("existing_acquisition_count", -1) == 0
             print(f"Post-rollback: from_scratch, existing=0 ✓")
         finally:
@@ -2623,8 +2851,7 @@ class TestBlockedIntervals:
             # Get committed acq times
             existing = _horizon(ws)
             committed_slots = [
-                (a["satellite_id"], a["start_time"], a["end_time"])
-                for a in existing
+                (a["satellite_id"], a["start_time"], a["end_time"]) for a in existing
             ]
             print(f"Committed {len(committed_slots)} time slots")
 
@@ -2655,9 +2882,9 @@ class TestBlockedIntervals:
                                 f"vs committed {cs}-{ce}"
                             )
 
-            assert overlaps == 0, (
-                f"Incremental items should not overlap committed slots! Found {overlaps}"
-            )
+            assert (
+                overlaps == 0
+            ), f"Incremental items should not overlap committed slots! Found {overlaps}"
             print(f"No overlaps between incremental and committed ✓")
         finally:
             _safe_cleanup(ws, TLE_SAT1, TARGETS_PHASE1)
@@ -2683,9 +2910,9 @@ class TestBlockedIntervals:
 
             now_dt = datetime.now(timezone.utc)
             past_items = [it for it in items if _parse_ts(it["start_time"]) < now_dt]
-            assert len(past_items) == 0, (
-                f"Found {len(past_items)} items starting in the past!"
-            )
+            assert (
+                len(past_items) == 0
+            ), f"Found {len(past_items)} items starting in the past!"
             print(f"All {len(items)} incremental items are future ✓")
         finally:
             _safe_cleanup(ws, TLE_SAT1, TARGETS_PHASE1)
@@ -2724,12 +2951,12 @@ class TestConflictResolution:
             # Call repair endpoint
             repair = _post("/schedule/repair", {"workspace_id": ws})
             assert repair["success"]
-            assert repair["fixed_count"] == 2, (
-                f"Expected 2 fixed, got {repair['fixed_count']}"
-            )
-            assert repair["flex_count"] == n1 - 2, (
-                f"Expected {n1-2} flex, got {repair['flex_count']}"
-            )
+            assert (
+                repair["fixed_count"] == 2
+            ), f"Expected 2 fixed, got {repair['fixed_count']}"
+            assert (
+                repair["flex_count"] == n1 - 2
+            ), f"Expected {n1-2} flex, got {repair['flex_count']}"
             print(
                 f"Repair: fixed={repair['fixed_count']}, "
                 f"flex={repair['flex_count']} ✓"
@@ -2761,8 +2988,12 @@ class TestConflictResolution:
 
             # Direct-commit conflicting (unlocked) acq at same time
             dc = _direct_commit_synthetic(
-                ws, existing["satellite_id"], "conflict_tgt",
-                overlap_start, overlap_end, force=True
+                ws,
+                existing["satellite_id"],
+                "conflict_tgt",
+                overlap_start,
+                overlap_end,
+                force=True,
             )
             conflict_acq_id = dc["acquisition_ids"][0]
             print(
@@ -2795,9 +3026,9 @@ class TestConflictResolution:
             print(f"Unlocked conflict dropped ✓")
 
             # The hard-locked one should be in kept
-            assert existing["id"] in kept, (
-                f"Hard-locked {existing['id']} should be kept, kept={kept}"
-            )
+            assert (
+                existing["id"] in kept
+            ), f"Hard-locked {existing['id']} should be kept, kept={kept}"
             print(f"Hard-locked acq preserved in repair ✓")
         finally:
             _safe_cleanup(ws, TLE_SAT1, TARGETS_PHASE1)
@@ -2816,8 +3047,12 @@ class TestConflictResolution:
             st = _state(ws)
             existing = st["acquisitions"][0]
             _direct_commit_synthetic(
-                ws, existing["satellite_id"], "overlap_tgt",
-                existing["start_time"], existing["end_time"], force=True
+                ws,
+                existing["satellite_id"],
+                "overlap_tgt",
+                existing["start_time"],
+                existing["end_time"],
+                force=True,
             )
 
             # Repair
@@ -2862,8 +3097,12 @@ class TestConflictResolution:
                 {"acquisition_ids": [existing["id"]], "lock_level": "hard"},
             )
             dc = _direct_commit_synthetic(
-                ws, existing["satellite_id"], "repair_commit_tgt",
-                existing["start_time"], existing["end_time"], force=True
+                ws,
+                existing["satellite_id"],
+                "repair_commit_tgt",
+                existing["start_time"],
+                existing["end_time"],
+                force=True,
             )
             unlocked_id = dc["acquisition_ids"][0]
 
@@ -2911,9 +3150,9 @@ class TestConflictResolution:
                         )
                 # Hard-locked should survive with non-failed state
                 assert existing["id"] in post_by_id
-                assert post_by_id[existing["id"]].get("state") != "failed", (
-                    "Hard-locked acq should not be marked as failed"
-                )
+                assert (
+                    post_by_id[existing["id"]].get("state") != "failed"
+                ), "Hard-locked acq should not be marked as failed"
                 print(f"Dropped acqs marked failed, hard-lock preserved ✓")
             else:
                 print(f"No drops to commit (repair found no conflicts to resolve)")
@@ -2966,15 +3205,15 @@ class TestStatePagination:
             # /state should cap at 100
             state = _state(ws)
             state_count = len(state.get("acquisitions", []))
-            assert state_count == 100, (
-                f"/state should return 100 max, got {state_count}"
-            )
+            assert (
+                state_count == 100
+            ), f"/state should return 100 max, got {state_count}"
 
             # /horizon should return all
             horizon_acqs = _horizon(ws, days=7)
-            assert len(horizon_acqs) >= total, (
-                f"/horizon should return all {total}, got {len(horizon_acqs)}"
-            )
+            assert (
+                len(horizon_acqs) >= total
+            ), f"/horizon should return all {total}, got {len(horizon_acqs)}"
             print(
                 f"/state={state_count} (truncated) vs "
                 f"/horizon={len(horizon_acqs)} (full) ✓"
@@ -3022,12 +3261,12 @@ class TestStatePagination:
                 f"Mode selection: existing_acquisition_count={existing}, "
                 f"mode={p3['planning_mode']}"
             )
-            assert existing >= total, (
-                f"Mode selection should see >={total} acqs, got {existing}"
-            )
-            assert p3["planning_mode"] != "from_scratch", (
-                "Should not be from_scratch with >100 existing acquisitions"
-            )
+            assert (
+                existing >= total
+            ), f"Mode selection should see >={total} acqs, got {existing}"
+            assert (
+                p3["planning_mode"] != "from_scratch"
+            ), "Should not be from_scratch with >100 existing acquisitions"
             print(f"Mode selection uses full count ({existing}) ✓")
         finally:
             _safe_cleanup(ws, TLE_SAT1, TARGETS_PHASE1)
@@ -3052,21 +3291,30 @@ class TestMasterScheduleEndpoint:
             _plan_commit(ws)
 
             now = datetime.now(timezone.utc)
-            resp = _get("/schedule/master", {
-                "workspace_id": ws,
-                "t_start": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "t_end": (now + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "zoom": "detail",
-                "limit": 100,
-            })
+            resp = _get(
+                "/schedule/master",
+                {
+                    "workspace_id": ws,
+                    "t_start": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "t_end": (now + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "zoom": "detail",
+                    "limit": 100,
+                },
+            )
             items = resp.get("items", [])
             assert len(items) > 0, "Master detail mode returned 0 items"
             first = items[0]
-            for field in ("id", "satellite_id", "target_id",
-                          "start_time", "lock_level", "state"):
-                assert field in first, (
-                    f"Master item missing required field '{field}': {list(first.keys())}"
-                )
+            for field in (
+                "id",
+                "satellite_id",
+                "target_id",
+                "start_time",
+                "lock_level",
+                "state",
+            ):
+                assert (
+                    field in first
+                ), f"Master item missing required field '{field}': {list(first.keys())}"
             print(f"Master detail: {len(items)} items, fields OK ✓")
         finally:
             _safe_cleanup(ws)
@@ -3079,12 +3327,15 @@ class TestMasterScheduleEndpoint:
             _plan_commit(ws)
 
             now = datetime.now(timezone.utc)
-            resp = _get("/schedule/master", {
-                "workspace_id": ws,
-                "t_start": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "t_end": (now + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "zoom": "aggregate",
-            })
+            resp = _get(
+                "/schedule/master",
+                {
+                    "workspace_id": ws,
+                    "t_start": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "t_end": (now + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "zoom": "aggregate",
+                },
+            )
             assert resp.get("success", False), f"Master aggregate failed: {resp}"
             print(f"Master aggregate: {resp.get('total_count', '?')} total ✓")
         finally:
@@ -3117,7 +3368,9 @@ class TestMasterScheduleEndpoint:
                 ids1 = {i["id"] for i in items1}
                 ids2 = {i["id"] for i in items2}
                 assert ids1.isdisjoint(ids2), f"Pages overlap: {ids1 & ids2}"
-                print(f"Pagination: page1={len(items1)}, page2={len(items2)}, no overlap ✓")
+                print(
+                    f"Pagination: page1={len(items1)}, page2={len(items2)}, no overlap ✓"
+                )
             else:
                 print(f"Only {len(items1)} items — pagination not testable")
         finally:
@@ -3139,26 +3392,22 @@ class TestHardLockCommitted:
             n = c["committed"]
             assert n > 0
 
-            unlocked = [a for a in _state(ws)["acquisitions"]
-                        if a["lock_level"] == "none"]
-            assert len(unlocked) == n, (
-                f"Expected all {n} acqs unlocked, got {len(unlocked)}"
-            )
+            unlocked = [
+                a for a in _state(ws)["acquisitions"] if a["lock_level"] == "none"
+            ]
+            assert (
+                len(unlocked) == n
+            ), f"Expected all {n} acqs unlocked, got {len(unlocked)}"
 
             resp = _post(
                 "/schedule/acquisitions/hard-lock-committed",
                 {"workspace_id": ws},
             )
             assert resp["success"]
-            assert resp["updated"] == n, (
-                f"Expected {n} updated, got {resp['updated']}"
-            )
+            assert resp["updated"] == n, f"Expected {n} updated, got {resp['updated']}"
 
-            hard = [a for a in _state(ws)["acquisitions"]
-                    if a["lock_level"] == "hard"]
-            assert len(hard) == n, (
-                f"Expected all {n} hard-locked, got {len(hard)}"
-            )
+            hard = [a for a in _state(ws)["acquisitions"] if a["lock_level"] == "hard"]
+            assert len(hard) == n, f"Expected all {n} hard-locked, got {len(hard)}"
             print(f"Hard-locked all {n} committed acquisitions ✓")
         finally:
             _safe_cleanup(ws)
@@ -3200,9 +3449,9 @@ class TestSingleDeleteHardLock:
                 params={"workspace_id": ws, "force": "true"},
                 timeout=15,
             )
-            assert resp2.status_code == 200, (
-                f"Force delete of hard-locked should succeed, got {resp2.status_code}"
-            )
+            assert (
+                resp2.status_code == 200
+            ), f"Force delete of hard-locked should succeed, got {resp2.status_code}"
             print(f"Hard-lock delete: 409 without force, 200 with force ✓")
         finally:
             _safe_cleanup(ws)
@@ -3227,8 +3476,12 @@ class TestRepairCommitProtections:
             existing = st["acquisitions"][0]
 
             dc = _direct_commit_synthetic(
-                ws, existing["satellite_id"], "rcp_tgt",
-                existing["start_time"], existing["end_time"], force=True
+                ws,
+                existing["satellite_id"],
+                "rcp_tgt",
+                existing["start_time"],
+                existing["end_time"],
+                force=True,
             )
 
             # Create a frozen acq (starts in 30 min)
@@ -3236,8 +3489,12 @@ class TestRepairCommitProtections:
             frozen_start = (now + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
             frozen_end = (now + timedelta(minutes=35)).strftime("%Y-%m-%dT%H:%M:%SZ")
             frozen_dc = _direct_commit_synthetic(
-                ws, "sat_ICEYE-X53", "frozen_rcp_tgt",
-                frozen_start, frozen_end, force=True
+                ws,
+                "sat_ICEYE-X53",
+                "frozen_rcp_tgt",
+                frozen_start,
+                frozen_end,
+                force=True,
             )
             frozen_id = frozen_dc["acquisition_ids"][0]
 
@@ -3260,9 +3517,9 @@ class TestRepairCommitProtections:
                 f"{resp.text[:300]}"
             )
             detail = resp.json().get("detail", {})
-            assert "freeze" in str(detail).lower() or "protection" in str(detail).lower(), (
-                f"Expected freeze/protection mention in error: {detail}"
-            )
+            assert (
+                "freeze" in str(detail).lower() or "protection" in str(detail).lower()
+            ), f"Expected freeze/protection mention in error: {detail}"
             print(f"Repair commit rejected frozen drop (400) ✓")
         finally:
             _safe_cleanup(ws, TLE_SAT1, TARGETS_PHASE1)
@@ -3280,8 +3537,12 @@ class TestRepairCommitProtections:
 
             existing = _state(ws2)["acquisitions"][0]
             _direct_commit_synthetic(
-                ws2, existing["satellite_id"], "xws_tgt",
-                existing["start_time"], existing["end_time"], force=True
+                ws2,
+                existing["satellite_id"],
+                "xws_tgt",
+                existing["start_time"],
+                existing["end_time"],
+                force=True,
             )
             repair = _post("/schedule/repair", {"workspace_id": ws2})
             plan_id = repair.get("plan_id")
@@ -3343,9 +3604,9 @@ class TestRollbackVsLocks:
             )
 
             post_acqs = _horizon(ws)
-            assert len(post_acqs) == 0, (
-                f"Expected empty schedule after rollback, got {len(post_acqs)}"
-            )
+            assert (
+                len(post_acqs) == 0
+            ), f"Expected empty schedule after rollback, got {len(post_acqs)}"
             print(
                 f"Rollback deleted {rb['deleted_current']} acqs "
                 f"(including {n} hard-locked) ✓"
@@ -3376,14 +3637,15 @@ class TestPartialCommit:
             # because the backend matches on plan_items.id, not opportunity_id
             opp_id = items[0]["opportunity_id"]
             resp = _commit(
-                plan["plan_id"], ws,
+                plan["plan_id"],
+                ws,
                 items_to_commit=[opp_id],
                 force=True,
             )
             committed = resp.get("committed", 0)
-            assert committed == 0, (
-                f"Expected 0 (opportunity_id ≠ plan_item.id), got {committed}"
-            )
+            assert (
+                committed == 0
+            ), f"Expected 0 (opportunity_id ≠ plan_item.id), got {committed}"
             print(
                 f"Partial commit with opportunity_id: {committed} "
                 f"(API doesn't expose plan_item IDs) ✓"
@@ -3403,9 +3665,9 @@ class TestPartialCommit:
 
             resp = _commit(plan["plan_id"], ws, force=True)
             committed = resp.get("committed", 0)
-            assert committed == n_items, (
-                f"Full commit should commit all {n_items} items, got {committed}"
-            )
+            assert (
+                committed == n_items
+            ), f"Full commit should commit all {n_items} items, got {committed}"
             print(f"Full commit: {committed}/{n_items} items ✓")
         finally:
             _safe_cleanup(ws)
@@ -3435,28 +3697,34 @@ class TestConflictFiltering:
             all_conflicts = all_resp.get("conflicts", [])
 
             # Filter by temporal_overlap
-            to_resp = _get("/schedule/conflicts", {
-                "workspace_id": ws,
-                "conflict_type": "temporal_overlap",
-                "include_resolved": True,
-            })
+            to_resp = _get(
+                "/schedule/conflicts",
+                {
+                    "workspace_id": ws,
+                    "conflict_type": "temporal_overlap",
+                    "include_resolved": True,
+                },
+            )
             to_conflicts = to_resp.get("conflicts", [])
             for c in to_conflicts:
-                assert c["type"] == "temporal_overlap", (
-                    f"Expected type=temporal_overlap, got {c['type']}"
-                )
+                assert (
+                    c["type"] == "temporal_overlap"
+                ), f"Expected type=temporal_overlap, got {c['type']}"
 
             # Filter by slew_infeasible
-            si_resp = _get("/schedule/conflicts", {
-                "workspace_id": ws,
-                "conflict_type": "slew_infeasible",
-                "include_resolved": True,
-            })
+            si_resp = _get(
+                "/schedule/conflicts",
+                {
+                    "workspace_id": ws,
+                    "conflict_type": "slew_infeasible",
+                    "include_resolved": True,
+                },
+            )
             si_conflicts = si_resp.get("conflicts", [])
             for c in si_conflicts:
-                assert c["type"] == "slew_infeasible", (
-                    f"Expected type=slew_infeasible, got {c['type']}"
-                )
+                assert (
+                    c["type"] == "slew_infeasible"
+                ), f"Expected type=slew_infeasible, got {c['type']}"
 
             # Union of filtered types should equal total
             assert len(to_conflicts) + len(si_conflicts) == len(all_conflicts), (
@@ -3485,22 +3753,25 @@ class TestConflictFiltering:
 
             total_filtered = 0
             for sev in ("error", "warning", "info"):
-                sev_resp = _get("/schedule/conflicts", {
-                    "workspace_id": ws,
-                    "severity": sev,
-                    "include_resolved": True,
-                })
+                sev_resp = _get(
+                    "/schedule/conflicts",
+                    {
+                        "workspace_id": ws,
+                        "severity": sev,
+                        "include_resolved": True,
+                    },
+                )
                 sev_conflicts = sev_resp.get("conflicts", [])
                 for c in sev_conflicts:
-                    assert c["severity"] == sev, (
-                        f"Expected severity={sev}, got {c['severity']}"
-                    )
+                    assert (
+                        c["severity"] == sev
+                    ), f"Expected severity={sev}, got {c['severity']}"
                 total_filtered += len(sev_conflicts)
                 print(f"  severity={sev}: {len(sev_conflicts)} conflicts")
 
-            assert total_filtered == len(all_conflicts), (
-                f"Severity sum {total_filtered} ≠ total {len(all_conflicts)}"
-            )
+            assert total_filtered == len(
+                all_conflicts
+            ), f"Severity sum {total_filtered} ≠ total {len(all_conflicts)}"
             print(f"Severity filter: {total_filtered} total ✓")
         finally:
             _safe_cleanup(ws, TLE_SAT1, TARGETS_PHASE1)
@@ -3513,21 +3784,27 @@ class TestConflictFiltering:
             _plan_commit(ws, force=True)
 
             # Get unresolved (default)
-            unresolved_resp = _get("/schedule/conflicts", {
-                "workspace_id": ws,
-                "include_resolved": False,
-            })
+            unresolved_resp = _get(
+                "/schedule/conflicts",
+                {
+                    "workspace_id": ws,
+                    "include_resolved": False,
+                },
+            )
             unresolved = unresolved_resp.get("conflicts", [])
             for c in unresolved:
-                assert c.get("resolved_at") is None, (
-                    f"Unresolved filter returned resolved conflict: {c['id']}"
-                )
+                assert (
+                    c.get("resolved_at") is None
+                ), f"Unresolved filter returned resolved conflict: {c['id']}"
 
             # Get all (including resolved)
-            all_resp = _get("/schedule/conflicts", {
-                "workspace_id": ws,
-                "include_resolved": True,
-            })
+            all_resp = _get(
+                "/schedule/conflicts",
+                {
+                    "workspace_id": ws,
+                    "include_resolved": True,
+                },
+            )
             all_conflicts = all_resp.get("conflicts", [])
 
             assert len(all_conflicts) >= len(unresolved), (
@@ -3553,9 +3830,9 @@ class TestConflictFiltering:
             summary = resp.get("summary", {})
 
             # Summary should exist
-            assert isinstance(summary, dict), (
-                f"Expected summary dict, got {type(summary)}"
-            )
+            assert isinstance(
+                summary, dict
+            ), f"Expected summary dict, got {type(summary)}"
 
             # Count severity distribution from actual conflicts
             actual_counts: Dict[str, int] = {}
@@ -3581,7 +3858,8 @@ class TestRecomputeConflictsFlag:
             assert plan["success"]
 
             resp = _commit(
-                plan["plan_id"], ws,
+                plan["plan_id"],
+                ws,
                 force=True,
                 recompute_conflicts=False,
             )
@@ -3590,9 +3868,9 @@ class TestRecomputeConflictsFlag:
                 f"Expected 0 conflicts_detected with recompute=False, "
                 f"got {resp.get('conflicts_detected')}"
             )
-            assert len(resp.get("conflict_ids", [])) == 0, (
-                "Expected no conflict_ids with recompute=False"
-            )
+            assert (
+                len(resp.get("conflict_ids", [])) == 0
+            ), "Expected no conflict_ids with recompute=False"
             print(
                 f"Committed {resp['committed']} with recompute=False: "
                 f"0 conflicts detected ✓"
@@ -3609,20 +3887,21 @@ class TestRecomputeConflictsFlag:
             assert plan["success"]
 
             resp = _commit(
-                plan["plan_id"], ws,
+                plan["plan_id"],
+                ws,
                 force=True,
                 recompute_conflicts=True,
             )
             assert resp["success"]
             cd = resp.get("conflicts_detected", -1)
-            assert isinstance(cd, int) and cd >= 0, (
-                f"Expected non-negative int for conflicts_detected, got {cd}"
-            )
+            assert (
+                isinstance(cd, int) and cd >= 0
+            ), f"Expected non-negative int for conflicts_detected, got {cd}"
             cids = resp.get("conflict_ids", [])
             assert isinstance(cids, list)
-            assert len(cids) == cd, (
-                f"conflicts_detected={cd} but conflict_ids has {len(cids)} items"
-            )
+            assert (
+                len(cids) == cd
+            ), f"conflicts_detected={cd} but conflict_ids has {len(cids)} items"
             print(
                 f"Committed {resp['committed']} with recompute=True: "
                 f"{cd} conflicts detected ✓"
@@ -3644,30 +3923,36 @@ class TestCommitHistoryPagination:
             # Repair + commit (only repair/commit writes audit logs)
             r1 = _post("/schedule/repair", {"workspace_id": ws})
             assert r1.get("success")
-            rc1 = _post("/schedule/repair/commit", {
-                "plan_id": r1["plan_id"],
-                "workspace_id": ws,
-                "force": True,
-            })
+            rc1 = _post(
+                "/schedule/repair/commit",
+                {
+                    "plan_id": r1["plan_id"],
+                    "workspace_id": ws,
+                    "force": True,
+                },
+            )
             assert rc1.get("success")
 
             # Second repair cycle
             r2 = _post("/schedule/repair", {"workspace_id": ws})
             assert r2.get("success")
-            rc2 = _post("/schedule/repair/commit", {
-                "plan_id": r2["plan_id"],
-                "workspace_id": ws,
-                "force": True,
-            })
+            rc2 = _post(
+                "/schedule/repair/commit",
+                {
+                    "plan_id": r2["plan_id"],
+                    "workspace_id": ws,
+                    "force": True,
+                },
+            )
             assert rc2.get("success")
 
             # Get commit history for this workspace
             hist = _get("/schedule/commit-history", {"workspace_id": ws})
             assert hist["success"]
             logs = hist["audit_logs"]
-            assert len(logs) >= 2, (
-                f"Expected ≥2 audit logs after 2 repair commits, got {len(logs)}"
-            )
+            assert (
+                len(logs) >= 2
+            ), f"Expected ≥2 audit logs after 2 repair commits, got {len(logs)}"
 
             # Verify audit log fields
             for log in logs:
@@ -3690,26 +3975,35 @@ class TestCommitHistoryPagination:
             r1 = _post("/schedule/repair", {"workspace_id": ws})
             assert r1.get("success")
             plan_id_1 = r1["plan_id"]
-            _post("/schedule/repair/commit", {
-                "plan_id": plan_id_1,
-                "workspace_id": ws,
-                "force": True,
-            })
+            _post(
+                "/schedule/repair/commit",
+                {
+                    "plan_id": plan_id_1,
+                    "workspace_id": ws,
+                    "force": True,
+                },
+            )
 
             r2 = _post("/schedule/repair", {"workspace_id": ws})
             assert r2.get("success")
             plan_id_2 = r2["plan_id"]
-            _post("/schedule/repair/commit", {
-                "plan_id": plan_id_2,
-                "workspace_id": ws,
-                "force": True,
-            })
+            _post(
+                "/schedule/repair/commit",
+                {
+                    "plan_id": plan_id_2,
+                    "workspace_id": ws,
+                    "force": True,
+                },
+            )
 
             # Filter by plan_id_1
-            hist1 = _get("/schedule/commit-history", {
-                "workspace_id": ws,
-                "plan_id": plan_id_1,
-            })
+            hist1 = _get(
+                "/schedule/commit-history",
+                {
+                    "workspace_id": ws,
+                    "plan_id": plan_id_1,
+                },
+            )
             for log in hist1["audit_logs"]:
                 assert log["plan_id"] == plan_id_1, (
                     f"plan_id filter returned wrong plan: "
@@ -3717,10 +4011,13 @@ class TestCommitHistoryPagination:
                 )
 
             # Filter by plan_id_2
-            hist2 = _get("/schedule/commit-history", {
-                "workspace_id": ws,
-                "plan_id": plan_id_2,
-            })
+            hist2 = _get(
+                "/schedule/commit-history",
+                {
+                    "workspace_id": ws,
+                    "plan_id": plan_id_2,
+                },
+            )
             for log in hist2["audit_logs"]:
                 assert log["plan_id"] == plan_id_2, (
                     f"plan_id filter returned wrong plan: "
@@ -3745,11 +4042,14 @@ class TestCommitHistoryPagination:
             for i in range(3):
                 r = _post("/schedule/repair", {"workspace_id": ws})
                 assert r.get("success"), f"Repair {i+1} failed"
-                _post("/schedule/repair/commit", {
-                    "plan_id": r["plan_id"],
-                    "workspace_id": ws,
-                    "force": True,
-                })
+                _post(
+                    "/schedule/repair/commit",
+                    {
+                        "plan_id": r["plan_id"],
+                        "workspace_id": ws,
+                        "force": True,
+                    },
+                )
 
             # Get all
             all_hist = _get("/schedule/commit-history", {"workspace_id": ws})
@@ -3757,23 +4057,33 @@ class TestCommitHistoryPagination:
             assert total >= 3, f"Expected ≥3 entries, got {total}"
 
             # Page 1 (limit=1, offset=0)
-            page1 = _get("/schedule/commit-history", {
-                "workspace_id": ws, "limit": 1, "offset": 0,
-            })
-            assert len(page1["audit_logs"]) == 1, (
-                f"Page 1 should have 1 entry, got {len(page1['audit_logs'])}"
+            page1 = _get(
+                "/schedule/commit-history",
+                {
+                    "workspace_id": ws,
+                    "limit": 1,
+                    "offset": 0,
+                },
             )
+            assert (
+                len(page1["audit_logs"]) == 1
+            ), f"Page 1 should have 1 entry, got {len(page1['audit_logs'])}"
 
             # Page 2 (limit=1, offset=1)
-            page2 = _get("/schedule/commit-history", {
-                "workspace_id": ws, "limit": 1, "offset": 1,
-            })
+            page2 = _get(
+                "/schedule/commit-history",
+                {
+                    "workspace_id": ws,
+                    "limit": 1,
+                    "offset": 1,
+                },
+            )
             assert len(page2["audit_logs"]) == 1
 
             # Pages should be different
-            assert page1["audit_logs"][0]["id"] != page2["audit_logs"][0]["id"], (
-                "Page 1 and page 2 returned same entry"
-            )
+            assert (
+                page1["audit_logs"][0]["id"] != page2["audit_logs"][0]["id"]
+            ), "Page 1 and page 2 returned same entry"
             print(f"Pagination: total={total}, pages verified ✓")
         finally:
             _safe_cleanup(ws, TLE_SAT1, TARGETS_PHASE1)
@@ -3797,12 +4107,12 @@ class TestRepairScopeVariants:
                 },
                 timeout=30,
             )
-            assert resp.status_code == 400, (
-                f"Expected 400 for invalid repair_scope, got {resp.status_code}"
-            )
-            assert "invalid" in resp.text.lower() or "repair_scope" in resp.text.lower(), (
-                f"Error message should mention repair_scope: {resp.text[:300]}"
-            )
+            assert (
+                resp.status_code == 400
+            ), f"Expected 400 for invalid repair_scope, got {resp.status_code}"
+            assert (
+                "invalid" in resp.text.lower() or "repair_scope" in resp.text.lower()
+            ), f"Error message should mention repair_scope: {resp.text[:300]}"
             print("Invalid repair_scope → 400 ✓")
         finally:
             _safe_cleanup(ws, TLE_SAT1, TARGETS_PHASE1)
@@ -3814,10 +4124,13 @@ class TestRepairScopeVariants:
             _seed(TLE_SAT1, TARGETS_PHASE1, days=3)
             _plan_commit(ws, force=True)
 
-            resp = _post("/schedule/repair", {
-                "workspace_id": ws,
-                "repair_scope": "workspace_horizon",
-            })
+            resp = _post(
+                "/schedule/repair",
+                {
+                    "workspace_id": ws,
+                    "repair_scope": "workspace_horizon",
+                },
+            )
             assert resp.get("success"), f"Repair failed: {resp.get('message')}"
             assert "plan_id" in resp, "Repair should return plan_id"
             print(f"workspace_horizon repair: {resp.get('message', 'ok')} ✓")
@@ -3836,14 +4149,17 @@ class TestRepairScopeVariants:
             assert len(acqs) > 0, "Need acquisitions for satellite_subset test"
             sat_id = acqs[0]["satellite_id"]
 
-            resp = _post("/schedule/repair", {
-                "workspace_id": ws,
-                "repair_scope": "satellite_subset",
-                "satellite_subset": [sat_id],
-            })
-            assert resp.get("success"), (
-                f"satellite_subset repair failed: {resp.get('message')}"
+            resp = _post(
+                "/schedule/repair",
+                {
+                    "workspace_id": ws,
+                    "repair_scope": "satellite_subset",
+                    "satellite_subset": [sat_id],
+                },
             )
+            assert resp.get(
+                "success"
+            ), f"satellite_subset repair failed: {resp.get('message')}"
             print(f"satellite_subset repair (sat={sat_id}): ok ✓")
         finally:
             _safe_cleanup(ws, TLE_SAT1, TARGETS_PHASE1)
@@ -3860,14 +4176,17 @@ class TestRepairScopeVariants:
             assert len(acqs) > 0, "Need acquisitions for target_subset test"
             tgt_id = acqs[0]["target_id"]
 
-            resp = _post("/schedule/repair", {
-                "workspace_id": ws,
-                "repair_scope": "target_subset",
-                "target_subset": [tgt_id],
-            })
-            assert resp.get("success"), (
-                f"target_subset repair failed: {resp.get('message')}"
+            resp = _post(
+                "/schedule/repair",
+                {
+                    "workspace_id": ws,
+                    "repair_scope": "target_subset",
+                    "target_subset": [tgt_id],
+                },
             )
+            assert resp.get(
+                "success"
+            ), f"target_subset repair failed: {resp.get('message')}"
             print(f"target_subset repair (target={tgt_id}): ok ✓")
         finally:
             _safe_cleanup(ws, TLE_SAT1, TARGETS_PHASE1)
@@ -3909,10 +4228,7 @@ class TestGlobalStateQuery:
             assert "message" in global_resp
             assert "state" in global_resp
 
-            print(
-                f"Global state: {len(global_acqs)} acqs "
-                f"(ws1={n1}, ws2={n2}) ✓"
-            )
+            print(f"Global state: {len(global_acqs)} acqs " f"(ws1={n1}, ws2={n2}) ✓")
         finally:
             _safe_cleanup(ws1, TLE_SAT1, TARGETS_PHASE1)
             _safe_cleanup(ws2)
@@ -3974,19 +4290,20 @@ class TestAutoEscalationSideEffects:
 
             # Run repair to trigger auto-escalation
             repair = _post("/schedule/repair", {"workspace_id": ws})
-            assert repair.get("success"), (
-                f"Repair failed: {repair.get('message')}"
-            )
+            assert repair.get("success"), f"Repair failed: {repair.get('message')}"
 
             # Commit repair (triggers auto_escalate_locks)
-            repair_commit = _post("/schedule/repair/commit", {
-                "plan_id": repair["plan_id"],
-                "workspace_id": ws,
-                "force": True,
-            })
-            assert repair_commit.get("success"), (
-                f"Repair commit failed: {repair_commit.get('message')}"
+            repair_commit = _post(
+                "/schedule/repair/commit",
+                {
+                    "plan_id": repair["plan_id"],
+                    "workspace_id": ws,
+                    "force": True,
+                },
             )
+            assert repair_commit.get(
+                "success"
+            ), f"Repair commit failed: {repair_commit.get('message')}"
 
             # Check post-commit lock levels
             post_state = _state(ws)
@@ -4032,12 +4349,12 @@ class TestInvalidObjectiveAndScope:
                 },
                 timeout=30,
             )
-            assert resp.status_code == 400, (
-                f"Expected 400 for invalid objective, got {resp.status_code}"
-            )
-            assert "objective" in resp.text.lower(), (
-                f"Error should mention objective: {resp.text[:300]}"
-            )
+            assert (
+                resp.status_code == 400
+            ), f"Expected 400 for invalid objective, got {resp.status_code}"
+            assert (
+                "objective" in resp.text.lower()
+            ), f"Error should mention objective: {resp.text[:300]}"
             print("Invalid objective → 400 ✓")
         finally:
             _safe_cleanup(ws, TLE_SAT1, TARGETS_PHASE1)
@@ -4049,13 +4366,16 @@ class TestInvalidObjectiveAndScope:
             _seed(TLE_SAT1, TARGETS_PHASE1, days=3)
             _plan_commit(ws, force=True)
 
-            resp = _post("/schedule/repair", {
-                "workspace_id": ws,
-                "objective": "minimize_changes",
-            })
-            assert resp.get("success"), (
-                f"minimize_changes repair failed: {resp.get('message')}"
+            resp = _post(
+                "/schedule/repair",
+                {
+                    "workspace_id": ws,
+                    "objective": "minimize_changes",
+                },
             )
+            assert resp.get(
+                "success"
+            ), f"minimize_changes repair failed: {resp.get('message')}"
             print("minimize_changes objective: ok ✓")
         finally:
             _safe_cleanup(ws, TLE_SAT1, TARGETS_PHASE1)

@@ -14,7 +14,7 @@
  * timeline contents or the backend data.
  */
 
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Satellite, Route, Crosshair, ChevronDown, ChevronUp, Shield } from 'lucide-react'
 import { type DataSource } from 'cesium'
 import { cn } from '../ui/utils'
@@ -136,7 +136,15 @@ export function ScheduleSatelliteLayers({ loadedDataSource = null }: ScheduleSat
   const focusedIsLocked =
     focusedAcquisitionId != null ? getLockLevel(focusedAcquisitionId) === 'hard' : false
 
-  const [expanded, setExpanded] = useState(true)
+  const [expanded, setExpanded] = useState(false)
+  const wasScheduleViewRef = useRef(false)
+
+  useEffect(() => {
+    if (activeLeftPanel === 'schedule' && !wasScheduleViewRef.current) {
+      setExpanded(false)
+    }
+    wasScheduleViewRef.current = activeLeftPanel === 'schedule'
+  }, [activeLeftPanel])
 
   if (activeLeftPanel !== 'schedule') return null
 

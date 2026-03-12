@@ -26,6 +26,7 @@ from backend.auto_mode_selection import (
     select_planning_mode,
 )
 from backend.schedule_persistence import ScheduleDB, get_schedule_db
+from backend.workspace_persistence import get_workspace_db
 
 logger = logging.getLogger(__name__)
 
@@ -150,8 +151,13 @@ async def get_schedule_state(
     db = get_schedule_db()
 
     # Get recent acquisitions and orders
-    acquisitions = db.list_acquisitions(workspace_id=workspace_id, limit=100)
-    orders_list = db.list_orders(workspace_id=workspace_id, limit=100)
+    acquisition_limit = 100 if workspace_id else 200
+    ancillary_limit = 100
+    acquisitions = db.list_acquisitions(
+        workspace_id=workspace_id,
+        limit=acquisition_limit,
+    )
+    orders_list = db.list_orders(workspace_id=workspace_id, limit=ancillary_limit)
 
     # Convert to summary models
     acq_summaries = [
@@ -196,16 +202,18 @@ async def get_schedule_state(
     conflict_summaries = []
     try:
         conflicts = db.list_conflicts(
-            workspace_id=workspace_id, resolved=False, limit=100
+            workspace_id=workspace_id,
+            resolved=False,
+            limit=ancillary_limit,
         )
         conflict_summaries = [
             ConflictSummary(
                 id=c.id,
                 type=c.type,
                 severity=c.severity,
-                acquisition_ids=json.loads(c.acquisition_ids_json)
-                if c.acquisition_ids_json
-                else [],
+                acquisition_ids=(
+                    json.loads(c.acquisition_ids_json) if c.acquisition_ids_json else []
+                ),
                 description=c.description,
             )
             for c in conflicts
@@ -1362,9 +1370,7 @@ async def commit_plan(request: CommitPlanRequest) -> CommitPlanResponse:
                 horizon_start=now,
                 horizon_end=now + timedelta(days=7),
             )
-            error_predicted = [
-                c for c in predicted if c.get("severity") == "error"
-            ]
+            error_predicted = [c for c in predicted if c.get("severity") == "error"]
             if error_predicted:
                 raise HTTPException(
                     status_code=409,
@@ -1457,10 +1463,28 @@ def _check_commit_conflicts(
     if not items:
         return conflicts
 
-    start_times = [item.start_time for item in items]
-    end_times = [item.end_time for item in items]
-    min_time = min(start_times)
-    max_time = max(end_times)
+    parsed_windows = []
+    for item in items:
+        try:
+            start_dt = dt.fromisoformat(item.start_time.replace("Z", "+00:00"))
+            end_dt = dt.fromisoformat(item.end_time.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            continue
+        parsed_windows.append((start_dt, end_dt))
+
+    if parsed_windows:
+        min_dt = min(start for start, _ in parsed_windows)
+        max_dt = max(end for _, end in parsed_windows)
+        if min_dt == max_dt:
+            min_dt = min_dt - timedelta(seconds=1)
+            max_dt = max_dt + timedelta(seconds=1)
+        min_time = min_dt.isoformat().replace("+00:00", "Z")
+        max_time = max_dt.isoformat().replace("+00:00", "Z")
+    else:
+        start_times = [item.start_time for item in items]
+        end_times = [item.end_time for item in items]
+        min_time = min(start_times)
+        max_time = max(end_times)
 
     # Get existing committed acquisitions in this time range
     existing = db.get_acquisitions_in_horizon(
@@ -1501,8 +1525,17 @@ def _check_commit_conflicts(
             except (ValueError, AttributeError):
                 continue
 
-            # Check for overlap: two intervals overlap if start1 < end2 AND start2 < end1
-            if new_start < exist_end and exist_start < new_end:
+            new_is_point = new_start == new_end
+            existing_is_point = exist_start == exist_end
+            if new_is_point and existing_is_point:
+                overlaps = new_start == exist_start
+            elif new_is_point:
+                overlaps = exist_start <= new_start <= exist_end
+            elif existing_is_point:
+                overlaps = new_start <= exist_start <= new_end
+            else:
+                overlaps = new_start < exist_end and exist_start < new_end
+            if overlaps:
                 conflicts.append(
                     f"{item.satellite_id}/{item.target_id} overlaps with "
                     f"existing {existing_acq.target_id} at {item.start_time[:19]}"
@@ -1521,7 +1554,17 @@ def _check_commit_conflicts(
                 e2 = dt.fromisoformat(items[j].end_time.replace("Z", "+00:00"))
             except (ValueError, AttributeError):
                 continue
-            if s1 < e2 and s2 < e1:
+            item1_is_point = s1 == e1
+            item2_is_point = s2 == e2
+            if item1_is_point and item2_is_point:
+                overlaps = s1 == s2
+            elif item1_is_point:
+                overlaps = s2 <= s1 <= e2
+            elif item2_is_point:
+                overlaps = s1 <= s2 <= e1
+            else:
+                overlaps = s1 < e2 and s2 < e1
+            if overlaps:
                 conflicts.append(
                     f"{items[i].satellite_id}/{items[i].target_id} overlaps with "
                     f"new {items[j].target_id} at {items[i].start_time[:19]} "
@@ -1939,73 +1982,102 @@ async def create_incremental_plan(
 
     # Get satellite agility from cached mission data (used for slew config)
     from backend.main import app as main_app
-    _mission_data = getattr(main_app.state, "current_mission_data", {}).get("mission_data", {})
+
+    _mission_data = getattr(main_app.state, "current_mission_data", {}).get(
+        "mission_data", {}
+    )
     _sat_agility = _mission_data.get("satellite_agility", request.max_roll_rate_dps)
-    _agility_source = "config" if "satellite_agility" in _mission_data else "request default"
-    logger.info(f"[Plan] Using satellite agility: {_sat_agility}°/s (from {_agility_source})")
+    _agility_source = (
+        "config" if "satellite_agility" in _mission_data else "request default"
+    )
+    logger.info(
+        f"[Plan] Using satellite agility: {_sat_agility}°/s (from {_agility_source})"
+    )
 
     # Blocked intervals context — loaded after auto-mode selection below
     context: Optional[IncrementalPlanningContext] = None
 
-    # Get opportunities from the planning store
-    # In a full implementation, opportunities would be passed via request or session
-    # For now, we return an empty plan if no opportunities are cached
     raw_opportunities: List[Dict[str, Any]] = []
 
-    # Try to get opportunities from the planning endpoint's cache if available
     try:
-        from backend.main import get_cached_opportunities
+        from datetime import datetime as _dt
 
-        raw_opportunities = get_cached_opportunities() or []
-    except (ImportError, AttributeError):
-        # No cached opportunities available - this is expected
-        pass
+        _cmd = getattr(main_app.state, "current_mission_data", {})
+        if _cmd and "passes" in _cmd:
+            passes = _cmd["passes"]
+            now_naive = now.replace(tzinfo=None)
+            for idx, p in enumerate(passes):
+                if isinstance(p, dict):
+                    sat = p["satellite_name"]
+                    tgt = p["target_name"]
+                    met = p.get("max_elevation_time")
+                    st = (
+                        _dt.fromisoformat(met)
+                        if met
+                        else _dt.fromisoformat(p["start_time"])
+                    )
+                    inc = p.get("incidence_angle_deg")
+                else:
+                    sat = p.satellite_name
+                    tgt = p.target_name
+                    st = getattr(p, "max_elevation_time", None) or p.start_time
+                    inc = getattr(p, "incidence_angle_deg", None)
+                if hasattr(st, "tzinfo") and st.tzinfo is not None:
+                    st = st.replace(tzinfo=None)
+                if st < now_naive:
+                    continue
+                raw_opportunities.append(
+                    {
+                        "id": f"{sat}_{tgt}_{idx}",
+                        "opportunity_id": f"{sat}_{tgt}_{idx}",
+                        "satellite_id": sat,
+                        "target_id": tgt,
+                        "start_time": (
+                            f"{st.isoformat()}Z"
+                            if hasattr(st, "isoformat")
+                            else str(st)
+                        ),
+                        "end_time": (
+                            f"{st.isoformat()}Z"
+                            if hasattr(st, "isoformat")
+                            else str(st)
+                        ),
+                        "roll_angle_deg": inc if inc is not None else 0.0,
+                        "pitch_angle_deg": 0.0,
+                        "value": 1.0,
+                    }
+                )
+            if raw_opportunities:
+                logger.info(
+                    f"[Incremental Plan] Loaded {len(raw_opportunities)} opportunities from current mission data"
+                )
+    except Exception as e:
+        logger.warning(
+            f"[Incremental Plan] Failed to build opportunities from mission data: {e}"
+        )
 
-    # Fallback: read from current_mission_data if opportunities_cache is empty
     if not raw_opportunities:
         try:
-            from datetime import datetime as _dt
+            from backend.main import get_cached_opportunities
 
-            from backend.main import app as main_app
+            raw_opportunities = get_cached_opportunities() or []
+        except (ImportError, AttributeError):
+            pass
 
-            _cmd = getattr(main_app.state, "current_mission_data", {})
-            if _cmd and "passes" in _cmd:
-                passes = _cmd["passes"]
-                for idx, p in enumerate(passes):
-                    if isinstance(p, dict):
-                        sat = p["satellite_name"]
-                        tgt = p["target_name"]
-                        st = _dt.fromisoformat(p["start_time"])
-                        et = _dt.fromisoformat(p["end_time"])
-                    else:
-                        sat = p.satellite_name
-                        tgt = p.target_name
-                        st = p.start_time
-                        et = p.end_time
-                    raw_opportunities.append(
-                        {
-                            "id": f"{sat}_{tgt}_{idx}",
-                            "opportunity_id": f"{sat}_{tgt}_{idx}",
-                            "satellite_id": sat,
-                            "target_id": tgt,
-                            "start_time": (
-                                st.isoformat() if hasattr(st, "isoformat") else str(st)
-                            ),
-                            "end_time": (
-                                et.isoformat() if hasattr(et, "isoformat") else str(et)
-                            ),
-                            "roll_angle_deg": 0.0,
-                            "pitch_angle_deg": 0.0,
-                            "value": 1.0,
-                        }
-                    )
-                logger.info(
-                    f"[Incremental Plan] Loaded {len(raw_opportunities)} opportunities from mission analysis fallback"
-                )
-        except Exception as e:
-            logger.warning(
-                f"[Incremental Plan] Failed to load mission data fallback: {e}"
+    if raw_opportunities:
+        deduped_opportunities: List[Dict[str, Any]] = []
+        seen_opportunity_keys: set[tuple[str, str, str]] = set()
+        for opp in raw_opportunities:
+            opp_key = (
+                opp.get("satellite_id", ""),
+                opp.get("target_id", ""),
+                opp.get("start_time", ""),
             )
+            if opp_key in seen_opportunity_keys:
+                continue
+            seen_opportunity_keys.add(opp_key)
+            deduped_opportunities.append(opp)
+        raw_opportunities = deduped_opportunities
 
     if not raw_opportunities:
         logger.info(
@@ -2023,22 +2095,75 @@ async def create_incremental_plan(
     _auto_workspace = request.workspace_id or "default"
     _existing_acqs_for_mode = []
     try:
-        _existing_acqs_for_mode = db.get_acquisitions_in_horizon(
-            start_time=horizon_start.isoformat(),
-            end_time=horizon_end.isoformat(),
-            workspace_id=_auto_workspace,
-        )
+        _existing_acqs_for_mode = db.get_acquisitions_by_lock_level(_auto_workspace)
     except Exception as e:
         logger.warning(f"[Auto Mode] Failed to query existing acquisitions: {e}")
 
-    _active_existing = [
-        a for a in _existing_acqs_for_mode
-        if a.state not in ("failed", "cancelled")
-    ]
-    _existing_target_ids = {a.target_id for a in _active_existing}
-    _current_target_ids = {
-        opp["target_id"] if isinstance(opp, dict) else getattr(opp, "target_id", "")
-        for opp in raw_opportunities
+    _active_existing = []
+    for acq in _existing_acqs_for_mode:
+        if acq.state in ("failed", "cancelled", "completed"):
+            continue
+        try:
+            _acq_end = datetime.fromisoformat(acq.end_time.replace("Z", "+00:00"))
+            if _acq_end.tzinfo is not None:
+                _acq_end = _acq_end.replace(tzinfo=None)
+            if _acq_end <= horizon_start:
+                continue
+        except ValueError:
+            pass
+        _active_existing.append(acq)
+
+    _current_target_ids = set()
+    for target in _mission_data.get("targets", []):
+        if isinstance(target, dict):
+            target_name = target.get("name", "")
+        else:
+            target_name = getattr(target, "name", "")
+        if target_name:
+            _current_target_ids.add(target_name)
+    if not _current_target_ids:
+        _current_target_ids = {
+            opp["target_id"] if isinstance(opp, dict) else getattr(opp, "target_id", "")
+            for opp in raw_opportunities
+            if (
+                opp["target_id"]
+                if isinstance(opp, dict)
+                else getattr(opp, "target_id", "")
+            )
+        }
+
+    _previous_target_ids = set()
+    if request.workspace_id:
+        try:
+            ws_db = get_workspace_db()
+            workspace = ws_db.get_workspace(request.workspace_id, include_czml=False)
+            if workspace:
+                _planning_state = workspace.planning_state or {}
+                _stored_target_ids = _planning_state.get("current_target_ids", [])
+                if isinstance(_stored_target_ids, list):
+                    _previous_target_ids = {
+                        str(target_id) for target_id in _stored_target_ids if target_id
+                    }
+                if not _previous_target_ids and workspace.scenario_config:
+                    _previous_target_ids = {
+                        str(target.get("name", ""))
+                        for target in workspace.scenario_config.get("targets", [])
+                        if target.get("name")
+                    }
+                if not _previous_target_ids and workspace.analysis_state:
+                    _analysis_targets = workspace.analysis_state.get(
+                        "mission_data", {}
+                    ).get("targets", [])
+                    _previous_target_ids = {
+                        str(target.get("name", ""))
+                        for target in _analysis_targets
+                        if isinstance(target, dict) and target.get("name")
+                    }
+        except Exception as e:
+            logger.warning(f"[Auto Mode] Failed to load workspace target baseline: {e}")
+
+    _existing_target_ids = _previous_target_ids or {
+        a.target_id for a in _active_existing
     }
 
     # Query active conflict count for this workspace
@@ -2127,37 +2252,34 @@ async def create_incremental_plan(
     # previous pass is already in the past.
     # =========================================================================
     dedup_skipped: List[Dict[str, Any]] = []
-    _dedup_workspace = request.workspace_id or "default"
-    if raw_opportunities and _dedup_workspace:
-        future_sat_targets: set = set()
-        try:
-            existing_acqs = db.get_acquisitions_in_horizon(
-                start_time=now.isoformat(),
-                end_time=horizon_end.isoformat(),
-                workspace_id=_dedup_workspace,
+    future_sat_targets = {(acq.satellite_id, acq.target_id) for acq in _active_existing}
+    if raw_opportunities and future_sat_targets:
+        filtered_opps: List[Dict[str, Any]] = []
+        for opp in raw_opportunities:
+            opp_sat = (
+                opp.get("satellite_id", "")
+                if isinstance(opp, dict)
+                else getattr(opp, "satellite_id", "")
             )
-            for acq in existing_acqs:
-                # Only block on active future acquisitions
-                if acq.state not in ("failed", "cancelled"):
-                    future_sat_targets.add((acq.satellite_id, acq.target_id))
-        except Exception as e:
-            logger.warning(f"[Plan] Dedup query failed (proceeding without): {e}")
-
-        if future_sat_targets:
-            filtered_opps: List[Dict[str, Any]] = []
-            for opp in raw_opportunities:
-                opp_sat = opp.get("satellite_id", "") if isinstance(opp, dict) else getattr(opp, "satellite_id", "")
-                opp_tgt = opp.get("target_id", "") if isinstance(opp, dict) else getattr(opp, "target_id", "")
-                if (opp_sat, opp_tgt) in future_sat_targets:
-                    dedup_skipped.append(opp if isinstance(opp, dict) else {"satellite_id": opp_sat, "target_id": opp_tgt})
-                else:
-                    filtered_opps.append(opp)
-            logger.info(
-                f"[Plan] Target dedup: {len(dedup_skipped)} opportunities skipped "
-                f"({len(future_sat_targets)} sat-target pairs already scheduled), "
-                f"{len(filtered_opps)} remaining"
+            opp_tgt = (
+                opp.get("target_id", "")
+                if isinstance(opp, dict)
+                else getattr(opp, "target_id", "")
             )
-            raw_opportunities = filtered_opps
+            if (opp_sat, opp_tgt) in future_sat_targets:
+                dedup_skipped.append(
+                    opp
+                    if isinstance(opp, dict)
+                    else {"satellite_id": opp_sat, "target_id": opp_tgt}
+                )
+            else:
+                filtered_opps.append(opp)
+        logger.info(
+            f"[Plan] Target dedup: {len(dedup_skipped)} opportunities skipped "
+            f"({len(future_sat_targets)} sat-target pairs already scheduled), "
+            f"{len(filtered_opps)} remaining"
+        )
+        raw_opportunities = filtered_opps
 
     # Filter opportunities based on blocked intervals (incremental mode)
     feasible_opportunities: List[Any] = raw_opportunities
@@ -2176,10 +2298,17 @@ async def create_incremental_plan(
 
         # Get satellite agility from cached mission data
         from backend.main import app as main_app
-        _mission_data = getattr(main_app.state, "current_mission_data", {}).get("mission_data", {})
+
+        _mission_data = getattr(main_app.state, "current_mission_data", {}).get(
+            "mission_data", {}
+        )
         _sat_agility = _mission_data.get("satellite_agility", request.max_roll_rate_dps)
-        _agility_source = "config" if "satellite_agility" in _mission_data else "request default"
-        logger.info(f"[Incremental Plan] Using satellite agility: {_sat_agility}\u00b0/s (from {_agility_source})")
+        _agility_source = (
+            "config" if "satellite_agility" in _mission_data else "request default"
+        )
+        logger.info(
+            f"[Incremental Plan] Using satellite agility: {_sat_agility}\u00b0/s (from {_agility_source})"
+        )
 
         slew_config = SlewConfig(
             roll_slew_rate_deg_per_sec=_sat_agility,
@@ -2243,10 +2372,35 @@ async def create_incremental_plan(
         workspace_id=effective_workspace_id,
     )
 
+    if request.workspace_id:
+        try:
+            ws_db = get_workspace_db()
+            workspace = ws_db.get_workspace(request.workspace_id, include_czml=False)
+            if workspace:
+                planning_state = dict(workspace.planning_state or {})
+                planning_state.update(
+                    {
+                        "current_target_ids": sorted(_current_target_ids),
+                        "last_planning_mode": planning_mode.value,
+                        "last_plan_id": plan.id,
+                        "last_schedule_context": {
+                            "existing_acquisition_count": len(_active_existing),
+                            "new_target_count": mode_result.new_target_count,
+                            "conflict_count": _conflict_count,
+                        },
+                    }
+                )
+                ws_db.update_workspace(
+                    workspace_id=request.workspace_id,
+                    planning_state=planning_state,
+                )
+        except Exception as e:
+            logger.warning(f"[Plan] Failed to persist workspace planning state: {e}")
+
     # Create plan items from feasible opportunities
     new_items: List[PlanItemPreviewResponse] = []
 
-    for opp in feasible_opportunities[:100]:  # Limit for safety
+    for opp in feasible_opportunities[:100]:
         # Extract fields from opportunity (handle both dict and object)
         opp_item: Any = opp  # Allow type checker to see both branches
         if isinstance(opp_item, dict):
@@ -2593,6 +2747,36 @@ async def create_repair_plan(
 
     # Parse horizon times
     now = datetime.now(timezone.utc)
+    workspace_horizon_start: Optional[datetime] = None
+    workspace_horizon_end: Optional[datetime] = None
+
+    if request.workspace_id and (not request.horizon_from or not request.horizon_to):
+        workspace_acquisitions = db.list_acquisitions(
+            workspace_id=request.workspace_id,
+            include_tentative=request.include_tentative,
+            limit=2000,
+        )
+        acquisition_starts: List[datetime] = []
+        acquisition_ends: List[datetime] = []
+        for acquisition in workspace_acquisitions:
+            try:
+                start_dt = datetime.fromisoformat(
+                    acquisition.start_time.replace("Z", "+00:00")
+                )
+                end_dt = datetime.fromisoformat(
+                    acquisition.end_time.replace("Z", "+00:00")
+                )
+            except ValueError:
+                continue
+            if start_dt.tzinfo is not None:
+                start_dt = start_dt.replace(tzinfo=None)
+            if end_dt.tzinfo is not None:
+                end_dt = end_dt.replace(tzinfo=None)
+            acquisition_starts.append(start_dt)
+            acquisition_ends.append(end_dt)
+        if acquisition_starts and acquisition_ends:
+            workspace_horizon_start = min(acquisition_starts) - timedelta(minutes=5)
+            workspace_horizon_end = max(acquisition_ends) + timedelta(minutes=5)
 
     if request.horizon_from:
         try:
@@ -2605,6 +2789,8 @@ async def create_repair_plan(
             raise HTTPException(
                 status_code=400, detail=f"Invalid horizon_from: {request.horizon_from}"
             )
+    elif workspace_horizon_start is not None:
+        horizon_start = workspace_horizon_start
     else:
         horizon_start = now.replace(tzinfo=None)
 
@@ -2619,6 +2805,8 @@ async def create_repair_plan(
             raise HTTPException(
                 status_code=400, detail=f"Invalid horizon_to: {request.horizon_to}"
             )
+    elif workspace_horizon_end is not None:
+        horizon_end = workspace_horizon_end
     else:
         horizon_end = (now + timedelta(days=7)).replace(tzinfo=None)
 

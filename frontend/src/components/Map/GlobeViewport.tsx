@@ -202,6 +202,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
       debugEnabled: s.debugEnabled,
     })),
   )
+  const selectTargetInStore = useSelectionStore((s) => s.selectTarget)
 
   // PR-UI-003: Lock Mode — click-to-lock on map
   const isLockMode = useLockModeStore((s) => s.isLockMode)
@@ -244,69 +245,112 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
       setHidePreview(false)
     }
 
-    // Remove old preview entities
-    previewEntitiesRef.current.forEach((id) => {
-      const entity = viewer.entities.getById(id)
-      if (entity) {
-        viewer.entities.remove(entity)
-      }
-    })
-    previewEntitiesRef.current = []
-
     // Don't show preview if CZML is loaded
-    if (hasCzmlData) return
+    if (hasCzmlData) {
+      viewer.entities.suspendEvents()
+      try {
+        previewEntitiesRef.current.forEach((id) => {
+          const entity = viewer.entities.getById(id)
+          if (entity) {
+            viewer.entities.remove(entity)
+          }
+        })
+        previewEntitiesRef.current = []
+      } finally {
+        viewer.entities.resumeEvents()
+      }
+
+      viewer.scene.requestRender()
+      const rafId = requestAnimationFrame(() => viewer.scene?.requestRender())
+      return () => cancelAnimationFrame(rafId)
+    }
 
     // Add preview target entities - matching backend CZML format
-    previewTargets.forEach((target, index) => {
-      const entityId = `preview_target_${index}`
+    const nextEntityIds: string[] = []
+    const nextEntityIdSet = new Set<string>()
 
-      // Calculate darker stroke color (same as backend)
-      const hexColor = (target.color || '#3B82F6').replace('#', '')
-      const r = Math.max(0, parseInt(hexColor.substring(0, 2), 16) - 40)
-      const g = Math.max(0, parseInt(hexColor.substring(2, 4), 16) - 40)
-      const b = Math.max(0, parseInt(hexColor.substring(4, 6), 16) - 40)
-      const strokeColor = `#${r.toString(16).padStart(2, '0')}${g
-        .toString(16)
-        .padStart(2, '0')}${b.toString(16).padStart(2, '0')}`
+    viewer.entities.suspendEvents()
+    try {
+      previewTargets.forEach((target, index) => {
+        const entityId = `preview_target_${index}`
+        nextEntityIds.push(entityId)
+        nextEntityIdSet.add(entityId)
 
-      // Create SVG billboard matching backend exactly
-      const svgPin = `<svg width="32" height="40" viewBox="0 0 32 40" xmlns="http://www.w3.org/2000/svg">
-        <path d="M16 0C9.4 0 4 5.4 4 12c0 8 12 28 12 28s12-20 12-28c0-6.6-5.4-12-12-12z"
-              fill="${target.color || '#3B82F6'}" stroke="${strokeColor}" stroke-width="2"/>
-        <circle cx="16" cy="12" r="5" fill="#FFF"/>
-      </svg>`
-      const svgBase64 = 'data:image/svg+xml;base64,' + btoa(svgPin)
+        // Calculate darker stroke color (same as backend)
+        const hexColor = (target.color || '#3B82F6').replace('#', '')
+        const r = Math.max(0, parseInt(hexColor.substring(0, 2), 16) - 40)
+        const g = Math.max(0, parseInt(hexColor.substring(2, 4), 16) - 40)
+        const b = Math.max(0, parseInt(hexColor.substring(4, 6), 16) - 40)
+        const strokeColor = `#${r.toString(16).padStart(2, '0')}${g
+          .toString(16)
+          .padStart(2, '0')}${b.toString(16).padStart(2, '0')}`
 
-      viewer.entities.add({
-        id: entityId,
-        name: target.name,
-        position: Cartesian3.fromDegrees(target.longitude, target.latitude, 0),
-        billboard: {
-          image: svgBase64,
-          width: 20,
-          height: 25,
-          verticalOrigin: VerticalOrigin.BOTTOM,
-          // No heightReference, no scaleByDistance - matches backend CZML
-        },
-        label: {
-          text: target.name,
-          font: '14px sans-serif',
-          fillColor: Color.WHITE,
-          outlineColor: Color.BLACK,
-          outlineWidth: 3,
-          style: LabelStyle.FILL_AND_OUTLINE,
-          horizontalOrigin: HorizontalOrigin.CENTER,
-          verticalOrigin: VerticalOrigin.BOTTOM,
-          pixelOffset: new Cartesian2(0, -30),
-          // No scaleByDistance - matches backend CZML
-        },
+        // Create SVG billboard matching backend exactly
+        const svgPin = `<svg width="32" height="40" viewBox="0 0 32 40" xmlns="http://www.w3.org/2000/svg">
+          <path d="M16 0C9.4 0 4 5.4 4 12c0 8 12 28 12 28s12-20 12-28c0-6.6-5.4-12-12-12z"
+                fill="${target.color || '#3B82F6'}" stroke="${strokeColor}" stroke-width="2"/>
+          <circle cx="16" cy="12" r="5" fill="#FFF"/>
+        </svg>`
+        const svgBase64 = 'data:image/svg+xml;base64,' + btoa(svgPin)
+        const position = Cartesian3.fromDegrees(target.longitude, target.latitude, 0)
+        const existingEntity = viewer.entities.getById(entityId)
+
+        if (existingEntity?.billboard && existingEntity.label) {
+          existingEntity.name = target.name
+          existingEntity.position = position as never
+          existingEntity.billboard.image = svgBase64 as never
+          existingEntity.label.text = target.name as never
+          return
+        }
+
+        if (existingEntity) {
+          viewer.entities.remove(existingEntity)
+        }
+
+        viewer.entities.add({
+          id: entityId,
+          name: target.name,
+          position,
+          billboard: {
+            image: svgBase64,
+            width: 20,
+            height: 25,
+            verticalOrigin: VerticalOrigin.BOTTOM,
+            // No heightReference, no scaleByDistance - matches backend CZML
+          },
+          label: {
+            text: target.name,
+            font: '14px sans-serif',
+            fillColor: Color.WHITE,
+            outlineColor: Color.BLACK,
+            outlineWidth: 3,
+            style: LabelStyle.FILL_AND_OUTLINE,
+            horizontalOrigin: HorizontalOrigin.CENTER,
+            verticalOrigin: VerticalOrigin.BOTTOM,
+            pixelOffset: new Cartesian2(0, -30),
+            // No scaleByDistance - matches backend CZML
+          },
+        })
       })
 
-      previewEntitiesRef.current.push(entityId)
-    })
+      previewEntitiesRef.current.forEach((id) => {
+        if (!nextEntityIdSet.has(id)) {
+          const entity = viewer.entities.getById(id)
+          if (entity) {
+            viewer.entities.remove(entity)
+          }
+        }
+      })
+
+      previewEntitiesRef.current = nextEntityIds
+    } finally {
+      viewer.entities.resumeEvents()
+    }
 
     // Force render
     viewer.scene.requestRender()
+    const rafId = requestAnimationFrame(() => viewer.scene?.requestRender())
+    return () => cancelAnimationFrame(rafId)
   }, [previewTargets, czmlData, hidePreview, setHidePreview])
 
   // Planning-mode target coloring
@@ -631,7 +675,6 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
   const focusedStartTime = useScheduleStore((s) => s.focusedStartTime)
   const focusedAcquisitionId = useScheduleStore((s) => s.focusedAcquisitionId)
   const focusedTargetId = useScheduleStore((s) => s.focusedTargetId)
-  const selectTargetInStore = useSelectionStore((s) => s.selectTarget)
   useEffect(() => {
     if (!focusedAcquisitionId) return
     const viewer = viewerRef.current?.cesiumElement
@@ -666,7 +709,6 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
       if (schedEntity) {
         viewer.selectedEntity = schedEntity
       }
-      selectTargetInStore(focusedTargetId, 'timeline')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusedAcquisitionId, focusedTargetCoords, focusedStartTime, focusedTargetId])

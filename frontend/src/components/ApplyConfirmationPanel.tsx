@@ -12,7 +12,8 @@ import {
   Minus,
 } from 'lucide-react'
 import type { CommitPreview, ConflictInfo } from './ConflictWarningModal'
-import type { RepairDiff } from '../api/scheduleApi'
+import type { AddedEntry, DroppedEntry, MovedEntry, RepairDiff } from '../api/scheduleApi'
+import { cn } from './ui/utils'
 
 interface TargetStatistics {
   total_targets: number
@@ -59,6 +60,30 @@ interface ApplyConfirmationPanelProps {
   onBack: () => void
   scheduleData?: ScheduleDataForApply
 }
+
+type AssignmentRow =
+  | {
+      kind: 'added'
+      key: string
+      targetId: string
+      satelliteId: string
+      primaryTime: string
+    }
+  | {
+      kind: 'moved'
+      key: string
+      targetId: string
+      satelliteId: string
+      primaryTime: string
+      secondaryTime: string
+    }
+  | {
+      kind: 'removed'
+      key: string
+      targetId: string
+      satelliteId: string
+      primaryTime: string
+    }
 
 // Format ISO time: "Feb 20, 14:22 UTC"
 function fmtTime(iso: string): string {
@@ -116,6 +141,38 @@ export default function ApplyConfirmationPanel({
   const rd = scheduleData?.repairDiff
   const totalScheduled = scheduleData?.schedule.length ?? preview.new_items_count
   const isRepairMode = !!rd
+  const assignmentRows: AssignmentRow[] = isRepairMode
+    ? [
+        ...((rd?.change_log?.added ?? []).map((entry: AddedEntry) => ({
+          kind: 'added' as const,
+          key: `added-${entry.acquisition_id}`,
+          targetId: entry.target_id,
+          satelliteId: entry.satellite_id,
+          primaryTime: entry.start,
+        })) satisfies AssignmentRow[]),
+        ...((rd?.change_log?.moved ?? []).map((entry: MovedEntry) => ({
+          kind: 'moved' as const,
+          key: `moved-${entry.acquisition_id}`,
+          targetId: entry.target_id,
+          satelliteId: entry.satellite_id,
+          primaryTime: entry.from_start,
+          secondaryTime: entry.to_start,
+        })) satisfies AssignmentRow[]),
+        ...((rd?.change_log?.dropped ?? []).map((entry: DroppedEntry) => ({
+          kind: 'removed' as const,
+          key: `removed-${entry.acquisition_id}`,
+          targetId: entry.target_id,
+          satelliteId: entry.satellite_id,
+          primaryTime: entry.start,
+        })) satisfies AssignmentRow[]),
+      ]
+    : (ps?.target_acquisitions ?? []).map((acq, idx) => ({
+        kind: 'added' as const,
+        key: `planned-${acq.target_id}-${acq.satellite_id}-${acq.start_time}-${idx}`,
+        targetId: acq.target_id,
+        satelliteId: acq.satellite_id,
+        primaryTime: acq.start_time,
+      }))
 
   return (
     <div className="flex flex-col h-full">
@@ -215,61 +272,59 @@ export default function ApplyConfirmationPanel({
         ) : null}
 
         {/* ── Target Assignments ── */}
-        {ps && ps.target_acquisitions.length > 0 && (
+        {assignmentRows.length > 0 && (
           <div className="space-y-1.5">
             <h4 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
               Target Assignments
             </h4>
             <div className="space-y-1 max-h-[400px] overflow-y-auto">
-              {ps.target_acquisitions.map((acq, idx) => (
+              {assignmentRows.map((row) => (
                 <div
-                  key={idx}
-                  className={`flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs transition-colors ${
-                    acq.action === 'added'
-                      ? 'bg-blue-900/15 border border-blue-800/25'
-                      : 'bg-gray-800/40 border border-gray-700/20'
-                  }`}
+                  key={row.key}
+                  className={cn(
+                    'flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs transition-colors',
+                    row.kind === 'added' && 'bg-blue-900/15 border border-blue-800/25',
+                    row.kind === 'moved' && 'bg-orange-900/10 border border-orange-800/25',
+                    row.kind === 'removed' && 'bg-red-900/10 border border-red-800/20 opacity-75',
+                  )}
                 >
-                  <MapPin
-                    className={`w-3 h-3 shrink-0 ${acq.action === 'added' ? 'text-blue-400' : 'text-gray-500'}`}
-                  />
-                  <span className="text-gray-200 font-medium truncate flex-1">{acq.target_id}</span>
+                  {row.kind === 'added' ? (
+                    <MapPin className="w-3 h-3 shrink-0 text-blue-400" />
+                  ) : row.kind === 'moved' ? (
+                    <Clock className="w-3 h-3 shrink-0 text-orange-400" />
+                  ) : (
+                    <Minus className="w-3 h-3 shrink-0 text-red-400" />
+                  )}
+                  <span
+                    className={cn(
+                      'font-medium truncate flex-1',
+                      row.kind === 'removed' ? 'text-red-300/80 line-through' : 'text-gray-200',
+                    )}
+                  >
+                    {row.targetId}
+                  </span>
                   <span className="text-gray-500 text-[10px] shrink-0">
                     <Satellite className="w-3 h-3 inline mr-0.5 -mt-px" />
-                    {acq.satellite_id}
+                    {row.satelliteId}
                   </span>
                   <span className="text-gray-600 text-[10px] shrink-0">
-                    {fmtShort(acq.start_time)}
+                    {row.kind === 'moved'
+                      ? `${fmtShort(row.primaryTime)} → ${fmtShort(row.secondaryTime)}`
+                      : fmtShort(row.primaryTime)}
                   </span>
-                  {acq.action === 'added' ? (
+                  {row.kind === 'added' ? (
                     <span className="text-[9px] font-semibold text-blue-400 bg-blue-900/40 px-1.5 py-0.5 rounded shrink-0">
                       NEW
                     </span>
+                  ) : row.kind === 'moved' ? (
+                    <span className="text-[9px] font-semibold text-orange-300 bg-orange-900/40 px-1.5 py-0.5 rounded shrink-0">
+                      MOVED
+                    </span>
                   ) : (
-                    <span className="text-[9px] text-gray-600 shrink-0">kept</span>
+                    <span className="text-[9px] font-semibold text-red-400 bg-red-900/40 px-1.5 py-0.5 rounded shrink-0">
+                      REMOVED
+                    </span>
                   )}
-                </div>
-              ))}
-              {/* Dropped acquisitions */}
-              {rd?.change_log?.dropped?.map((entry, idx) => (
-                <div
-                  key={`dropped-${idx}`}
-                  className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs bg-red-900/10 border border-red-800/20 opacity-75"
-                >
-                  <Minus className="w-3 h-3 shrink-0 text-red-400" />
-                  <span className="text-red-300/80 font-medium truncate flex-1 line-through">
-                    {entry.target_id}
-                  </span>
-                  <span className="text-gray-500 text-[10px] shrink-0">
-                    <Satellite className="w-3 h-3 inline mr-0.5 -mt-px" />
-                    {entry.satellite_id}
-                  </span>
-                  <span className="text-gray-600 text-[10px] shrink-0">
-                    {fmtShort(entry.start)}
-                  </span>
-                  <span className="text-[9px] font-semibold text-red-400 bg-red-900/40 px-1.5 py-0.5 rounded shrink-0">
-                    DROPPED
-                  </span>
                 </div>
               ))}
             </div>

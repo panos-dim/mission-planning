@@ -166,9 +166,30 @@ class ConflictDetector:
                 continue
 
             # Check for overlap
-            overlap_seconds = (end1 - start2).total_seconds()
+            acq1_is_point = self._parse_time(acq1.start_time) == end1
+            acq2_is_point = self._parse_time(acq2.end_time) == start2
+            start1 = self._parse_time(acq1.start_time)
+            end2 = self._parse_time(acq2.end_time)
+            if acq1_is_point and acq2_is_point:
+                overlaps = start1 is not None and start1 == start2
+                overlap_seconds = 0.0
+            elif acq1_is_point:
+                point_time = start1
+                overlaps = (
+                    point_time is not None
+                    and end2 is not None
+                    and start2 <= point_time <= end2
+                )
+                overlap_seconds = 0.0 if overlaps else (end1 - start2).total_seconds()
+            elif acq2_is_point:
+                point_time = start2
+                overlaps = start1 is not None and start1 <= point_time <= end1
+                overlap_seconds = 0.0 if overlaps else (end1 - start2).total_seconds()
+            else:
+                overlap_seconds = (end1 - start2).total_seconds()
+                overlaps = overlap_seconds > self.config.overlap_threshold_s
 
-            if overlap_seconds > self.config.overlap_threshold_s:
+            if overlaps:
                 conflict = DetectedConflict(
                     type="temporal_overlap",
                     severity="error",
