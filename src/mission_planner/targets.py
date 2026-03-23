@@ -68,18 +68,22 @@ class GroundTarget:
                     )
                 else:
                     self.sensor_fov_half_angle_deg = 30.0  # SAR default
-                logger.info(
-                    f"GroundTarget '{self.name}': No sensor_fov_half_angle_deg specified. "
-                    f"Using default {self.sensor_fov_half_angle_deg}° for {imaging_type} {self.mission_type} mission."
+                logger.debug(
+                    "GroundTarget '%s': default sensor_fov_half_angle_deg=%s° for %s %s mission",
+                    self.name,
+                    self.sensor_fov_half_angle_deg,
+                    imaging_type,
+                    self.mission_type,
                 )
 
         # Set max_spacecraft_roll default if not specified
         if self.max_spacecraft_roll is None:
             if self.mission_type == "imaging":
                 self.max_spacecraft_roll = 45.0  # Standard agile satellite
-                logger.info(
-                    f"GroundTarget '{self.name}': No max_spacecraft_roll specified. "
-                    f"Using default {self.max_spacecraft_roll}° for visibility analysis."
+                logger.debug(
+                    "GroundTarget '%s': default max_spacecraft_roll=%s° for visibility analysis",
+                    self.name,
+                    self.max_spacecraft_roll,
                 )
 
     def _validate_sensor_fov(self) -> None:
@@ -192,7 +196,7 @@ class TargetManager:
             targets: Optional list of initial targets
         """
         self.targets: List[GroundTarget] = targets or []
-        logger.info(f"Initialized TargetManager with {len(self.targets)} targets")
+        logger.debug("Initialized TargetManager with %d targets", len(self.targets))
 
     def add_target(self, target: GroundTarget) -> None:
         """

@@ -409,14 +409,18 @@ class VisibilityCalculator:
             self.ADAPTIVE_STEP_GROW_FACTOR = 1.2
             self.ADAPTIVE_MAX_REFINEMENT_ITERS = 30
 
-            logger.info(
-                f"Adaptive steps: initial={self.ADAPTIVE_INITIAL_STEP_SECONDS:.1f}s, "
-                f"max={self.ADAPTIVE_MAX_STEP_SECONDS:.1f}s (period={orbital_period_seconds:.0f}s)"
+            logger.debug(
+                "Adaptive steps: initial=%.1fs max=%.1fs (period=%.0fs)",
+                self.ADAPTIVE_INITIAL_STEP_SECONDS,
+                self.ADAPTIVE_MAX_STEP_SECONDS,
+                orbital_period_seconds,
             )
 
         method = "adaptive" if use_adaptive else "fixed-step"
-        logger.info(
-            f"Initialized VisibilityCalculator for {satellite.satellite_name} (method: {method})"
+        logger.debug(
+            "Initialized VisibilityCalculator for %s (method: %s)",
+            satellite.satellite_name,
+            method,
         )
 
     def _get_location(self, target: GroundTarget) -> Location:
@@ -1484,8 +1488,9 @@ class VisibilityCalculator:
         Returns:
             All passes (no filtering applied)
         """
-        logger.info(
-            f"Imaging passes: {len(passes)} total (no separation filtering - using satellite agility)"
+        logger.debug(
+            "Imaging passes: %d total (no separation filtering - using satellite agility)",
+            len(passes),
         )
         return passes
 
@@ -1519,8 +1524,11 @@ class VisibilityCalculator:
         current_time = start_time
         time_step = timedelta(seconds=time_step_seconds)
 
-        logger.info(
-            f"Processing imaging opportunities for {target.name} from {start_time} to {end_time}"
+        logger.debug(
+            "Processing imaging opportunities for %s from %s to %s",
+            target.name,
+            start_time,
+            end_time,
         )
 
         # Find all imaging opportunities
@@ -1562,8 +1570,9 @@ class VisibilityCalculator:
                 current_time += time_step
                 continue
 
-        logger.info(
-            f"Found {len(all_potential_opportunities)} potential imaging opportunities"
+        logger.debug(
+            "Found %d potential imaging opportunities",
+            len(all_potential_opportunities),
         )
 
         # Store all opportunities for visualization (we'll need this later)
@@ -1598,8 +1607,13 @@ class VisibilityCalculator:
                 imaging_window_end = max(opp["time"] for opp in filtered_opportunities)
 
                 # DEBUG: Log window calculation
-                logger.info(
-                    f"TARGET {target.name}: best_opp time={best_opp['time']}, window=[{imaging_window_start} to {imaging_window_end}], in_window={imaging_window_start <= best_opp['time'] <= imaging_window_end}"
+                logger.debug(
+                    "Target %s: best_opp=%s window=[%s to %s] in_window=%s",
+                    target.name,
+                    best_opp["time"],
+                    imaging_window_start,
+                    imaging_window_end,
+                    imaging_window_start <= best_opp["time"] <= imaging_window_end,
                 )
 
                 # Convert off-nadir angle to STK format (from local horizontal)
@@ -1654,8 +1668,9 @@ class VisibilityCalculator:
                 )
                 filtered_passes.append(pass_details)
 
-        logger.info(
-            f"After separation filtering: {len(filtered_passes)} imaging opportunities"
+        logger.debug(
+            "After separation filtering: %d imaging opportunities",
+            len(filtered_passes),
         )
         return filtered_passes
 
@@ -1925,8 +1940,11 @@ class VisibilityCalculator:
         Returns:
             List of PassDetails objects
         """
-        logger.info(
-            f"Finding passes for {target.name} from {start_time} to {end_time} (adaptive)"
+        logger.debug(
+            "Finding passes for %s from %s to %s (adaptive)",
+            target.name,
+            start_time,
+            end_time,
         )
 
         # Find visibility windows using adaptive algorithm
@@ -2071,8 +2089,9 @@ class VisibilityCalculator:
                     current_time += timedelta(seconds=sample_step)
                     continue
 
-        logger.info(
-            f"Found {len(all_potential_opportunities)} potential imaging opportunities (adaptive)"
+        logger.debug(
+            "Found %d potential imaging opportunities (adaptive)",
+            len(all_potential_opportunities),
         )
 
         # Store for visualization
@@ -2102,8 +2121,13 @@ class VisibilityCalculator:
                 imaging_window_end = max(opp["time"] for opp in filtered_opportunities)
 
                 # DEBUG: Log window calculation
-                logger.info(
-                    f"TARGET {target.name} (adaptive): best_opp time={best_opp['time']}, window=[{imaging_window_start} to {imaging_window_end}], in_window={imaging_window_start <= best_opp['time'] <= imaging_window_end}"
+                logger.debug(
+                    "Target %s (adaptive): best_opp=%s window=[%s to %s] in_window=%s",
+                    target.name,
+                    best_opp["time"],
+                    imaging_window_start,
+                    imaging_window_end,
+                    imaging_window_start <= best_opp["time"] <= imaging_window_end,
                 )
 
                 # Convert off-nadir angle to STK format (from local horizontal)
@@ -2155,8 +2179,9 @@ class VisibilityCalculator:
                 pass_details._imaging_window = pass_opportunities
                 filtered_passes.append(pass_details)
 
-        logger.info(
-            f"After separation filtering: {len(filtered_passes)} imaging opportunities (adaptive)"
+        logger.debug(
+            "After separation filtering: %d imaging opportunities (adaptive)",
+            len(filtered_passes),
         )
         return filtered_passes
 

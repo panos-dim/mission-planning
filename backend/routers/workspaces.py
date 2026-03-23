@@ -23,8 +23,21 @@ from pydantic import BaseModel, Field
 from backend.config_resolver import get_config_hash, get_config_snapshot
 from backend.schedule_persistence import get_schedule_db
 from backend.workspace_persistence import get_workspace_db
+from mission_planner.utils import update_log_context
 
 logger = logging.getLogger(__name__)
+
+
+def _bind_workspace_log_context(
+    workspace_id: Optional[str] = None,
+    **extra: Any,
+) -> None:
+    """Attach workspace-scoped context to the current request logs."""
+    context: Dict[str, Any] = dict(extra)
+    if workspace_id:
+        context["workspace_id"] = workspace_id
+    if context:
+        update_log_context(**context)
 
 
 def _migrate_orders_state_to_v2(
@@ -275,6 +288,7 @@ async def create_workspace(request: WorkspaceCreateRequest) -> Dict[str, Any]:
             time_window_start=request.time_window_start,
             time_window_end=request.time_window_end,
         )
+        _bind_workspace_log_context(workspace_id=workspace_id)
 
         workspace = db.get_workspace(workspace_id, include_czml=False)
         if not workspace:
@@ -332,6 +346,7 @@ async def get_workspace(workspace_id: str, include_czml: bool = True) -> Dict[st
     Returns complete workspace data including state blobs.
     Also triggers migration of legacy orders_state to v2 tables if needed.
     """
+    _bind_workspace_log_context(workspace_id=workspace_id)
     try:
         db = get_workspace_db()
 
@@ -377,6 +392,7 @@ async def update_workspace(
 
     Partial updates supported - only provided fields are updated.
     """
+    _bind_workspace_log_context(workspace_id=workspace_id)
     try:
         db = get_workspace_db()
 
@@ -426,6 +442,7 @@ async def delete_workspace(workspace_id: str) -> Dict[str, Any]:
 
     Permanently removes the workspace and all associated data.
     """
+    _bind_workspace_log_context(workspace_id=workspace_id)
     try:
         db = get_workspace_db()
 
@@ -453,6 +470,7 @@ async def export_workspace(workspace_id: str) -> Dict[str, Any]:
 
     Returns complete workspace data for backup/transfer.
     """
+    _bind_workspace_log_context(workspace_id=workspace_id)
     try:
         db = get_workspace_db()
 
@@ -484,6 +502,7 @@ async def import_workspace(request: WorkspaceImportRequest) -> Dict[str, Any]:
         db = get_workspace_db()
 
         workspace_id = db.import_workspace(data=request.data, new_name=request.new_name)
+        _bind_workspace_log_context(workspace_id=workspace_id)
 
         workspace = db.get_workspace(workspace_id, include_czml=False)
 
@@ -665,6 +684,7 @@ async def save_current_mission(request: SaveCurrentRequest) -> Dict[str, Any]:
             time_window_start=mission_data.get("start_time"),
             time_window_end=mission_data.get("end_time"),
         )
+        _bind_workspace_log_context(workspace_id=workspace_id)
 
         workspace = db.get_workspace(workspace_id, include_czml=False)
 

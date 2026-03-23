@@ -615,25 +615,6 @@ export interface PlanningConfig {
   algorithms: string[]
 }
 
-// Legacy Order type (for backward compatibility)
-export interface LegacyOrder {
-  id: string
-  opportunity_id: string
-  satellite_id: string
-  target_id: string
-  start_time: string
-  end_time: string
-  order_type: 'imaging' | 'communication' | 'tracking'
-  priority: number
-  status: 'pending' | 'scheduled' | 'executing' | 'completed' | 'failed'
-  created_at: string
-  updated_at: string
-  metadata?: Record<string, unknown>
-}
-
-// Alias for backward compatibility
-export type Order = LegacyOrder
-
 // New Order type for accepted algorithm schedules
 export interface AcceptedOrder {
   order_id: string

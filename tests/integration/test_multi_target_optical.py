@@ -16,8 +16,24 @@ from datetime import datetime
 from typing import Dict, Any
 
 BASE_URL = "http://localhost:8000"
+API = f"{BASE_URL}/api/v1"
 
 pytestmark = pytest.mark.requires_server  # All tests in this module require server
+
+
+def _assert_successful_analysis(response: requests.Response, label: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    assert response.status_code == 200, (
+        f"{label} failed with {response.status_code}: {response.text}"
+    )
+    data = response.json()
+    assert data.get("success") is True, f"{label} reported failure: {data}"
+    payload = data.get("data", {})
+    assert isinstance(payload, dict), f"{label} returned invalid data payload: {data}"
+    mission_data = payload.get("mission_data", {})
+    assert isinstance(
+        mission_data, dict
+    ), f"{label} returned invalid mission payload: {payload}"
+    return data, mission_data
 
 
 def test_multi_target_optical():
@@ -102,51 +118,45 @@ def test_multi_target_optical():
 
     print("\n🚀 Making API request with optical imaging (default 1° FOV)...")
     try:
-        response = requests.post(f"{BASE_URL}/api/mission/analyze", json=payload_optical, timeout=60)
+        response = requests.post(f"{API}/mission/analyze", json=payload_optical, timeout=60)
+        data, mission_data = _assert_successful_analysis(response, "Optical imaging analysis")
 
-        if response.status_code == 200:
-            data = response.json()
-            mission_data = data.get('data', {}).get('mission_data', {})
+        print(f"\n✅ Response Status: {response.status_code} OK")
+        print(f"\n📊 Mission Results:")
+        print(f"   Total passes found: {mission_data.get('total_passes', 0)}")
+        print(f"   Duration: {mission_data.get('duration_hours', 0):.1f} hours ({mission_data.get('duration_hours', 0)/24:.1f} days)")
+        print(f"   Targets processed: {len(mission_data.get('targets', []))}")
+        assert len(mission_data.get("targets", [])) == len(targets)
 
-            print(f"\n✅ Response Status: {response.status_code} OK")
-            print(f"\n📊 Mission Results:")
-            print(f"   Total passes found: {mission_data.get('total_passes', 0)}")
-            print(f"   Duration: {mission_data.get('duration_hours', 0):.1f} hours ({mission_data.get('duration_hours', 0)/24:.1f} days)")
-            print(f"   Targets processed: {len(mission_data.get('targets', []))}")
+        # Show per-target breakdown
+        passes = mission_data.get('passes', [])
+        if passes:
+            print(f"\n📋 Pass Distribution by Target:")
+            target_counts = {}
+            for p in passes:
+                target_name = p.get('target', 'Unknown')
+                target_counts[target_name] = target_counts.get(target_name, 0) + 1
 
-            # Show per-target breakdown
-            passes = mission_data.get('passes', [])
-            if passes:
-                print(f"\n📋 Pass Distribution by Target:")
-                target_counts = {}
-                for p in passes:
-                    target_name = p.get('target', 'Unknown')
-                    target_counts[target_name] = target_counts.get(target_name, 0) + 1
+            for target_name, count in sorted(target_counts.items(), key=lambda x: -x[1]):
+                print(f"   {target_name:20s}: {count} passes")
 
-                for target_name, count in sorted(target_counts.items(), key=lambda x: -x[1]):
-                    print(f"   {target_name:20s}: {count} passes")
-
-                # Show first few passes
-                print(f"\n🎯 First 3 Imaging Opportunities:")
-                for i, p in enumerate(passes[:3], 1):
-                    print(f"   {i}. {p.get('target', 'Unknown'):20s} | {p.get('start_time', 'N/A')[:19]} | Elev: {p.get('max_elevation', 0):.1f}°")
-            else:
-                print(f"\n⚠️  No imaging opportunities found")
-                print(f"   This is expected with narrow 1° FOV - satellite must pass almost directly overhead")
-
-            # Check CZML generation
-            czml_data = data.get('data', {}).get('czml', [])
-            print(f"\n🗺️  CZML Visualization:")
-            print(f"   Packets generated: {len(czml_data)}")
-            print(f"   Includes sensor footprint: {any('footprint' in str(p.get('id', '')) for p in czml_data)}")
-
+            # Show first few passes
+            print(f"\n🎯 First 3 Imaging Opportunities:")
+            for i, p in enumerate(passes[:3], 1):
+                print(f"   {i}. {p.get('target', 'Unknown'):20s} | {p.get('start_time', 'N/A')[:19]} | Elev: {p.get('max_elevation', 0):.1f}°")
         else:
-            print(f"\n❌ Error: Status {response.status_code}")
-            print(f"   Response: {response.text[:200]}")
+            print(f"\n⚠️  No imaging opportunities found")
+            print(f"   This is expected with narrow 1° FOV - satellite must pass almost directly overhead")
+
+        # Check CZML generation
+        czml_data = data.get('data', {}).get('czml_data', [])
+        print(f"\n🗺️  CZML Visualization:")
+        print(f"   Packets generated: {len(czml_data)}")
+        print(f"   Includes sensor footprint: {any('footprint' in str(p.get('id', '')) for p in czml_data)}")
 
     except Exception as e:
         print(f"\n❌ Exception: {e}")
-        return False
+        raise
 
     print("\n" + "="*90)
     print("TEST 2: Communication Mission (Comparison)")
@@ -163,30 +173,28 @@ def test_multi_target_optical():
 
     print("\n🚀 Making API request with communication mission (for comparison)...")
     try:
-        response = requests.post(f"{BASE_URL}/api/mission/analyze", json=payload_comm, timeout=60)
+        response = requests.post(f"{API}/mission/analyze", json=payload_comm, timeout=60)
+        _, mission_data = _assert_successful_analysis(response, "Communication mission analysis")
 
-        if response.status_code == 200:
-            data = response.json()
-            mission_data = data.get('data', {}).get('mission_data', {})
+        print(f"\n✅ Response Status: {response.status_code} OK")
+        print(f"\n📊 Mission Results:")
+        print(f"   Total passes found: {mission_data.get('total_passes', 0)}")
+        print(f"   Duration: {mission_data.get('duration_hours', 0):.1f} hours ({mission_data.get('duration_hours', 0)/24:.1f} days)")
 
-            print(f"\n✅ Response Status: {response.status_code} OK")
-            print(f"\n📊 Mission Results:")
-            print(f"   Total passes found: {mission_data.get('total_passes', 0)}")
-            print(f"   Duration: {mission_data.get('duration_hours', 0):.1f} hours ({mission_data.get('duration_hours', 0)/24:.1f} days)")
+        passes = mission_data.get('passes', [])
+        if passes:
+            print(f"\n📋 Pass Distribution by Target:")
+            target_counts = {}
+            for p in passes:
+                target_name = p.get('target', 'Unknown')
+                target_counts[target_name] = target_counts.get(target_name, 0) + 1
 
-            passes = mission_data.get('passes', [])
-            if passes:
-                print(f"\n📋 Pass Distribution by Target:")
-                target_counts = {}
-                for p in passes:
-                    target_name = p.get('target', 'Unknown')
-                    target_counts[target_name] = target_counts.get(target_name, 0) + 1
-
-                for target_name, count in sorted(target_counts.items(), key=lambda x: -x[1]):
-                    print(f"   {target_name:20s}: {count} passes")
+            for target_name, count in sorted(target_counts.items(), key=lambda x: -x[1]):
+                print(f"   {target_name:20s}: {count} passes")
 
     except Exception as e:
         print(f"\n❌ Exception: {e}")
+        raise
 
     print("\n" + "="*90)
     print("TEST 3: Wide FOV Optical (5° for comparison)")
@@ -205,38 +213,37 @@ def test_multi_target_optical():
 
     print("\n🚀 Making API request with 5° FOV (medium-resolution optical)...")
     try:
-        response = requests.post(f"{BASE_URL}/api/mission/analyze", json=payload_wide, timeout=60)
+        response = requests.post(f"{API}/mission/analyze", json=payload_wide, timeout=60)
+        _, mission_data = _assert_successful_analysis(response, "Wide-FOV optical analysis")
 
-        if response.status_code == 200:
-            data = response.json()
-            mission_data = data.get('data', {}).get('mission_data', {})
+        print(f"\n✅ Response Status: {response.status_code} OK")
+        print(f"\n📊 Mission Results:")
+        print(f"   Total passes found: {mission_data.get('total_passes', 0)}")
+        print(f"   Targets: {len(mission_data.get('targets', []))}")
+        assert len(mission_data.get("targets", [])) == len(payload_wide["targets"])
 
-            print(f"\n✅ Response Status: {response.status_code} OK")
-            print(f"\n📊 Mission Results:")
-            print(f"   Total passes found: {mission_data.get('total_passes', 0)}")
-            print(f"   Targets: {len(mission_data.get('targets', []))}")
+        passes = mission_data.get('passes', [])
+        if passes:
+            print(f"\n📋 Pass Distribution:")
+            target_counts = {}
+            for p in passes:
+                target_name = p.get('target', 'Unknown')
+                target_counts[target_name] = target_counts.get(target_name, 0) + 1
 
-            passes = mission_data.get('passes', [])
-            if passes:
-                print(f"\n📋 Pass Distribution:")
-                target_counts = {}
-                for p in passes:
-                    target_name = p.get('target', 'Unknown')
-                    target_counts[target_name] = target_counts.get(target_name, 0) + 1
+            for target_name, count in sorted(target_counts.items(), key=lambda x: -x[1]):
+                print(f"   {target_name:20s}: {count} passes")
 
-                for target_name, count in sorted(target_counts.items(), key=lambda x: -x[1]):
-                    print(f"   {target_name:20s}: {count} passes")
-
-            # Calculate expected swath width
-            import math
-            swath_5deg = 2 * 600 * math.tan(math.radians(5.0))
-            swath_1deg = 2 * 600 * math.tan(math.radians(1.0))
-            print(f"\n📐 FOV Comparison at 600km altitude:")
-            print(f"   1° FOV: ~{swath_1deg:.1f} km swath (high-res, restrictive)")
-            print(f"   5° FOV: ~{swath_5deg:.1f} km swath (medium-res, more opportunities)")
+        # Calculate expected swath width
+        import math
+        swath_5deg = 2 * 600 * math.tan(math.radians(5.0))
+        swath_1deg = 2 * 600 * math.tan(math.radians(1.0))
+        print(f"\n📐 FOV Comparison at 600km altitude:")
+        print(f"   1° FOV: ~{swath_1deg:.1f} km swath (high-res, restrictive)")
+        print(f"   5° FOV: ~{swath_5deg:.1f} km swath (medium-res, more opportunities)")
 
     except Exception as e:
         print(f"\n❌ Exception: {e}")
+        raise
 
     print("\n" + "="*90)
     print("SUMMARY & VALIDATION")
@@ -246,7 +253,7 @@ def test_multi_target_optical():
 ✅ Backend Validation Results:
 
 1. **API Endpoints Working**
-   - POST /api/mission/analyze responding correctly
+   - POST /api/v1/mission/analyze responding correctly
    - Multiple targets processed successfully
    - imaging_type parameter accepted
 
@@ -285,13 +292,10 @@ def test_multi_target_optical():
 """)
 
     print("="*90)
-    return True
-
 if __name__ == "__main__":
     print("\n🔬 Starting Multi-Target Optical Imaging Backend Validation...\n")
-    success = test_multi_target_optical()
-
-    if success:
+    try:
+        test_multi_target_optical()
         print("\n✅ All tests completed successfully!")
-    else:
+    except Exception:
         print("\n❌ Some tests failed - check output above")

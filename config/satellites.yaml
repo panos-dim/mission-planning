@@ -207,6 +207,27 @@ satellites:
 - active: true
   capabilities:
   - imaging
+  created_at: '2026-03-13T05:37:00+00:00'
+  description: Airbus Pleiades Neo optical Earth observation satellite
+  id: pleiades-neo-3
+  imaging_parameters:
+    resolution_m: 0.3
+    swath_width_km: 14
+  imaging_type: optical
+  line1: 1 48268U 21034A   26071.95185216 -.00000209  00000+0 -20012-4 0  9992
+  line2: 2 48268  97.8927 148.0992 0001274  93.6542 266.4817 14.81670227263405
+  name: PLEIADES NEO 3
+  orbital_characteristics:
+    altitude_km: 620
+    inclination_deg: 97.9
+    period_minutes: 97.2
+  sar_mode: stripmap
+  satellite_agility: 1.0
+  sensor_fov_half_angle_deg: 0.65
+  tle_updated_at: '2026-03-13T05:37:00+00:00'
+- active: true
+  capabilities:
+  - imaging
   - sar
   created_at: '2025-12-18T06:00:00Z'
   description: ICEYE SAR satellite for all-weather imaging (2025 launch)

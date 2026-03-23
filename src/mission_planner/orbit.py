@@ -50,7 +50,7 @@ class SatelliteOrbit:
                 predictor_lines = tle_lines
             
             self.predictor = get_predictor_from_tle_lines(predictor_lines)
-            logger.info(f"Successfully loaded orbit for satellite: {satellite_name}")
+            logger.debug("Successfully loaded orbit for satellite: %s", satellite_name)
         except Exception as e:
             logger.error(f"Failed to initialize satellite orbit: {e}")
             raise ValueError(f"Invalid TLE data for satellite {satellite_name}: {e}")

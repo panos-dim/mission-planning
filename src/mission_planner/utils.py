@@ -5,10 +5,13 @@ This module provides common utility functions used throughout
 the mission planning tool.
 """
 
+import contextvars
 import logging
+import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Union
+from typing import Dict, Mapping, Optional, Union
 
 import requests
 
@@ -16,6 +19,212 @@ logger = logging.getLogger(__name__)
 
 # Earth mean radius in km (WGS-84 volumetric mean)
 EARTH_RADIUS_KM = 6371.0
+DEFAULT_NOISY_LOGGERS = {
+    "httpcore": "WARNING",
+    "urllib3": "WARNING",
+    "uvicorn.access": "WARNING",
+}
+_EMPTY_LOG_CONTEXT: Dict[str, str] = {}
+_LOG_CONTEXT: contextvars.ContextVar[Dict[str, str]] = contextvars.ContextVar(
+    "mission_planner_log_context",
+    default=_EMPTY_LOG_CONTEXT,
+)
+_LOG_CONTEXT_ALIASES = {
+    "request_id": "req",
+    "workspace_id": "ws",
+    "run_id": "run",
+    "plan_id": "plan",
+    "order_id": "order",
+    "snapshot_id": "snap",
+}
+
+
+def get_log_context() -> Dict[str, str]:
+    """Get the current structured log context."""
+    return dict(_LOG_CONTEXT.get())
+
+
+def _normalize_log_context(context: Mapping[str, object]) -> Dict[str, str]:
+    """Normalize context values into compact strings."""
+    normalized: Dict[str, str] = {}
+    for key, value in context.items():
+        if value is None:
+            continue
+        rendered = str(value).strip()
+        if rendered:
+            normalized[key] = rendered
+    return normalized
+
+
+def set_log_context(**context: object) -> contextvars.Token[Dict[str, str]]:
+    """Replace the current log context and return a reset token."""
+    return _LOG_CONTEXT.set(_normalize_log_context(context))
+
+
+def update_log_context(**context: object) -> None:
+    """Merge values into the current log context."""
+    merged = _LOG_CONTEXT.get()
+    if merged is _EMPTY_LOG_CONTEXT:
+        merged = {}
+        _LOG_CONTEXT.set(merged)
+    for key, value in context.items():
+        if value is None:
+            merged.pop(key, None)
+            continue
+        rendered = str(value).strip()
+        if rendered:
+            merged[key] = rendered
+        else:
+            merged.pop(key, None)
+
+
+def reset_log_context(token: contextvars.Token[Dict[str, str]]) -> None:
+    """Reset the current log context using a token from set_log_context()."""
+    _LOG_CONTEXT.reset(token)
+
+
+def clear_log_context() -> None:
+    """Clear the current log context."""
+    current = _LOG_CONTEXT.get()
+    if current is _EMPTY_LOG_CONTEXT:
+        return
+    current.clear()
+
+
+def _format_log_context(context: Mapping[str, str]) -> str:
+    """Render structured log context as a compact suffix."""
+    if not context:
+        return ""
+
+    ordered_keys = list(_LOG_CONTEXT_ALIASES)
+    ordered_keys.extend(sorted(key for key in context if key not in _LOG_CONTEXT_ALIASES))
+
+    parts = []
+    for key in ordered_keys:
+        value = context.get(key)
+        if not value:
+            continue
+        label = _LOG_CONTEXT_ALIASES.get(key, key)
+        parts.append(f"{label}={value}")
+
+    return f" [{' '.join(parts)}]" if parts else ""
+
+
+class _LogContextFilter(logging.Filter):
+    """Attach request-scoped context to log records."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        context = get_log_context()
+        record.request_id = context.get("request_id", "")
+        record.log_context = _format_log_context(context)
+        return True
+
+
+class _RepeatedMessageFilter(logging.Filter):
+    """Suppress identical bursts of log messages to reduce noise."""
+
+    def __init__(self, window_seconds: float = 5.0, burst_limit: int = 3) -> None:
+        super().__init__()
+        self.window_seconds = max(float(window_seconds), 0.0)
+        self.burst_limit = max(int(burst_limit), 1)
+        self._state: Dict[tuple[str, int, str], Dict[str, float]] = {}
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if self.window_seconds <= 0:
+            return True
+
+        message = record.getMessage()
+        key = (
+            record.name,
+            record.levelno,
+            message,
+            _format_log_context(get_log_context()),
+        )
+        now = time.monotonic()
+        state = self._state.get(key)
+
+        if state is None or now - state["first_seen"] > self.window_seconds:
+            suppressed = int(state["suppressed"]) if state is not None else 0
+            self._state[key] = {
+                "first_seen": now,
+                "allowed": 1,
+                "suppressed": 0,
+            }
+            if len(self._state) > 512:
+                self._prune(now)
+            if suppressed:
+                record.msg = "%s [suppressed %d similar messages in %.0fs]"
+                record.args = (message, suppressed, self.window_seconds)
+            return True
+
+        if state["allowed"] < self.burst_limit:
+            state["allowed"] += 1
+            return True
+
+        state["suppressed"] += 1
+        return False
+
+    def _prune(self, now: float) -> None:
+        stale_after = max(self.window_seconds * 5, 30.0)
+        self._state = {
+            key: value
+            for key, value in self._state.items()
+            if now - value["first_seen"] <= stale_after
+        }
+
+
+def _coerce_log_level(level: str) -> int:
+    """Return a logging level, defaulting invalid values to INFO."""
+    return getattr(logging, str(level).upper(), logging.INFO)
+
+
+def _get_env_float(name: str, default: float) -> float:
+    """Read a float environment variable with a safe fallback."""
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _get_env_int(name: str, default: int) -> int:
+    """Read an int environment variable with a safe fallback."""
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _build_log_formatter(format_style: str) -> logging.Formatter:
+    """Create a compact or verbose formatter."""
+    style = format_style.strip().lower()
+    if style == "verbose":
+        return logging.Formatter(
+            "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s%(log_context)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    return logging.Formatter(
+        "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s%(log_context)s",
+        datefmt="%H:%M:%S",
+    )
+
+
+def _parse_logger_level_overrides(raw: Optional[str]) -> Dict[str, int]:
+    """Parse module-level logger overrides from env."""
+    overrides: Dict[str, int] = {}
+    if not raw:
+        return overrides
+
+    for entry in raw.replace(";", ",").split(","):
+        name, separator, level = entry.partition("=")
+        if not separator:
+            continue
+        logger_name = name.strip()
+        level_name = level.strip()
+        if not logger_name or not level_name:
+            continue
+        overrides[logger_name] = _coerce_log_level(level_name)
+
+    return overrides
 
 
 def ground_arc_distance_km(alt_km: float, angle_deg: float) -> float:
@@ -63,18 +272,32 @@ def setup_logging(level: str = "INFO", log_file: Optional[str] = None) -> None:
 
     Environment Variables:
         MISSION_PLANNER_LOG_LEVEL: Override log level (DEBUG, INFO, WARNING, ERROR)
+        MISSION_PLANNER_LOG_FILE: Optional file path override
+        MISSION_PLANNER_LOG_FORMAT: "compact" (default) or "verbose"
+        MISSION_PLANNER_LOG_DEDUP_WINDOW_SECONDS: Deduplicate identical bursts
+        MISSION_PLANNER_LOG_BURST_LIMIT: Number of identical messages to allow
+        MISSION_PLANNER_LOG_LEVELS: Comma-separated "logger=LEVEL" overrides
     """
-    import os
-
     # Allow environment variable to override
     env_level = os.environ.get("MISSION_PLANNER_LOG_LEVEL")
     if env_level:
         level = env_level
-    log_level = getattr(logging, level.upper(), logging.INFO)
+    env_log_file = os.environ.get("MISSION_PLANNER_LOG_FILE")
+    if env_log_file and not log_file:
+        log_file = env_log_file
 
-    # Create formatter
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    log_level = _coerce_log_level(level)
+    format_style = os.environ.get("MISSION_PLANNER_LOG_FORMAT", "compact")
+    dedup_window = _get_env_float("MISSION_PLANNER_LOG_DEDUP_WINDOW_SECONDS", 5.0)
+    burst_limit = _get_env_int("MISSION_PLANNER_LOG_BURST_LIMIT", 3)
+    formatter = _build_log_formatter(format_style)
+
+    logger_overrides = {
+        name: _coerce_log_level(value)
+        for name, value in DEFAULT_NOISY_LOGGERS.items()
+    }
+    logger_overrides.update(
+        _parse_logger_level_overrides(os.environ.get("MISSION_PLANNER_LOG_LEVELS"))
     )
 
     # Configure root logger
@@ -85,18 +308,34 @@ def setup_logging(level: str = "INFO", log_file: Optional[str] = None) -> None:
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
 
+    def _attach_handler(handler: logging.Handler) -> None:
+        handler.setFormatter(formatter)
+        handler.addFilter(_LogContextFilter())
+        handler.addFilter(
+            _RepeatedMessageFilter(
+                window_seconds=dedup_window,
+                burst_limit=burst_limit,
+            )
+        )
+        root_logger.addHandler(handler)
+
     # Add console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(formatter)
-    root_logger.addHandler(console_handler)
+    _attach_handler(logging.StreamHandler())
 
     # Add file handler if specified
     if log_file:
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setFormatter(formatter)
-        root_logger.addHandler(file_handler)
+        _attach_handler(logging.FileHandler(log_file))
 
-    logger.info(f"Logging configured at {level} level")
+    for logger_name, logger_level in logger_overrides.items():
+        logging.getLogger(logger_name).setLevel(logger_level)
+
+    logger.info(
+        "Logging configured: level=%s format=%s dedup_window=%.1fs burst_limit=%d",
+        logging.getLevelName(log_level),
+        format_style,
+        dedup_window,
+        burst_limit,
+    )
 
 
 def parse_datetime(date_string: str) -> datetime:

@@ -11,20 +11,29 @@ Tests cover:
 - get_current_utc function
 """
 
+import asyncio
+import logging
 import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import patch
 
 import pytest
 
 from mission_planner.utils import (
+    _LogContextFilter,
+    _RepeatedMessageFilter,
+    clear_log_context,
     create_sample_tle_file,
     get_common_tle_sources,
     get_current_utc,
+    get_log_context,
     parse_datetime,
+    reset_log_context,
+    set_log_context,
     setup_logging,
+    update_log_context,
     validate_coordinates,
 )
 
@@ -32,24 +41,44 @@ from mission_planner.utils import (
 class TestSetupLogging:
     """Tests for setup_logging function."""
 
+    def setup_method(self) -> None:
+        self.root_logger = logging.getLogger()
+        self.original_level = self.root_logger.level
+        self.original_handlers = list(self.root_logger.handlers)
+        self.original_uvicorn_access_level = logging.getLogger("uvicorn.access").level
+        self.original_backend_main_level = logging.getLogger("backend.main").level
+        self.original_visibility_level = logging.getLogger(
+            "mission_planner.visibility"
+        ).level
+
+    def teardown_method(self) -> None:
+        for handler in list(self.root_logger.handlers):
+            self.root_logger.removeHandler(handler)
+            try:
+                handler.close()
+            except Exception:
+                pass
+        for handler in self.original_handlers:
+            self.root_logger.addHandler(handler)
+        self.root_logger.setLevel(self.original_level)
+        logging.getLogger("uvicorn.access").setLevel(self.original_uvicorn_access_level)
+        logging.getLogger("backend.main").setLevel(self.original_backend_main_level)
+        logging.getLogger("mission_planner.visibility").setLevel(
+            self.original_visibility_level
+        )
+
     def test_default_setup(self) -> None:
-        with patch("logging.getLogger") as mock_get_logger:
-            mock_root = MagicMock()
-            mock_get_logger.return_value = mock_root
+        setup_logging()
 
-            setup_logging()
-
-            # Should configure logging without error
-            mock_get_logger.assert_called()
+        assert self.root_logger.level == logging.INFO
+        assert self.root_logger.handlers
+        assert self.root_logger.handlers[0].formatter is not None
+        assert logging.getLogger("uvicorn.access").level == logging.WARNING
 
     def test_debug_level(self) -> None:
-        with patch("logging.getLogger") as mock_get_logger:
-            mock_root = MagicMock()
-            mock_get_logger.return_value = mock_root
+        setup_logging(level="DEBUG")
 
-            setup_logging(level="DEBUG")
-
-            mock_get_logger.assert_called()
+        assert self.root_logger.level == logging.DEBUG
 
     def test_with_log_file(self) -> None:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as f:
@@ -57,18 +86,128 @@ class TestSetupLogging:
 
         try:
             setup_logging(level="INFO", log_file=log_file)
-            # Should not raise
+            assert len(self.root_logger.handlers) == 2
         finally:
             if os.path.exists(log_file):
                 os.unlink(log_file)
 
     def test_env_override(self) -> None:
         with patch.dict(os.environ, {"MISSION_PLANNER_LOG_LEVEL": "WARNING"}):
-            with patch("logging.getLogger") as mock_get_logger:
-                mock_root = MagicMock()
-                mock_get_logger.return_value = mock_root
+            setup_logging(level="INFO")  # Should be overridden to WARNING
 
-                setup_logging(level="INFO")  # Should be overridden to WARNING
+        assert self.root_logger.level == logging.WARNING
+
+    def test_module_level_overrides_from_env(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "MISSION_PLANNER_LOG_LEVELS": (
+                    "backend.main=DEBUG,mission_planner.visibility=ERROR"
+                )
+            },
+        ):
+            setup_logging()
+
+        assert logging.getLogger("backend.main").level == logging.DEBUG
+        assert logging.getLogger("mission_planner.visibility").level == logging.ERROR
+
+    def test_repeated_message_filter_suppresses_duplicate_bursts(self) -> None:
+        dedupe_filter = _RepeatedMessageFilter(window_seconds=5, burst_limit=2)
+
+        with patch(
+            "mission_planner.utils.time.monotonic",
+            side_effect=[0.0, 0.5, 1.0, 6.5],
+        ):
+            record1 = logging.makeLogRecord(
+                {"name": "test.logger", "levelno": logging.INFO, "msg": "hello"}
+            )
+            record2 = logging.makeLogRecord(
+                {"name": "test.logger", "levelno": logging.INFO, "msg": "hello"}
+            )
+            record3 = logging.makeLogRecord(
+                {"name": "test.logger", "levelno": logging.INFO, "msg": "hello"}
+            )
+            record4 = logging.makeLogRecord(
+                {"name": "test.logger", "levelno": logging.INFO, "msg": "hello"}
+            )
+
+            assert dedupe_filter.filter(record1) is True
+            assert dedupe_filter.filter(record2) is True
+            assert dedupe_filter.filter(record3) is False
+            assert dedupe_filter.filter(record4) is True
+            assert (
+                record4.getMessage() == "hello [suppressed 1 similar messages in 5s]"
+            )
+
+    def test_log_context_filter_formats_request_and_workspace(self) -> None:
+        context_filter = _LogContextFilter()
+        token = set_log_context(request_id="req-123", workspace_id="ws-9")
+
+        try:
+            record = logging.makeLogRecord(
+                {"name": "test.logger", "levelno": logging.INFO, "msg": "hello"}
+            )
+            assert context_filter.filter(record) is True
+            assert record.log_context == " [req=req-123 ws=ws-9]"
+            assert record.request_id == "req-123"
+        finally:
+            reset_log_context(token)
+
+    def test_update_and_clear_log_context(self) -> None:
+        token = set_log_context(request_id="req-123")
+
+        try:
+            update_log_context(workspace_id="ws-1", run_id="run-42")
+            assert get_log_context() == {
+                "request_id": "req-123",
+                "workspace_id": "ws-1",
+                "run_id": "run-42",
+            }
+            clear_log_context()
+            assert get_log_context() == {}
+        finally:
+            reset_log_context(token)
+
+    def test_repeated_message_filter_is_request_aware(self) -> None:
+        dedupe_filter = _RepeatedMessageFilter(window_seconds=5, burst_limit=1)
+
+        with patch(
+            "mission_planner.utils.time.monotonic",
+            side_effect=[0.0, 0.5],
+        ):
+            token_one = set_log_context(request_id="req-1")
+            try:
+                record1 = logging.makeLogRecord(
+                    {"name": "test.logger", "levelno": logging.INFO, "msg": "hello"}
+                )
+                assert dedupe_filter.filter(record1) is True
+            finally:
+                reset_log_context(token_one)
+
+            token_two = set_log_context(request_id="req-2")
+            try:
+                record2 = logging.makeLogRecord(
+                    {"name": "test.logger", "levelno": logging.INFO, "msg": "hello"}
+                )
+                assert dedupe_filter.filter(record2) is True
+            finally:
+                reset_log_context(token_two)
+
+    def test_log_context_updates_propagate_across_async_tasks(self) -> None:
+        token = set_log_context(request_id="req-123")
+
+        async def child_task() -> None:
+            update_log_context(workspace_id="ws-1", run_id="run-42")
+
+        try:
+            asyncio.run(child_task())
+            assert get_log_context() == {
+                "request_id": "req-123",
+                "workspace_id": "ws-1",
+                "run_id": "run-42",
+            }
+        finally:
+            reset_log_context(token)
 
 
 class TestParseDatetime:
@@ -272,31 +411,39 @@ class TestDatetimeEdgeCases:
 class TestLoggingLevels:
     """Tests for different logging levels."""
 
-    def test_info_level(self) -> None:
-        with patch("logging.getLogger") as mock_get_logger:
-            mock_root = MagicMock()
-            mock_get_logger.return_value = mock_root
+    def setup_method(self) -> None:
+        self.root_logger = logging.getLogger()
+        self.original_level = self.root_logger.level
+        self.original_handlers = list(self.root_logger.handlers)
 
-            setup_logging(level="INFO")
+    def teardown_method(self) -> None:
+        for handler in list(self.root_logger.handlers):
+            self.root_logger.removeHandler(handler)
+            try:
+                handler.close()
+            except Exception:
+                pass
+        for handler in self.original_handlers:
+            self.root_logger.addHandler(handler)
+        self.root_logger.setLevel(self.original_level)
+
+    def test_info_level(self) -> None:
+        setup_logging(level="INFO")
+
+        assert logging.getLogger().level == logging.INFO
 
     def test_warning_level(self) -> None:
-        with patch("logging.getLogger") as mock_get_logger:
-            mock_root = MagicMock()
-            mock_get_logger.return_value = mock_root
+        setup_logging(level="WARNING")
 
-            setup_logging(level="WARNING")
+        assert logging.getLogger().level == logging.WARNING
 
     def test_error_level(self) -> None:
-        with patch("logging.getLogger") as mock_get_logger:
-            mock_root = MagicMock()
-            mock_get_logger.return_value = mock_root
+        setup_logging(level="ERROR")
 
-            setup_logging(level="ERROR")
+        assert logging.getLogger().level == logging.ERROR
 
     def test_invalid_level_defaults(self) -> None:
-        with patch("logging.getLogger") as mock_get_logger:
-            mock_root = MagicMock()
-            mock_get_logger.return_value = mock_root
+        # Invalid level should default to INFO
+        setup_logging(level="INVALID_LEVEL")
 
-            # Invalid level should default to INFO
-            setup_logging(level="INVALID_LEVEL")
+        assert logging.getLogger().level == logging.INFO

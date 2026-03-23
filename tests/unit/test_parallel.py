@@ -123,6 +123,39 @@ class TestProcessPool:
         assert result == mock_executor
 
     @patch('mission_planner.parallel.ProcessPoolExecutor')
+    def test_get_or_create_pool_sets_worker_initializer(
+        self, mock_executor_class
+    ) -> None:
+        """Worker processes should ignore parent Ctrl-C noise."""
+        import mission_planner.parallel as parallel_module
+
+        parallel_module._process_pool = None
+        parallel_module._pool_max_workers = None
+
+        mock_executor = MagicMock()
+        mock_executor_class.return_value = mock_executor
+
+        get_or_create_process_pool(4)
+
+        _, kwargs = mock_executor_class.call_args
+        assert kwargs["initializer"] is parallel_module._configure_worker_signals
+
+        parallel_module._process_pool = None
+        parallel_module._pool_max_workers = None
+
+    @patch("mission_planner.parallel.signal.signal")
+    def test_worker_signal_config_ignores_sigint(self, mock_signal) -> None:
+        """Workers should ignore SIGINT so parent shutdown stays clean."""
+        import mission_planner.parallel as parallel_module
+
+        parallel_module._configure_worker_signals()
+
+        mock_signal.assert_called_once_with(
+            parallel_module.signal.SIGINT,
+            parallel_module.signal.SIG_IGN,
+        )
+
+    @patch('mission_planner.parallel.ProcessPoolExecutor')
     def test_get_or_create_pool_reuses_existing(self, mock_executor_class) -> None:
         """Test that existing pool is reused if same size."""
         import mission_planner.parallel as parallel_module

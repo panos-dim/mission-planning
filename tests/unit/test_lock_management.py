@@ -491,3 +491,149 @@ class TestLockLevelFiltering:
         assert len(result) == expected_count
         for acq in result:
             assert acq.lock_level == "none"
+
+
+class TestAcquisitionHorizonBounds:
+    """Tests for aggregate acquisition horizon queries."""
+
+    def test_get_acquisition_horizon_bounds_for_workspace(
+        self,
+        temp_db: ScheduleDB,
+        sample_acquisitions: Tuple[str, List[Acquisition]],
+    ) -> None:
+        """Bounds should return the earliest start and latest end in a workspace."""
+        workspace_id, acquisitions = sample_acquisitions
+
+        min_start, max_end = temp_db.get_acquisition_horizon_bounds(
+            workspace_id=workspace_id
+        )
+
+        assert min_start == min(a.start_time for a in acquisitions)
+        assert max_end == max(a.end_time for a in acquisitions)
+
+    def test_get_acquisition_horizon_bounds_excludes_tentative_when_requested(
+        self,
+        temp_db: ScheduleDB,
+        sample_acquisitions: Tuple[str, List[Acquisition]],
+    ) -> None:
+        """Tentative acquisitions should be excluded from bounds when requested."""
+        workspace_id, acquisitions = sample_acquisitions
+        workspace_db = WorkspaceDB(temp_db.db_path)
+        other_workspace_id = workspace_db.create_workspace(
+            name="Bounds Other Workspace",
+            mission_mode="OPTICAL",
+        )
+        now = datetime.utcnow()
+
+        tentative = temp_db.create_acquisition(
+            satellite_id="SAT-T",
+            target_id="TARGET-T",
+            start_time=(now - timedelta(days=1)).isoformat() + "Z",
+            end_time=(now + timedelta(days=2)).isoformat() + "Z",
+            mode="OPTICAL",
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="tentative",
+            workspace_id=workspace_id,
+        )
+        temp_db.create_acquisition(
+            satellite_id="SAT-O",
+            target_id="TARGET-O",
+            start_time=(now - timedelta(days=5)).isoformat() + "Z",
+            end_time=(now - timedelta(days=4)).isoformat() + "Z",
+            mode="OPTICAL",
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="committed",
+            workspace_id=other_workspace_id,
+        )
+
+        min_start_all, max_end_all = temp_db.get_acquisition_horizon_bounds(
+            workspace_id=workspace_id
+        )
+        min_start_no_tentative, max_end_no_tentative = (
+            temp_db.get_acquisition_horizon_bounds(
+                workspace_id=workspace_id,
+                include_tentative=False,
+            )
+        )
+
+        assert min_start_all == min(
+            [a.start_time for a in acquisitions] + [tentative.start_time]
+        )
+        assert max_end_all == max([a.end_time for a in acquisitions] + [tentative.end_time])
+        assert min_start_no_tentative == min(a.start_time for a in acquisitions)
+        assert max_end_no_tentative == max(a.end_time for a in acquisitions)
+
+    def test_get_acquisition_horizon_bounds_empty_workspace(
+        self, temp_db: ScheduleDB
+    ) -> None:
+        """Empty workspaces should return no bounds."""
+        workspace_db = WorkspaceDB(temp_db.db_path)
+        workspace_id = workspace_db.create_workspace(
+            name="Empty Bounds Workspace",
+            mission_mode="OPTICAL",
+        )
+
+        min_start, max_end = temp_db.get_acquisition_horizon_bounds(
+            workspace_id=workspace_id
+        )
+
+        assert min_start is None
+        assert max_end is None
+
+
+class TestPersistenceTimestampFormatting:
+    """Regression coverage for UTC timestamp serialization."""
+
+    def test_core_records_use_single_trailing_z(self, temp_db: ScheduleDB) -> None:
+        """Persistence-layer timestamps should not emit +00:00Z."""
+        workspace_id = WorkspaceDB(temp_db.db_path).create_workspace(
+            name="Timestamp Workspace",
+            mission_mode="OPTICAL",
+        )
+        now = datetime.utcnow()
+
+        acquisition = temp_db.create_acquisition(
+            satellite_id="SAT-TS-1",
+            target_id="TS-1",
+            start_time=(now + timedelta(hours=1)).isoformat() + "Z",
+            end_time=(now + timedelta(hours=1, minutes=5)).isoformat() + "Z",
+            mode="OPTICAL",
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="committed",
+            workspace_id=workspace_id,
+        )
+        assert acquisition.created_at.endswith("Z")
+        assert "+00:00Z" not in acquisition.created_at
+        assert acquisition.updated_at.endswith("Z")
+        assert "+00:00Z" not in acquisition.updated_at
+
+        plan = temp_db.create_plan(
+            algorithm="timestamp_test",
+            config={"mode": "test"},
+            input_hash="sha256:timestamp",
+            run_id="run_timestamp",
+            metrics={},
+            workspace_id=workspace_id,
+        )
+        assert plan.created_at.endswith("Z")
+        assert "+00:00Z" not in plan.created_at
+
+        conflict = temp_db.create_conflict(
+            conflict_type="temporal_overlap",
+            severity="error",
+            description="Timestamp regression",
+            acquisition_ids=[acquisition.id],
+            workspace_id=workspace_id,
+        )
+        assert conflict.detected_at.endswith("Z")
+        assert "+00:00Z" not in conflict.detected_at
+
+        updated = temp_db.update_acquisition_state(acquisition.id, state="locked")
+        assert updated is True
+        refreshed = temp_db.get_acquisition(acquisition.id)
+        assert refreshed is not None
+        assert refreshed.updated_at.endswith("Z")
+        assert "+00:00Z" not in refreshed.updated_at

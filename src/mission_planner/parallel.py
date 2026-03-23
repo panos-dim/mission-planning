@@ -120,6 +120,7 @@ def get_or_create_process_pool(max_workers: int) -> ProcessPoolExecutor:
     _process_pool = ProcessPoolExecutor(
         max_workers=max_workers,
         mp_context=mp_context,
+        initializer=_configure_worker_signals,
     )
     _pool_max_workers = max_workers
 
@@ -151,6 +152,21 @@ def cleanup_process_pool():
 
 
 _signal_installed = False
+
+
+def _configure_worker_signals() -> None:
+    """
+    Keep worker processes quiet on parent Ctrl-C.
+
+    The parent process owns shutdown orchestration. Ignoring SIGINT in worker
+    processes avoids noisy KeyboardInterrupt tracebacks while the parent tears
+    the pool down cleanly.
+    """
+    try:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except (AttributeError, OSError, ValueError):
+        # Some runtimes may restrict signal handling here; fail soft.
+        return
 
 
 def _install_signal_cleanup():
@@ -311,7 +327,11 @@ class ParallelVisibilityCalculator:
         # Worker count will be optimized based on target count at runtime
         cpu_count = os.cpu_count() or 4
         max_display = self.max_workers if self.max_workers else cpu_count
-        logger.info(f"Initialized ParallelVisibilityCalculator (max {max_display} workers, method: {method})")
+        logger.debug(
+            "Initialized ParallelVisibilityCalculator (max %d workers, method: %s)",
+            max_display,
+            method,
+        )
     
     def get_visibility_windows(
         self,
@@ -374,7 +394,11 @@ class ParallelVisibilityCalculator:
         results = {}
         completed = 0
         
-        logger.info(f"Computing passes for {len(targets)} targets using {optimal_workers} workers")
+        logger.info(
+            "Computing passes for %d targets using %d workers",
+            len(targets),
+            optimal_workers,
+        )
         
         # Use persistent pool to avoid spawn overhead on repeated calls
         executor = get_or_create_process_pool(optimal_workers)
@@ -394,19 +418,29 @@ class ParallelVisibilityCalculator:
                 results[target_name] = passes
                 completed += 1
                 
-                logger.debug(f"Completed {completed}/{len(targets)}: {target_name} ({len(passes)} passes)")
+                logger.debug(
+                    "Completed %d/%d: %s (%d passes)",
+                    completed,
+                    len(targets),
+                    target_name,
+                    len(passes),
+                )
                 
                 # Call progress callback if provided
                 if progress_callback:
                     progress_callback(completed, len(targets))
                     
             except Exception as e:
-                logger.error(f"Error processing target {target_name}: {e}")
+                logger.error("Error processing target %s: %s", target_name, e)
                 results[target_name] = []
                 completed += 1
         
         total_passes = sum(len(passes) for passes in results.values())
-        logger.info(f"Parallel computation complete: {total_passes} total passes across {len(targets)} targets")
+        logger.info(
+            "Parallel computation complete: %d total passes across %d targets",
+            total_passes,
+            len(targets),
+        )
         
         return results
 

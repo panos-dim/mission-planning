@@ -18,7 +18,6 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.11",
-    "@types/react-datepicker": "^7.0.0",
     "axios": "^1.6.0",
     "cesium": "^1.111.0",
     "clsx": "^2.0.0",

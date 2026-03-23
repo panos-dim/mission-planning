@@ -17,13 +17,17 @@ import os
 import sys
 import tempfile
 import uuid
+from collections import Counter
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+from threading import Lock
+from time import perf_counter
 from typing import Any, Dict, List, Optional, Union
 
 import requests
 import yaml  # type: ignore[import-untyped]
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel  # Only used for inline models if any remain
@@ -58,9 +62,13 @@ try:
     )
     from mission_planner.targets import GroundTarget, TargetManager
     from mission_planner.utils import (
+        reset_log_context,
+        set_log_context,
         download_tle_file,
+        format_duration,
         get_common_tle_sources,
         setup_logging,
+        update_log_context,
     )
     from mission_planner.visibility import VisibilityCalculator
 except ImportError as e:
@@ -100,6 +108,680 @@ mission_settings_manager = MissionSettingsManager()
 # Setup logging early
 setup_logging()
 logger = logging.getLogger(__name__)
+_QUIET_REQUEST_PREFIXES = ("/docs", "/redoc", "/openapi.json", "/static")
+_HEAVY_REQUEST_PREFIXES = (
+    "/api/v1/mission/analyze",
+    "/api/v1/planning",
+    "/api/v1/schedule/plan",
+    "/api/v1/schedule/commit",
+    "/api/v1/schedule/repair",
+    "/api/v1/workspaces/save-current",
+)
+_ROUTE_FAMILY_PREFIXES = (
+    ("/api/v1/schedule", "schedule"),
+    ("/api/v1/planning", "planning"),
+    ("/api/v1/mission", "mission"),
+    ("/api/v1/orders", "orders"),
+    ("/api/v1/workspaces", "workspaces"),
+    ("/api/v1/debug", "debug"),
+    ("/api/v1/dev", "debug"),
+    ("/api/v1/validation", "validation"),
+    ("/api/v1/config", "config"),
+    ("/api/v1/tle", "tle"),
+)
+_STATUS_CLASS_KEYS = ("2xx", "3xx", "4xx", "5xx", "other")
+
+
+def _read_env_float(name: str, default: float) -> float:
+    """Read a float environment variable with a safe fallback."""
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _get_request_latency_profile(path: str) -> str:
+    """Classify requests so heavy endpoints get higher slow-request thresholds."""
+    if path == "/" or path.startswith(_QUIET_REQUEST_PREFIXES):
+        return "quiet"
+    if path.startswith(_HEAVY_REQUEST_PREFIXES):
+        return "heavy"
+    return "default"
+
+
+def _get_slow_request_threshold_ms(path: str) -> float:
+    """Return the slow-request threshold for a given route."""
+    default_ms = max(_read_env_float("MISSION_PLANNER_LOG_SLOW_REQUEST_MS", 750.0), 0.0)
+    heavy_default_ms = max(default_ms * 3.0, 2500.0)
+    heavy_ms = max(
+        _read_env_float("MISSION_PLANNER_LOG_HEAVY_REQUEST_MS", heavy_default_ms),
+        default_ms,
+    )
+    return heavy_ms if _get_request_latency_profile(path) == "heavy" else default_ms
+
+
+def _get_latency_bucket(duration_ms: float) -> str:
+    """Map request duration to a compact bucket label."""
+    if duration_ms < 50:
+        return "<50ms"
+    if duration_ms < 200:
+        return "50-200ms"
+    if duration_ms < 1000:
+        return "200ms-1s"
+    if duration_ms < 5000:
+        return "1-5s"
+    return ">=5s"
+
+
+def _format_request_duration(duration_ms: float) -> str:
+    """Format durations compactly for access logs."""
+    if duration_ms < 1000:
+        return f"{duration_ms:.1f}ms"
+    return format_duration(duration_ms / 1000.0)
+
+
+def _get_route_summary_every() -> int:
+    """Return how many requests to batch per latency summary."""
+    try:
+        return max(int(os.environ.get("MISSION_PLANNER_LOG_ROUTE_SUMMARY_EVERY", 10)), 0)
+    except (TypeError, ValueError):
+        return 10
+
+
+def _get_route_history_limit() -> int:
+    """Return how many emitted route summaries to retain in memory."""
+    try:
+        return max(int(os.environ.get("MISSION_PLANNER_LOG_ROUTE_HISTORY_LIMIT", 50)), 0)
+    except (TypeError, ValueError):
+        return 50
+
+
+def _get_route_baseline_windows() -> int:
+    """Return how many historical windows to use when computing baselines."""
+    try:
+        return max(
+            int(os.environ.get("MISSION_PLANNER_LOG_ROUTE_BASELINE_WINDOWS", 5)),
+            0,
+        )
+    except (TypeError, ValueError):
+        return 5
+
+
+def _get_route_hot_multiplier() -> float:
+    """Return the relative increase required to flag a hot route."""
+    try:
+        return max(
+            float(os.environ.get("MISSION_PLANNER_LOG_ROUTE_HOT_MULTIPLIER", 1.75)),
+            1.0,
+        )
+    except (TypeError, ValueError):
+        return 1.75
+
+
+def _get_route_hot_min_delta_ms() -> float:
+    """Return the minimum absolute latency jump required for hot-route warnings."""
+    try:
+        return max(
+            float(os.environ.get("MISSION_PLANNER_LOG_ROUTE_HOT_MIN_DELTA_MS", 250.0)),
+            0.0,
+        )
+    except (TypeError, ValueError):
+        return 250.0
+
+
+def _get_route_hot_min_windows() -> int:
+    """Return the minimum baseline windows required before hot detection activates."""
+    try:
+        return max(
+            int(os.environ.get("MISSION_PLANNER_LOG_ROUTE_HOT_MIN_WINDOWS", 2)),
+            0,
+        )
+    except (TypeError, ValueError):
+        return 2
+
+
+def _get_recent_error_limit() -> int:
+    """Return how many recent request errors to retain in memory."""
+    try:
+        return max(
+            int(os.environ.get("MISSION_PLANNER_LOG_RECENT_ERROR_LIMIT", 50)),
+            0,
+        )
+    except (TypeError, ValueError):
+        return 50
+
+
+def _get_request_route_label(request: Request) -> str:
+    """Use the route template when available to avoid high-cardinality summaries."""
+    route = request.scope.get("route")
+    route_path = getattr(route, "path", None)
+    return route_path or request.url.path
+
+
+def _get_route_family(path: str) -> str:
+    """Map a route path to a stable product-area family."""
+    if path == "/":
+        return "root"
+    for prefix, family in _ROUTE_FAMILY_PREFIXES:
+        if path.startswith(prefix):
+            return family
+    return "other"
+
+
+def _get_status_class(status_code: int) -> str:
+    """Bucket an HTTP status code into its status class."""
+    if 200 <= status_code < 300:
+        return "2xx"
+    if 300 <= status_code < 400:
+        return "3xx"
+    if 400 <= status_code < 500:
+        return "4xx"
+    if 500 <= status_code < 600:
+        return "5xx"
+    return "other"
+
+
+def _empty_status_counts() -> Dict[str, int]:
+    """Return a new zeroed status-class counter map."""
+    return {key: 0 for key in _STATUS_CLASS_KEYS}
+
+
+def _normalize_status_counts(status_counts: Optional[Dict[str, int]] = None) -> Dict[str, int]:
+    """Normalize sparse status counts into a complete fixed-key mapping."""
+    normalized = _empty_status_counts()
+    if not status_counts:
+        return normalized
+    for key, value in status_counts.items():
+        if key in normalized:
+            normalized[key] = int(value)
+    return normalized
+
+
+def _merge_status_counts(target: Dict[str, int], source: Optional[Dict[str, int]]) -> None:
+    """Add source counters into target in place."""
+    for key, value in _normalize_status_counts(source).items():
+        target[key] += int(value)
+
+
+def _percentile_ms(samples_ms: List[float], percentile: float) -> float:
+    """Compute a nearest-rank percentile for a non-empty list of durations."""
+    if not samples_ms:
+        return 0.0
+    ordered = sorted(samples_ms)
+    rank = max(1, math.ceil(percentile * len(ordered)))
+    return ordered[min(rank - 1, len(ordered) - 1)]
+
+
+def _aggregate_entry_status_counts(entries: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Aggregate status-class counters across route or history entries."""
+    totals = _empty_status_counts()
+    for entry in entries:
+        _merge_status_counts(totals, entry.get("status_counts"))
+    return totals
+
+
+def _summarize_route_families(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Aggregate route entries into family-level summaries."""
+    families: Dict[str, Dict[str, Any]] = {}
+    for entry in entries:
+        family = str(entry.get("route_family") or "other")
+        family_summary = families.setdefault(
+            family,
+            {
+                "family": family,
+                "route_count": 0,
+                "request_count": 0,
+                "total_ms": 0.0,
+                "p95_ms": 0.0,
+                "max_ms": 0.0,
+                "slow_count": 0,
+                "error_count": 0,
+                "hot_count": 0,
+                "status_counts": _empty_status_counts(),
+            },
+        )
+        request_count = int(entry.get("count") or 0)
+        avg_ms = float(entry.get("avg_ms") or 0.0)
+        family_summary["route_count"] += 1
+        family_summary["request_count"] += request_count
+        family_summary["total_ms"] += avg_ms * request_count
+        family_summary["p95_ms"] = max(
+            float(family_summary["p95_ms"]),
+            float(entry.get("p95_ms") or 0.0),
+        )
+        family_summary["max_ms"] = max(
+            float(family_summary["max_ms"]),
+            float(entry.get("max_ms") or 0.0),
+        )
+        family_summary["slow_count"] += int(entry.get("slow_count") or 0)
+        family_summary["error_count"] += int(entry.get("error_count") or 0)
+        family_summary["hot_count"] += 1 if entry.get("is_hot") else 0
+        _merge_status_counts(
+            family_summary["status_counts"],
+            entry.get("status_counts"),
+        )
+
+    summarized: List[Dict[str, Any]] = []
+    for family_summary in families.values():
+        request_count = int(family_summary["request_count"])
+        avg_ms = (
+            float(family_summary["total_ms"]) / request_count if request_count > 0 else 0.0
+        )
+        summarized.append(
+            {
+                "family": family_summary["family"],
+                "route_count": int(family_summary["route_count"]),
+                "request_count": request_count,
+                "avg_ms": avg_ms,
+                "p95_ms": float(family_summary["p95_ms"]),
+                "max_ms": float(family_summary["max_ms"]),
+                "slow_count": int(family_summary["slow_count"]),
+                "error_count": int(family_summary["error_count"]),
+                "hot_count": int(family_summary["hot_count"]),
+                "status_counts": dict(family_summary["status_counts"]),
+            }
+        )
+
+    summarized.sort(
+        key=lambda item: (
+            int(item["error_count"]),
+            int(item["hot_count"]),
+            int(item["slow_count"]),
+            float(item["max_ms"]),
+            int(item["request_count"]),
+        ),
+        reverse=True,
+    )
+    return summarized
+
+
+def _summarize_recent_error_families(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Aggregate recent errors into family-level summaries."""
+    families: Dict[str, Dict[str, Any]] = {}
+    for entry in entries:
+        family = str(entry.get("route_family") or "other")
+        family_summary = families.setdefault(
+            family,
+            {
+                "family": family,
+                "error_count": 0,
+                "route_count": 0,
+                "routes": set(),
+                "max_duration_ms": 0.0,
+                "latest_occurred_at": None,
+                "status_counts": _empty_status_counts(),
+            },
+        )
+        family_summary["error_count"] += 1
+        family_summary["routes"].add(str(entry.get("route") or ""))
+        family_summary["max_duration_ms"] = max(
+            float(family_summary["max_duration_ms"]),
+            float(entry.get("duration_ms") or 0.0),
+        )
+        occurred_at = entry.get("occurred_at")
+        if occurred_at and (
+            family_summary["latest_occurred_at"] is None
+            or str(occurred_at) > str(family_summary["latest_occurred_at"])
+        ):
+            family_summary["latest_occurred_at"] = str(occurred_at)
+
+        status_class = str(entry.get("status_class") or "other")
+        if status_class in family_summary["status_counts"]:
+            family_summary["status_counts"][status_class] += 1
+
+    summarized: List[Dict[str, Any]] = []
+    for family_summary in families.values():
+        summarized.append(
+            {
+                "family": family_summary["family"],
+                "error_count": int(family_summary["error_count"]),
+                "route_count": len(family_summary["routes"]),
+                "max_duration_ms": float(family_summary["max_duration_ms"]),
+                "latest_occurred_at": family_summary["latest_occurred_at"],
+                "status_counts": dict(family_summary["status_counts"]),
+            }
+        )
+
+    summarized.sort(
+        key=lambda item: (
+            int(item["error_count"]),
+            float(item["max_duration_ms"]),
+            str(item["latest_occurred_at"] or ""),
+        ),
+        reverse=True,
+    )
+    return summarized
+
+
+@dataclass
+class _RouteLatencyBatch:
+    """Rolling batch of request timings for one route label."""
+
+    count: int = 0
+    total_ms: float = 0.0
+    max_ms: float = 0.0
+    slow_count: int = 0
+    error_count: int = 0
+    samples_ms: List[float] = field(default_factory=list)
+    status_counts: Dict[str, int] = field(default_factory=_empty_status_counts)
+
+
+class _RouteLatencyAggregator:
+    """Aggregate route timings and emit periodic summary snapshots."""
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._batches: Dict[str, _RouteLatencyBatch] = {}
+        self._history: List[Dict[str, Any]] = []
+        self._recent_errors: List[Dict[str, Any]] = []
+
+    def reset(self) -> None:
+        """Clear all in-memory route timing batches."""
+        with self._lock:
+            self._batches.clear()
+            self._history.clear()
+            self._recent_errors.clear()
+
+    def _build_summary(
+        self,
+        route_label: str,
+        *,
+        count: int,
+        avg_ms: float,
+        p95_ms: float,
+        max_ms: float,
+        slow_count: int,
+        error_count: int,
+        status_counts: Dict[str, int],
+    ) -> Dict[str, Any]:
+        """Build a normalized route summary payload."""
+        return {
+            "route": route_label,
+            "route_family": _get_route_family(route_label),
+            "count": float(count),
+            "avg_ms": avg_ms,
+            "p95_ms": p95_ms,
+            "max_ms": max_ms,
+            "slow_count": float(slow_count),
+            "error_count": float(error_count),
+            "status_counts": _normalize_status_counts(status_counts),
+            "profile": _get_request_latency_profile(route_label),
+            "slow_threshold_ms": _get_slow_request_threshold_ms(route_label),
+        }
+
+    def _get_route_history_locked(
+        self,
+        route_label: str,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return recent emitted summaries for one route."""
+        route_history = [
+            entry for entry in reversed(self._history) if entry.get("route") == route_label
+        ]
+        if limit is not None:
+            route_history = route_history[: max(limit, 0)]
+        return route_history
+
+    def _build_baseline_locked(
+        self,
+        route_label: str,
+        current_avg_ms: float,
+        current_p95_ms: float,
+    ) -> Dict[str, float]:
+        """Build baseline comparison fields from recent route history."""
+        window_count = _get_route_baseline_windows()
+        if window_count <= 0:
+            return {}
+
+        route_history = self._get_route_history_locked(route_label, limit=window_count)
+        if not route_history:
+            return {}
+
+        baseline_avg_ms = sum(float(entry["avg_ms"]) for entry in route_history) / len(
+            route_history
+        )
+        baseline_p95_ms = sum(float(entry["p95_ms"]) for entry in route_history) / len(
+            route_history
+        )
+        return {
+            "baseline_windows": float(len(route_history)),
+            "baseline_avg_ms": baseline_avg_ms,
+            "baseline_p95_ms": baseline_p95_ms,
+            "avg_delta_ms": current_avg_ms - baseline_avg_ms,
+            "p95_delta_ms": current_p95_ms - baseline_p95_ms,
+        }
+
+    def _annotate_hot_route_locked(self, summary: Dict[str, Any]) -> None:
+        """Mark summaries that spike far above their recent baseline."""
+        summary["is_hot"] = False
+        summary["hot_reason"] = None
+
+        baseline_windows = int(summary.get("baseline_windows") or 0)
+        if baseline_windows < _get_route_hot_min_windows():
+            return
+
+        hot_multiplier = _get_route_hot_multiplier()
+        min_delta_ms = _get_route_hot_min_delta_ms()
+        comparisons = (
+            (
+                "p95",
+                float(summary.get("p95_ms") or 0.0),
+                float(summary.get("baseline_p95_ms") or 0.0),
+                float(summary.get("p95_delta_ms") or 0.0),
+            ),
+            (
+                "avg",
+                float(summary.get("avg_ms") or 0.0),
+                float(summary.get("baseline_avg_ms") or 0.0),
+                float(summary.get("avg_delta_ms") or 0.0),
+            ),
+        )
+
+        for metric_name, current_ms, baseline_ms, delta_ms in comparisons:
+            if baseline_ms <= 0:
+                continue
+            if current_ms >= baseline_ms * hot_multiplier and delta_ms >= min_delta_ms:
+                summary["is_hot"] = True
+                summary["hot_reason"] = (
+                    f"{metric_name} jumped from {baseline_ms:.1f}ms to "
+                    f"{current_ms:.1f}ms (+{delta_ms:.1f}ms)"
+                )
+                return
+
+    def _append_history_locked(self, summary: Dict[str, Any]) -> None:
+        """Append a summary to the rolling history buffer."""
+        history_limit = _get_route_history_limit()
+        if history_limit <= 0:
+            return
+
+        history_entry = {
+            **summary,
+            "status_counts": dict(summary.get("status_counts") or {}),
+            "emitted_at": datetime.now(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
+        }
+        self._history.append(history_entry)
+        overflow = len(self._history) - history_limit
+        if overflow > 0:
+            del self._history[:overflow]
+
+    def _append_recent_error_locked(
+        self,
+        *,
+        route_label: str,
+        method: str,
+        status_code: int,
+        duration_ms: float,
+    ) -> None:
+        """Append a recent non-success request outcome to the rolling error buffer."""
+        error_limit = _get_recent_error_limit()
+        if error_limit <= 0 or status_code < 400:
+            return
+
+        self._recent_errors.append(
+            {
+                "occurred_at": datetime.now(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
+                "method": method,
+                "route": route_label,
+                "route_family": _get_route_family(route_label),
+                "status_code": int(status_code),
+                "status_class": _get_status_class(status_code),
+                "duration_ms": float(duration_ms),
+                "profile": _get_request_latency_profile(route_label),
+            }
+        )
+        overflow = len(self._recent_errors) - error_limit
+        if overflow > 0:
+            del self._recent_errors[:overflow]
+
+    def snapshot(self, limit: int = 20, reset: bool = False) -> List[Dict[str, Any]]:
+        """Return a ranked snapshot of current route timing batches."""
+        with self._lock:
+            snapshots: List[Dict[str, Any]] = []
+            for route_label, batch in self._batches.items():
+                if batch.count <= 0:
+                    continue
+                avg_ms = batch.total_ms / batch.count
+                p95_ms = _percentile_ms(batch.samples_ms, 0.95)
+                summary = self._build_summary(
+                    route_label,
+                    count=batch.count,
+                    avg_ms=avg_ms,
+                    p95_ms=p95_ms,
+                    max_ms=batch.max_ms,
+                    slow_count=batch.slow_count,
+                    error_count=batch.error_count,
+                    status_counts=batch.status_counts,
+                )
+                summary.update(
+                    self._build_baseline_locked(
+                        route_label,
+                        current_avg_ms=avg_ms,
+                        current_p95_ms=p95_ms,
+                    )
+                )
+                self._annotate_hot_route_locked(summary)
+                snapshots.append(summary)
+
+            snapshots.sort(
+                key=lambda item: (
+                    float(item["error_count"]),
+                    float(item["slow_count"]),
+                    float(item["max_ms"]),
+                    float(item["avg_ms"]),
+                    float(item["count"]),
+                ),
+                reverse=True,
+            )
+
+            if reset:
+                self._batches.clear()
+
+        return snapshots[: max(limit, 0)]
+
+    def history(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Return recent emitted route summaries, newest first."""
+        with self._lock:
+            return list(reversed(self._history[-max(limit, 0) :]))
+
+    def recent_errors(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Return recent request errors, newest first."""
+        with self._lock:
+            return list(reversed(self._recent_errors[-max(limit, 0) :]))
+
+    def record(
+        self,
+        route_label: str,
+        duration_ms: float,
+        status_code: int,
+        slow_threshold_ms: float,
+        method: str = "GET",
+    ) -> Optional[Dict[str, Any]]:
+        """Record a request duration and return a summary when the batch is full."""
+        summary_every = _get_route_summary_every()
+        if summary_every <= 0:
+            return None
+
+        with self._lock:
+            self._append_recent_error_locked(
+                route_label=route_label,
+                method=method,
+                status_code=status_code,
+                duration_ms=duration_ms,
+            )
+            batch = self._batches.setdefault(route_label, _RouteLatencyBatch())
+            batch.count += 1
+            batch.total_ms += duration_ms
+            batch.max_ms = max(batch.max_ms, duration_ms)
+            batch.samples_ms.append(duration_ms)
+            if duration_ms >= slow_threshold_ms:
+                batch.slow_count += 1
+            if status_code >= 400:
+                batch.error_count += 1
+            batch.status_counts[_get_status_class(status_code)] += 1
+
+            if batch.count < summary_every:
+                return None
+
+            avg_ms = batch.total_ms / batch.count
+            p95_ms = _percentile_ms(batch.samples_ms, 0.95)
+            summary = self._build_summary(
+                route_label,
+                count=batch.count,
+                avg_ms=avg_ms,
+                p95_ms=p95_ms,
+                max_ms=batch.max_ms,
+                slow_count=batch.slow_count,
+                error_count=batch.error_count,
+                status_counts=batch.status_counts,
+            )
+            summary.update(
+                self._build_baseline_locked(
+                    route_label,
+                    current_avg_ms=avg_ms,
+                    current_p95_ms=p95_ms,
+                )
+            )
+            self._annotate_hot_route_locked(summary)
+            self._append_history_locked(summary)
+            self._batches[route_label] = _RouteLatencyBatch()
+            return summary
+
+
+_ROUTE_LATENCY_AGGREGATOR = _RouteLatencyAggregator()
+
+
+def get_route_latency_snapshot(
+    limit: int = 20,
+    reset: bool = False,
+) -> Dict[str, Any]:
+    """Expose the current in-memory route latency batches for dev tooling."""
+    routes = _ROUTE_LATENCY_AGGREGATOR.snapshot(limit=limit, reset=reset)
+    history = _ROUTE_LATENCY_AGGREGATOR.history(limit=limit)
+    recent_errors = _ROUTE_LATENCY_AGGREGATOR.recent_errors(limit=limit)
+    return {
+        "summary_every": _get_route_summary_every(),
+        "history_limit": _get_route_history_limit(),
+        "baseline_windows": _get_route_baseline_windows(),
+        "status_counts": _aggregate_entry_status_counts(routes),
+        "history_status_counts": _aggregate_entry_status_counts(history),
+        "recent_error_limit": _get_recent_error_limit(),
+        "recent_error_count": len(recent_errors),
+        "recent_error_status_counts": {
+            key: sum(
+                1 for entry in recent_errors if entry.get("status_class") == key
+            )
+            for key in _STATUS_CLASS_KEYS
+        },
+        "error_families": _summarize_recent_error_families(recent_errors),
+        "families": _summarize_route_families(routes),
+        "routes": routes,
+        "history": history,
+        "recent_errors": recent_errors,
+    }
 
 
 # =============================================================================
@@ -152,6 +834,134 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def add_request_logging_context(
+    request: Request,
+    call_next: Any,
+) -> Response:
+    """Attach a stable request ID to logs and responses."""
+    request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
+    request.state.request_id = request_id
+    token = set_log_context(request_id=request_id)
+    started_at = perf_counter()
+
+    try:
+        response = await call_next(request)
+    except Exception:
+        duration_ms = (perf_counter() - started_at) * 1000.0
+        _ROUTE_LATENCY_AGGREGATOR.record(
+            route_label=_get_request_route_label(request),
+            duration_ms=duration_ms,
+            status_code=500,
+            slow_threshold_ms=_get_slow_request_threshold_ms(request.url.path),
+            method=request.method,
+        )
+        logger.exception(
+            "HTTP %s %s -> 500 in %s",
+            request.method,
+            request.url.path,
+            _format_request_duration(duration_ms),
+        )
+        raise
+    finally:
+        if "response" in locals():
+            duration_ms = (perf_counter() - started_at) * 1000.0
+            path = request.url.path
+            route_label = _get_request_route_label(request)
+            duration_text = _format_request_duration(duration_ms)
+            latency_bucket = _get_latency_bucket(duration_ms)
+            latency_profile = _get_request_latency_profile(path)
+            slow_threshold_ms = _get_slow_request_threshold_ms(path)
+            is_slow_request = (
+                response.status_code < 400 and duration_ms >= slow_threshold_ms
+            )
+            if response.status_code >= 500:
+                log_level = logging.ERROR
+            elif response.status_code >= 400:
+                log_level = logging.WARNING
+            elif is_slow_request:
+                log_level = logging.WARNING
+            elif latency_profile == "quiet":
+                log_level = logging.DEBUG
+            else:
+                log_level = logging.INFO
+
+            if is_slow_request:
+                logger.log(
+                    log_level,
+                    "Slow HTTP %s %s -> %d in %s (profile=%s threshold=%.0fms bucket=%s)",
+                    request.method,
+                    path,
+                    response.status_code,
+                    duration_text,
+                    latency_profile,
+                    slow_threshold_ms,
+                    latency_bucket,
+                )
+            else:
+                logger.log(
+                    log_level,
+                    "HTTP %s %s -> %d in %s",
+                    request.method,
+                    path,
+                    response.status_code,
+                    duration_text,
+                )
+
+            if latency_profile != "quiet":
+                route_summary = _ROUTE_LATENCY_AGGREGATOR.record(
+                    route_label=route_label,
+                    duration_ms=duration_ms,
+                    status_code=response.status_code,
+                    slow_threshold_ms=slow_threshold_ms,
+                    method=request.method,
+                )
+                if route_summary is not None:
+                    is_hot_route = bool(route_summary.get("is_hot"))
+                    summary_level = (
+                        logging.WARNING
+                        if route_summary["p95_ms"] >= slow_threshold_ms
+                        or route_summary["error_count"] > 0
+                        or is_hot_route
+                        else logging.INFO
+                    )
+                    logger.log(
+                        summary_level,
+                        "Latency summary %s %s: count=%d avg=%s p95=%s max=%s slow=%d/%d errors=%d profile=%s threshold=%.0fms",
+                        request.method,
+                        route_label,
+                        int(route_summary["count"]),
+                        _format_request_duration(route_summary["avg_ms"]),
+                        _format_request_duration(route_summary["p95_ms"]),
+                        _format_request_duration(route_summary["max_ms"]),
+                        int(route_summary["slow_count"]),
+                        int(route_summary["count"]),
+                        int(route_summary["error_count"]),
+                        latency_profile,
+                        slow_threshold_ms,
+                    )
+                    if is_hot_route:
+                        logger.warning(
+                            "Hot route %s %s: %s (baseline_windows=%d avg=%s baseline_avg=%s p95=%s baseline_p95=%s)",
+                            request.method,
+                            route_label,
+                            route_summary.get("hot_reason"),
+                            int(route_summary.get("baseline_windows") or 0),
+                            _format_request_duration(float(route_summary["avg_ms"])),
+                            _format_request_duration(
+                                float(route_summary.get("baseline_avg_ms") or 0.0)
+                            ),
+                            _format_request_duration(float(route_summary["p95_ms"])),
+                            _format_request_duration(
+                                float(route_summary.get("baseline_p95_ms") or 0.0)
+                            ),
+                        )
+        reset_log_context(token)
+
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 # CORS — use CORS_ORIGINS env var in production, default to * for development
 _cors_origins_env = os.environ.get("CORS_ORIGINS", "*")
@@ -260,6 +1070,33 @@ def _enrich_and_convert_pass(
     # Use the PassDetails.to_dict() method which includes all STK-like data
     result: Dict[str, Any] = pass_details.to_dict()
     return result
+
+
+def _summarize_czml_packets(czml_data: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Create a compact packet summary for log output."""
+    counts: Counter[str] = Counter()
+
+    for packet in czml_data:
+        packet_id = str(packet.get("id", "unknown"))
+        if packet_id == "document":
+            counts["document"] += 1
+        elif packet_id == "pointing_cone":
+            counts["pointing_cone"] += 1
+        elif packet_id.startswith("agility_envelope_"):
+            counts["agility_envelope"] += 1
+        elif packet_id.startswith("pass_track"):
+            counts["pass_track"] += 1
+        elif packet_id.startswith("target_"):
+            counts["target"] += 1
+        elif packet_id.endswith("_ground_track") or packet_id == "satellite_ground_track":
+            counts["ground_track"] += 1
+        elif packet_id.startswith("sat_"):
+            counts["satellite"] += 1
+        else:
+            counts["other"] += 1
+
+    counts["total"] = len(czml_data)
+    return dict(counts)
 
 
 # =============================================================================
@@ -407,7 +1244,9 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
         is_constellation = request.is_constellation()
 
         logger.info(
-            f"Mission analysis: {len(satellite_list)} satellite(s), constellation={is_constellation}"
+            "Mission analysis started: satellites=%d constellation=%s",
+            len(satellite_list),
+            is_constellation,
         )
 
         # Validate mission inputs against platform constraints
@@ -456,7 +1295,7 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
         # Use REQUEST imaging_type (not satellite config) for settings lookup
         # This improves DX: user can use any satellite TLE for any imaging type
         effective_imaging_type = request.imaging_type or "optical"
-        logger.info(f"Using imaging_type from request: {effective_imaging_type}")
+        logger.debug("Using imaging_type from request: %s", effective_imaging_type)
 
         # Get max_spacecraft_roll from satellite_settings based on REQUEST imaging_type
         if (
@@ -471,8 +1310,9 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
                 max_roll_from_satellite = optical_settings["spacecraft"][
                     "max_spacecraft_roll_deg"
                 ]
-                logger.info(
-                    f"Using max spacecraft roll from optical settings: {max_roll_from_satellite}°"
+                logger.debug(
+                    "Using max spacecraft roll from optical settings: %s°",
+                    max_roll_from_satellite,
                 )
         elif (
             effective_imaging_type == "sar"
@@ -486,8 +1326,9 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
                 max_roll_from_satellite = sar_settings["spacecraft"][
                     "max_spacecraft_roll_deg"
                 ]
-                logger.info(
-                    f"Using max spacecraft roll from SAR settings: {max_roll_from_satellite}°"
+                logger.debug(
+                    "Using max spacecraft roll from SAR settings: %s°",
+                    max_roll_from_satellite,
                 )
 
         # Check if primary satellite is managed (in satellites.yaml) for sensor FOV only
@@ -500,8 +1341,10 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
                     and sat.sensor_fov_half_angle_deg is not None
                 ):
                     sensor_fov_from_satellite = sat.sensor_fov_half_angle_deg
-                    logger.info(
-                        f"Using sensor FOV from satellite config: {sensor_fov_from_satellite}° for {sat.name}"
+                    logger.debug(
+                        "Using sensor FOV from satellite config: %s° for %s",
+                        sensor_fov_from_satellite,
+                        sat.name,
                     )
                 break
 
@@ -534,8 +1377,10 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
             if sensor_fov_from_satellite is not None:
                 # First priority: Sensor FOV from satellite config (satellites.yaml)
                 sensor_fov = sensor_fov_from_satellite
-                logger.info(
-                    f"Target '{target_data.name}': Using sensor_fov_half_angle_deg={sensor_fov}° from satellite config"
+                logger.debug(
+                    "Target '%s': sensor_fov_half_angle_deg=%s° from satellite config",
+                    target_data.name,
+                    sensor_fov,
                 )
             elif (
                 hasattr(request, "sensor_fov_half_angle_deg")
@@ -543,13 +1388,16 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
             ):
                 # Second priority: Sensor FOV from request (deprecated path)
                 sensor_fov = request.sensor_fov_half_angle_deg
-                logger.info(
-                    f"Target '{target_data.name}': Using sensor_fov_half_angle_deg={sensor_fov}° from request"
+                logger.debug(
+                    "Target '%s': sensor_fov_half_angle_deg=%s° from request",
+                    target_data.name,
+                    sensor_fov,
                 )
             else:
                 # No FOV specified anywhere, will use target defaults
-                logger.info(
-                    f"Target '{target_data.name}': No sensor FOV specified, will use default based on imaging type"
+                logger.debug(
+                    "Target '%s': no sensor FOV specified, using imaging-type defaults",
+                    target_data.name,
                 )
 
             # Handle max spacecraft roll (agility limit) for visibility analysis
@@ -558,20 +1406,27 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
             if max_roll_from_satellite is not None:
                 # Use from satellite_settings based on REQUEST imaging_type
                 max_spacecraft_roll = max_roll_from_satellite
-                logger.info(
-                    f"Target '{target_data.name}': Using max_spacecraft_roll={max_spacecraft_roll}° (from {effective_imaging_type} settings)"
+                logger.debug(
+                    "Target '%s': max_spacecraft_roll=%s° from %s settings",
+                    target_data.name,
+                    max_spacecraft_roll,
+                    effective_imaging_type,
                 )
             elif request.max_spacecraft_roll_deg is not None:
                 # Use from request
                 max_spacecraft_roll = request.max_spacecraft_roll_deg
-                logger.info(
-                    f"Target '{target_data.name}': Using max_spacecraft_roll={max_spacecraft_roll}° from request"
+                logger.debug(
+                    "Target '%s': max_spacecraft_roll=%s° from request",
+                    target_data.name,
+                    max_spacecraft_roll,
                 )
             else:
                 # Default to 45° for optical
                 max_spacecraft_roll = 45.0
-                logger.info(
-                    f"Target '{target_data.name}': No max roll specified, using default {max_spacecraft_roll}°"
+                logger.debug(
+                    "Target '%s': no max roll specified, using default %s°",
+                    target_data.name,
+                    max_spacecraft_roll,
                 )
 
             # Save for CZML generation (use first target's value)
@@ -596,8 +1451,10 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
             )
             # Log imaging type for imaging missions
             if request.mission_type == "imaging":
-                logger.info(
-                    f"Target '{target_data.name}': Using imaging_type={effective_imaging_type} from request"
+                logger.debug(
+                    "Target '%s': imaging_type=%s",
+                    target_data.name,
+                    effective_imaging_type,
                 )
             targets.append(target)
 
@@ -608,11 +1465,14 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
         if request.end_time:
             # Use explicit end_time
             end_time = datetime.fromisoformat(request.end_time.replace("Z", "+00:00"))
-            logger.info(f"Using end_time from request: {request.end_time}")
+            logger.debug("Using end_time from request: %s", request.end_time)
         elif request.duration_hours is not None:
             # Backward compatibility: use duration_hours
             end_time = start_time + timedelta(hours=request.duration_hours)
-            logger.info(f"Using duration_hours from request: {request.duration_hours}h")
+            logger.debug(
+                "Using duration_hours from request: %sh",
+                request.duration_hours,
+            )
         else:
             # Neither provided - error
             raise ValueError("Either end_time or duration_hours must be provided")
@@ -625,28 +1485,23 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
 
         # Calculate duration for logging and response
         duration_hours = (end_time - start_time).total_seconds() / 3600.0
-        logger.info(
-            f"Mission duration: {duration_hours:.2f} hours ({duration_hours/24:.2f} days)"
-        )
-
         # Determine if we should use parallel processing
         # Auto-enable for 2+ targets (1 target has overhead that exceeds benefit)
         use_parallel = request.use_parallel
         if use_parallel is None:
             use_parallel = len(targets) >= 2  # Enable for 2+ targets
 
-        # Log optimization settings
-        if use_parallel:
-            logger.info(
-                f"🚀 HPC mode enabled: Using parallel processing for {len(targets)} targets"
-            )
-        else:
-            logger.info(f"Using serial processing for {len(targets)} targets")
-
-        if request.use_adaptive:
-            logger.info(f"⚡ Adaptive time-stepping enabled (high accuracy mode)")
-        else:
-            logger.info(f"Using fixed-step algorithm")
+        logger.info(
+            "Mission request: targets=%d mission_type=%s imaging_type=%s window=%s..%s duration_hours=%.2f parallel=%s adaptive=%s",
+            len(targets),
+            request.mission_type,
+            effective_imaging_type,
+            request.start_time,
+            request.end_time or f"+{request.duration_hours}h",
+            duration_hours,
+            use_parallel,
+            bool(request.use_adaptive),
+        )
 
         # =========================================================================
         # CONSTELLATION SUPPORT: Compute passes for ALL satellites
@@ -701,16 +1556,17 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
                 sar_input_params = get_default_sar_params("strip")
 
             logger.info(
-                f"🛰️ SAR Mission Analysis: mode={sar_input_params.imaging_mode.value}, "
-                f"look_side={sar_input_params.look_side.value}, "
-                f"pass_direction={sar_input_params.pass_direction.value}"
+                "SAR mission analysis: mode=%s look_side=%s pass_direction=%s",
+                sar_input_params.imaging_mode.value,
+                sar_input_params.look_side.value,
+                sar_input_params.pass_direction.value,
             )
 
         for sat_id, sat_orbit in satellites_dict.items():
             # Get satellite name from ID (remove "sat_" prefix)
             sat_name = sat_id.replace("sat_", "")
 
-            logger.info(f"Computing passes for satellite: {sat_name} ({sat_id})")
+            logger.info("Computing passes for satellite: %s (%s)", sat_name, sat_id)
 
             # Create mission planner for this satellite
             sat_planner = MissionPlanner(satellite=sat_orbit, targets=targets)
@@ -767,13 +1623,15 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
             passes_by_satellite[sat_id] = sat_all_passes
             all_passes.extend(sat_all_passes)
 
-            logger.info(f"Found {len(sat_all_passes)} passes for {sat_name}")
+            logger.info("Found %d passes for %s", len(sat_all_passes), sat_name)
 
         # Sort all passes chronologically across all satellites
         all_passes.sort(key=lambda p: p.start_time)
 
         logger.info(
-            f"Total passes across {len(satellites_dict)} satellite(s): {len(all_passes)}"
+            "Total passes across %d satellite(s): %d",
+            len(satellites_dict),
+            len(all_passes),
         )
 
         # Get satellite agility from satellite configuration
@@ -788,8 +1646,10 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
 
         if managed_satellite:
             satellite_agility = managed_satellite.satellite_agility
-            logger.info(
-                f"Using satellite agility from config: {satellite_agility}°/s for {primary_tle.name}"
+            logger.debug(
+                "Using satellite agility from config: %s°/s for %s",
+                satellite_agility,
+                primary_tle.name,
             )
         else:
             logger.warning(
@@ -878,8 +1738,9 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
                 actual_sensor_fov = request.sensor_fov_half_angle_deg
 
         logger.info(
-            f"Generating CZML with mission_type={request.mission_type}, "
-            f"sensor_fov_half_angle_deg={actual_sensor_fov}"
+            "Generating CZML: mission_type=%s sensor_fov_half_angle_deg=%s",
+            request.mission_type,
+            actual_sensor_fov,
         )
 
         filtered_passes = [p for p in all_passes if p.max_elevation >= 0]
@@ -902,8 +1763,10 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
             max_spacecraft_roll_deg=actual_max_spacecraft_roll,
             imaging_type=request.imaging_type,  # "optical" or "sar"
         )
-        logger.info(
-            f"CZMLGenerator initialized with sensor_fov={generator.sensor_fov_half_angle_deg}°, max_roll={generator.max_spacecraft_roll_deg}°"
+        logger.debug(
+            "CZMLGenerator initialized with sensor_fov=%s°, max_roll=%s°",
+            generator.sensor_fov_half_angle_deg,
+            generator.max_spacecraft_roll_deg,
         )
 
         # Generate CZML for Cesium visualization
@@ -922,29 +1785,20 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
                 sar_params=sar_input_params,
             )
             czml_data.extend(sar_czml_packets)
-            logger.info(f"📡 Added {len(sar_czml_packets)} SAR swath CZML packets")
+            logger.info("Added %d SAR swath CZML packets", len(sar_czml_packets))
 
-        # Log summary info only
-        logger.info(f"📊 Generated {len(czml_data)} CZML packets")
-
-        # Check packet types with clean logging
-        for i, packet in enumerate(czml_data):
-            packet_id = packet.get("id", "unknown")
-            if packet_id == "pointing_cone":
-                logger.info(f"  📍 Sensor footprint packet included")
-            elif packet_id.startswith("pass_track"):
-                pass_name = packet.get("name", "Unknown")
-                logger.debug(f"  🛤️ {pass_name}")
-            elif packet_id.startswith("target"):
-                target_name = packet.get("name", "Unknown")
-                logger.info(f"  🎯 Target: {target_name}")
-            elif packet_id.startswith("sat_"):
-                sat_name = packet.get("name", "Unknown")
-                logger.info(f"  🛰️ Satellite: {sat_name}")
-            elif packet_id == "document":
-                logger.debug(f"  📄 Document header")
-            else:
-                logger.debug(f"  📦 {packet_id}")
+        packet_summary = _summarize_czml_packets(czml_data)
+        logger.info(
+            "CZML summary: total=%d satellites=%d ground_tracks=%d pass_tracks=%d targets=%d pointing_cones=%d agility_envelopes=%d other=%d",
+            packet_summary.get("total", 0),
+            packet_summary.get("satellite", 0),
+            packet_summary.get("ground_track", 0),
+            packet_summary.get("pass_track", 0),
+            packet_summary.get("target", 0),
+            packet_summary.get("pointing_cone", 0),
+            packet_summary.get("agility_envelope", 0),
+            packet_summary.get("other", 0),
+        )
 
         # Store in app state (for development - use proper storage in production)
         app.state.current_mission_data = {
@@ -958,20 +1812,29 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
 
         # Note: temp files are cleaned up in create_satellites_from_request()
 
-        logger.info(f"✅ Mission analysis completed: {len(all_passes)} passes found")
         logger.info(
-            f"📅 Time window: {start_time.strftime('%Y-%m-%d %H:%M')} to {end_time.strftime('%Y-%m-%d %H:%M')} UTC"
+            "Mission analysis completed: passes=%d czml_packets=%d window=%s..%s",
+            len(all_passes),
+            len(czml_data),
+            start_time.strftime("%Y-%m-%d %H:%M"),
+            end_time.strftime("%Y-%m-%d %H:%M"),
         )
         if all_passes:
             first_pass = all_passes[0]
-            logger.info(
-                f"First pass times - start: {first_pass.start_time} (type: {type(first_pass.start_time)}), end: {first_pass.end_time} (type: {type(first_pass.end_time)})"
+            logger.debug(
+                "First pass types: start=%s (%s) end=%s (%s)",
+                first_pass.start_time,
+                type(first_pass.start_time),
+                first_pass.end_time,
+                type(first_pass.end_time),
             )
 
         # Log the final response structure
         response_data = {"mission_data": mission_data, "czml_data": czml_data}
-        logger.warning(
-            f"Final response data czml type: {type(czml_data)}, length: {len(czml_data) if czml_data else 0}"
+        logger.debug(
+            "Final response data czml type=%s length=%d",
+            type(czml_data),
+            len(czml_data) if czml_data else 0,
         )
 
         return MissionResponse(
@@ -2146,11 +3009,15 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
             "satellites_dict", {}
         )  # All satellites for constellation
 
-        # Log satellite availability for debugging
-        logger.info(f"Satellite object available: {satellite is not None}")
-        logger.info(f"Constellation satellites available: {len(satellites_dict)}")
-        if satellite:
-            logger.info(f"Satellite type: {type(satellite)}")
+        if getattr(request, "workspace_id", None):
+            update_log_context(workspace_id=request.workspace_id)
+
+        logger.debug(
+            "Planning context: satellite_available=%s constellation_satellites=%d satellite_type=%s",
+            satellite is not None,
+            len(satellites_dict),
+            type(satellite).__name__ if satellite else None,
+        )
 
         if not passes:
             return PlanningResponse(
@@ -2164,14 +3031,15 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
         target_priorities = {
             target.name: getattr(target, "priority", 5) for target in targets
         }
-        logger.info(f"Target priorities: {target_priorities}")
+        logger.debug("Target priorities: %s", target_priorities)
 
         # Get max spacecraft pitch from mission analysis (needed for pitch calculation)
         max_spacecraft_pitch_for_opps = mission_data.get("max_spacecraft_pitch_deg")
         if max_spacecraft_pitch_for_opps is None:
             max_spacecraft_pitch_for_opps = 45.0  # Default if not set
-        logger.info(
-            f"Using max_spacecraft_pitch_deg={max_spacecraft_pitch_for_opps}° for opportunity generation"
+        logger.debug(
+            "Using max_spacecraft_pitch_deg=%s° for opportunity generation",
+            max_spacecraft_pitch_for_opps,
         )
 
         # Convert passes to opportunities with quality scoring
@@ -2198,7 +3066,7 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
         total_opp_estimate = len(passes) * 50  # Rough estimate
         opp_index = 0
 
-        logger.info(f"🔄 Processing {len(passes)} passes to create opportunities...")
+        logger.info("Processing %d passes to create opportunities", len(passes))
         for idx, pass_detail in enumerate(passes):
             # PassDetails may be objects or dicts (from serialization)
             # Handle both cases for robust access
@@ -2481,7 +3349,10 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
 
         t1 = _time.perf_counter()
         logger.info(
-            f"⏱ Opportunity generation: {t1 - t0:.2f}s — {len(opportunities)} opportunities from {len(passes)} passes"
+            "Opportunity generation: %.2fs (%d opportunities from %d passes)",
+            t1 - t0,
+            len(opportunities),
+            len(passes),
         )
 
         # Cache opportunities for /api/v1/schedule/plan and /repair endpoints
@@ -2523,12 +3394,17 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
             }
             opp_dicts.append(opp_dict)
         set_cached_opportunities(opp_dicts)
-        logger.info(
-            f"Cached {len(opp_dicts)} opportunities for /plan and /repair endpoints"
+        logger.debug(
+            "Cached %d opportunities for /plan and /repair endpoints",
+            len(opp_dicts),
         )
 
         logger.info(
-            f"🎯 WEIGHTS: P={multi_weights.norm_priority*100:.0f}% G={multi_weights.norm_geometry*100:.0f}% T={multi_weights.norm_timing*100:.0f}% (preset={request.weight_preset})"
+            "Weights: priority=%.0f%% geometry=%.0f%% timing=%.0f%% (preset=%s)",
+            multi_weights.norm_priority * 100,
+            multi_weights.norm_geometry * 100,
+            multi_weights.norm_timing * 100,
+            request.weight_preset,
         )
 
         # =====================================================================
@@ -2560,9 +3436,10 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
                         blocked_intervals_by_satellite[sat_name] = [
                             (acq.start_time, acq.end_time) for acq in committed
                         ]
-                        logger.info(
-                            f"  Satellite {sat_name}: {len(committed)} committed acquisitions "
-                            f"(blocking {len(committed)} intervals)"
+                        logger.debug(
+                            "[INCREMENTAL MODE] Satellite %s: %d committed acquisitions",
+                            sat_name,
+                            len(committed),
                         )
 
                 # Filter opportunities that overlap with blocked intervals
@@ -2623,22 +3500,23 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
         max_spacecraft_roll = mission_data.get("max_spacecraft_roll_deg")
         if max_spacecraft_roll is None:
             max_spacecraft_roll = 45.0  # Default if not set
-        logger.info(
-            f"Using max_spacecraft_roll_deg={max_spacecraft_roll}° from mission analysis"
-        )
-
         # Get max spacecraft pitch from mission analysis (for 2D slew capability!)
         max_spacecraft_pitch = mission_data.get("max_spacecraft_pitch_deg")
         if max_spacecraft_pitch is None:
             max_spacecraft_pitch = 45.0  # Default if not set
-        logger.info(
-            f"Using max_spacecraft_pitch_deg={max_spacecraft_pitch}° from mission analysis"
-        )
 
         # Get satellite agility from mission analysis config
         _sat_agility = mission_data.get("satellite_agility", request.max_roll_rate_dps)
-        _agility_source = "config" if "satellite_agility" in mission_data else "request default"
-        logger.info(f"[Plan] Using satellite agility: {_sat_agility}\u00b0/s (from {_agility_source})")
+        _agility_source = (
+            "config" if "satellite_agility" in mission_data else "request default"
+        )
+        logger.info(
+            "[Plan] Scheduler limits: roll=%s° pitch=%s° agility=%s°/s (%s)",
+            max_spacecraft_roll,
+            max_spacecraft_pitch,
+            _sat_agility,
+            _agility_source,
+        )
 
         # Create scheduler config
         config = SchedulerConfig(
@@ -2658,8 +3536,9 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
         scheduler = MissionScheduler(
             config, satellite=satellite, satellites=satellites_dict
         )
-        logger.info(
-            f"Scheduler initialized with {len(satellites_dict)} satellites for constellation"
+        logger.debug(
+            "Scheduler initialized with %d satellites for constellation",
+            len(satellites_dict),
         )
 
         # Get unique targets for coverage statistics
@@ -2667,7 +3546,9 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
         total_targets = len(all_targets)
 
         logger.info(
-            f"Planning for {total_targets} unique targets with {len(all_opportunities)} total opportunities"
+            "Planning input: unique_targets=%d opportunities=%d",
+            total_targets,
+            len(all_opportunities),
         )
 
         # Run scheduling with roll_pitch_best_fit (the only active algorithm)
@@ -2680,7 +3561,8 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
         algo_name = "roll_pitch_best_fit"
         algo_opportunities = all_opportunities
         logger.info(
-            f"roll_pitch_best_fit: Using ALL {len(algo_opportunities)} opportunities (2D slew, global best geometry)"
+            "roll_pitch_best_fit using %d opportunities (2D slew, global best geometry)",
+            len(algo_opportunities),
         )
 
         # Log deprecation warning if other algorithms were requested
@@ -2698,7 +3580,10 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
             )
             t3 = _time.perf_counter()
             logger.info(
-                f"⏱ Scheduling algorithm: {t3 - t2:.2f}s — {len(schedule)} accepted from {len(algo_opportunities)} opportunities"
+                "Scheduling algorithm: %.2fs (%d accepted from %d opportunities)",
+                t3 - t2,
+                len(schedule),
+                len(algo_opportunities),
             )
 
             # Compute target-level statistics
@@ -2867,32 +3752,28 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
             )
 
             # Log comprehensive summary
-            logger.info(f"")
-            logger.info(f"{'='*80}")
-            logger.info(f"[{algo_name.upper()}] SUMMARY")
-            logger.info(f"{'='*80}")
             logger.info(
-                f"  Coverage:          {len(acquired_targets)}/{total_targets} targets ({target_coverage_pct:.1f}%)"
-            )
-            logger.info(
-                f"  Avg Off-Nadir:     {avg_incidence:.2f}° (lower = better image quality)"
-            )
-            logger.info(
-                f"  Avg Cross-Track:   {avg_roll:.2f}° (roll, left/right from ground track)"
-            )
-            logger.info(
-                f"  Avg Along-Track:   {avg_pitch:.2f}° (pitch, forward/backward look)"
+                "[%s] coverage=%d/%d (%.1f%%) avg_off_nadir=%.2f° avg_roll=%.2f° avg_pitch=%.2f° maneuver=%.1fs slack=%.1fs value=%.1f density=%.2f runtime=%.2fms",
+                algo_name.upper(),
+                len(acquired_targets),
+                total_targets,
+                target_coverage_pct,
+                avg_incidence,
+                avg_roll,
+                avg_pitch,
+                total_maneuver,
+                total_slack,
+                total_value,
+                avg_density,
+                metrics.runtime_ms,
             )
             if max_pitch > 0:
-                logger.info(f"  Total Pitch Used:  {total_pitch:.2f}°")
-                logger.info(f"  Max Pitch:         {max_pitch:.2f}°")
-            logger.info(f"  Total Maneuver:    {total_maneuver:.1f}s")
-            logger.info(f"  Total Slack:       {total_slack:.1f}s")
-            logger.info(f"  Total Value:       {total_value:.1f}")
-            logger.info(f"  Avg Density:       {avg_density:.2f} (value/maneuver)")
-            logger.info(f"  Runtime:           {metrics.runtime_ms:.2f}ms")
-            logger.info(f"{'='*80}")
-            logger.info(f"")
+                logger.debug(
+                    "[%s] pitch totals: total=%.2f° max=%.2f°",
+                    algo_name.upper(),
+                    total_pitch,
+                    max_pitch,
+                )
 
         except Exception as e:
             logger.error(f"Error running {algo_name}: {e}")
@@ -2915,6 +3796,7 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
         run_uuid = str(uuid.uuid4())[:8]
         run_id = f"run_{run_timestamp}_{run_uuid}"
         candidate_plan_id = f"plan_temp_{run_uuid}"
+        update_log_context(run_id=run_id)
 
         # Compute input hash for reproducibility
         input_data = {
@@ -2947,7 +3829,7 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
         )
 
         t_end = _time.perf_counter()
-        logger.info(f"⏱ Total scheduling endpoint: {t_end - t0:.2f}s")
+        logger.info("Total scheduling endpoint: %.2fs", t_end - t0)
 
         return PlanningResponse(
             success=True,

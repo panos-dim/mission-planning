@@ -5,7 +5,7 @@ Tests backward compatibility and new sensor/spacecraft separation.
 """
 
 import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import requests
@@ -13,6 +13,27 @@ import requests
 BASE_URL = "http://localhost:8000"
 
 pytestmark = pytest.mark.requires_server  # All tests in this module require server
+
+
+def _iso_z(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def _assert_successful_analysis(response: requests.Response) -> dict:
+    assert response.status_code == 200, (
+        f"Mission analysis failed with {response.status_code}: {response.text}"
+    )
+    data = response.json()
+    assert data.get("success") is True, f"Mission analysis reported failure: {data}"
+    payload = data.get("data", {})
+    assert isinstance(payload, dict), f"Expected response data payload, got: {data}"
+    mission_data = payload.get("mission_data", {})
+    assert isinstance(
+        mission_data, dict
+    ), f"Expected mission_data payload, got: {payload}"
+    assert "passes" in mission_data, f"Expected mission passes in payload, got: {data}"
+    assert "czml_data" in payload, f"Expected CZML payload in response, got: {data}"
+    return data
 
 
 def test_health() -> None:
@@ -28,13 +49,13 @@ def test_health() -> None:
     print("✅ Health check passed")
 
 
-def test_legacy_pointing_angle() -> bool:
+def test_legacy_pointing_angle() -> None:
     """Test backward compatibility with legacy pointing_angle parameter"""
     print("\n" + "=" * 80)
     print("TEST 2: Legacy API - pointing_angle (Backward Compatibility)")
     print("=" * 80)
 
-    start_time = datetime.utcnow()
+    start_time = datetime.now(UTC)
     end_time = start_time + timedelta(hours=24)
 
     payload = {
@@ -51,8 +72,8 @@ def test_legacy_pointing_angle() -> bool:
                 "priority": 1,
             }
         ],
-        "start_time": start_time.isoformat() + "Z",
-        "end_time": end_time.isoformat() + "Z",
+        "start_time": _iso_z(start_time),
+        "end_time": _iso_z(end_time),
         "mission_type": "imaging",
         "pointing_angle": 45.0,  # LEGACY parameter - should trigger deprecation warning
     }
@@ -64,34 +85,31 @@ def test_legacy_pointing_angle() -> bool:
         f"{BASE_URL}/api/v1/mission/analyze", json=payload, timeout=60
     )
     print(f"\n📥 Status: {response.status_code}")
+    data = _assert_successful_analysis(response)
+    mission_data = data["data"]["mission_data"]
+    czml_data = data["data"]["czml_data"]
 
-    if response.status_code == 200:
-        data = response.json()
-        print(f"✅ Mission planned successfully")
-        print(f"   - Found {len(data.get('passes', []))} passes")
-        print(f"   - CZML packets: {len(data.get('czml_data', []))}")
+    print(f"✅ Mission planned successfully")
+    print(f"   - Found {len(mission_data.get('passes', []))} passes")
+    print(f"   - CZML packets: {len(czml_data)}")
 
-        # Check if pointing cone was generated (should be for imaging mission)
-        czml_ids = [p.get("id") for p in data.get("czml_data", [])]
-        if "pointing_cone" in czml_ids:
-            print(f"   - ✅ Sensor footprint (pointing_cone) generated")
-        else:
-            print(f"   - ⚠️  No sensor footprint found")
+    # Check if pointing cone was generated (should be for imaging mission)
+    czml_ids = [p.get("id") for p in czml_data]
+    if "pointing_cone" in czml_ids:
+        print(f"   - ✅ Sensor footprint (pointing_cone) generated")
     else:
-        print(f"❌ Request failed: {response.text}")
-        return False
+        print(f"   - ⚠️  No sensor footprint found")
 
     print("✅ Legacy API test passed")
-    return True
 
 
-def test_new_sensor_fov_api() -> bool:
+def test_new_sensor_fov_api() -> None:
     """Test new API with sensor_fov_half_angle_deg"""
     print("\n" + "=" * 80)
     print("TEST 3: New API - sensor_fov_half_angle_deg")
     print("=" * 80)
 
-    start_time = datetime.utcnow()
+    start_time = datetime.now(UTC)
     end_time = start_time + timedelta(hours=24)
 
     payload = {
@@ -108,8 +126,8 @@ def test_new_sensor_fov_api() -> bool:
                 "priority": 1,
             }
         ],
-        "start_time": start_time.isoformat() + "Z",
-        "end_time": end_time.isoformat() + "Z",
+        "start_time": _iso_z(start_time),
+        "end_time": _iso_z(end_time),
         "mission_type": "imaging",
         "sensor_fov_half_angle_deg": 30.0,  # NEW parameter
     }
@@ -121,34 +139,31 @@ def test_new_sensor_fov_api() -> bool:
         f"{BASE_URL}/api/v1/mission/analyze", json=payload, timeout=60
     )
     print(f"\n📥 Status: {response.status_code}")
+    data = _assert_successful_analysis(response)
+    mission_data = data["data"]["mission_data"]
+    czml_data = data["data"]["czml_data"]
 
-    if response.status_code == 200:
-        data = response.json()
-        print(f"✅ Mission planned successfully")
-        print(f"   - Found {len(data.get('passes', []))} passes")
-        print(f"   - CZML packets: {len(data.get('czml_data', []))}")
+    print(f"✅ Mission planned successfully")
+    print(f"   - Found {len(mission_data.get('passes', []))} passes")
+    print(f"   - CZML packets: {len(czml_data)}")
 
-        # Check if pointing cone was generated
-        czml_ids = [p.get("id") for p in data.get("czml_data", [])]
-        if "pointing_cone" in czml_ids:
-            print(f"   - ✅ Sensor footprint (pointing_cone) generated with new API")
-        else:
-            print(f"   - ⚠️  No sensor footprint found")
+    # Check if pointing cone was generated
+    czml_ids = [p.get("id") for p in czml_data]
+    if "pointing_cone" in czml_ids:
+        print(f"   - ✅ Sensor footprint (pointing_cone) generated with new API")
     else:
-        print(f"❌ Request failed: {response.text}")
-        return False
+        print(f"   - ⚠️  No sensor footprint found")
 
     print("✅ New API test passed")
-    return True
 
 
-def test_communication_mission() -> bool:
+def test_communication_mission() -> None:
     """Test communication mission (no sensor FOV needed)"""
     print("\n" + "=" * 80)
     print("TEST 4: Communication Mission (No Sensor FOV)")
     print("=" * 80)
 
-    start_time = datetime.utcnow()
+    start_time = datetime.now(UTC)
     end_time = start_time + timedelta(hours=24)
 
     payload = {
@@ -165,8 +180,8 @@ def test_communication_mission() -> bool:
                 "priority": 1,
             }
         ],
-        "start_time": start_time.isoformat() + "Z",
-        "end_time": end_time.isoformat() + "Z",
+        "start_time": _iso_z(start_time),
+        "end_time": _iso_z(end_time),
         "mission_type": "communication",  # No pointing_angle or sensor_fov needed
     }
 
@@ -177,27 +192,24 @@ def test_communication_mission() -> bool:
         f"{BASE_URL}/api/v1/mission/analyze", json=payload, timeout=60
     )
     print(f"\n📥 Status: {response.status_code}")
+    data = _assert_successful_analysis(response)
+    mission_data = data["data"]["mission_data"]
+    czml_data = data["data"]["czml_data"]
 
-    if response.status_code == 200:
-        data = response.json()
-        print(f"✅ Mission planned successfully")
-        print(f"   - Found {len(data.get('passes', []))} passes")
+    print(f"✅ Mission planned successfully")
+    print(f"   - Found {len(mission_data.get('passes', []))} passes")
 
-        # Should NOT have pointing cone for communication mission
-        czml_ids = [p.get("id") for p in data.get("czml_data", [])]
-        if "pointing_cone" not in czml_ids:
-            print(f"   - ✅ No sensor footprint (correct for communication)")
-        else:
-            print(f"   - ⚠️  Unexpected sensor footprint for communication mission")
+    # Should NOT have pointing cone for communication mission
+    czml_ids = [p.get("id") for p in czml_data]
+    if "pointing_cone" not in czml_ids:
+        print(f"   - ✅ No sensor footprint (correct for communication)")
     else:
-        print(f"❌ Request failed: {response.text}")
-        return False
+        print(f"   - ⚠️  Unexpected sensor footprint for communication mission")
 
     print("✅ Communication mission test passed")
-    return True
 
 
-def test_wide_fov_tight_bus_scenario() -> bool:
+def test_wide_fov_tight_bus_scenario() -> None:
     """Test scenario: Wide sensor FOV, limited spacecraft agility"""
     print("\n" + "=" * 80)
     print("TEST 5: Wide-FOV / Tight Bus Scenario")
@@ -205,7 +217,7 @@ def test_wide_fov_tight_bus_scenario() -> bool:
     print("Scenario: 50° sensor FOV should find many opportunities in analysis")
     print("          Scheduler with 30° bus limit should prune some")
 
-    start_time = datetime.utcnow()
+    start_time = datetime.now(UTC)
     end_time = start_time + timedelta(hours=48)
 
     payload = {
@@ -222,8 +234,8 @@ def test_wide_fov_tight_bus_scenario() -> bool:
                 "priority": 1,
             }
         ],
-        "start_time": start_time.isoformat() + "Z",
-        "end_time": end_time.isoformat() + "Z",
+        "start_time": _iso_z(start_time),
+        "end_time": _iso_z(end_time),
         "mission_type": "imaging",
         "sensor_fov_half_angle_deg": 50.0,  # Wide sensor FOV
         # Note: Scheduler uses config default (90°) or would need separate spacecraft config
@@ -235,19 +247,15 @@ def test_wide_fov_tight_bus_scenario() -> bool:
         f"{BASE_URL}/api/v1/mission/analyze", json=payload, timeout=60
     )
     print(f"\n📥 Status: {response.status_code}")
+    data = _assert_successful_analysis(response)
+    mission_data = data["data"]["mission_data"]
 
-    if response.status_code == 200:
-        data = response.json()
-        print(f"✅ Mission planned successfully")
-        print(
-            f"   - Found {len(data.get('passes', []))} passes (wide FOV should find more)"
-        )
-    else:
-        print(f"❌ Request failed: {response.text}")
-        return False
+    print(f"✅ Mission planned successfully")
+    print(
+        f"   - Found {len(mission_data.get('passes', []))} passes (wide FOV should find more)"
+    )
 
     print("✅ Wide-FOV scenario test passed")
-    return True
 
 
 def main() -> int:
@@ -268,8 +276,8 @@ def main() -> int:
     results = []
     for name, test_func in tests:
         try:
-            result = test_func()
-            results.append((name, result))
+            test_func()
+            results.append((name, True))
         except Exception as e:
             print(f"\n❌ Test '{name}' failed with exception: {e}")
             results.append((name, False))

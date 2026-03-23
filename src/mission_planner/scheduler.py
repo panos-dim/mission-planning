@@ -1425,9 +1425,9 @@ class MissionScheduler:
             )
             return self._best_fit(opportunities, target_positions)
 
-        logger.info(
-            f"[roll_pitch_best_fit] Strategy: VALUE priority with minimal pitch. "
-            f"Max pitch={self.config.max_spacecraft_pitch_deg}°"
+        logger.debug(
+            "[roll_pitch_best_fit] Strategy: VALUE priority with minimal pitch. Max pitch=%s°",
+            self.config.max_spacecraft_pitch_deg,
         )
 
         # Sort ALL opportunities by: pitch (prefer 0), then by VALUE (highest first)
@@ -1443,16 +1443,23 @@ class MissionScheduler:
         roll_only_count = sum(
             1 for opp in opportunities if abs(opp.pitch_angle or 0) < 1.0
         )
-        logger.info(
-            f"[roll_pitch_best_fit] {len(sorted_opps)} opportunities ({roll_only_count} roll-only)"
+        logger.debug(
+            "[roll_pitch_best_fit] %d opportunities (%d roll-only)",
+            len(sorted_opps),
+            roll_only_count,
         )
 
         # Show top opportunities with value breakdown
         for i, opp in enumerate(sorted_opps[:5]):
             inc = abs(opp.incidence_angle) if opp.incidence_angle else 90.0
             pitch = abs(opp.pitch_angle) if opp.pitch_angle else 0.0
-            logger.info(
-                f"[roll_pitch_best_fit] Top {i+1}: {opp.target_id} value={opp.value:.3f} pitch={pitch:.1f}° inc={inc:.1f}°"
+            logger.debug(
+                "[roll_pitch_best_fit] Top %d: %s value=%.3f pitch=%.1f° inc=%.1f°",
+                i + 1,
+                opp.target_id,
+                opp.value,
+                pitch,
+                inc,
             )
 
         schedule = []
@@ -1608,8 +1615,12 @@ class MissionScheduler:
                 pitch_str = "ROLL-ONLY"
             else:
                 pitch_str = f"pitch={pitch_angle:+.1f}° (Δpitch={delta_pitch:.1f}°)"
-            logger.info(
-                f"[roll_pitch_best_fit] ✅ {opp.target_id}: value={opp.value:.3f} {pitch_str} inc={abs(opp.incidence_angle or 0):.1f}°"
+            logger.debug(
+                "[roll_pitch_best_fit] scheduled %s: value=%.3f %s inc=%.1f°",
+                opp.target_id,
+                opp.value,
+                pitch_str,
+                abs(opp.incidence_angle or 0),
             )
 
         # ── Coverage improvement pass: cross-satellite swap ──
@@ -1905,7 +1916,13 @@ class MissionScheduler:
         total_scheduled_value = sum(s.value for s in schedule)
         avg_value = total_scheduled_value / len(schedule) if schedule else 0.0
         logger.info(
-            f"[roll_pitch_best_fit] Summary: {len(schedule)} targets (value-priority, total={total_scheduled_value:.2f}, avg={avg_value:.3f}, {roll_only_count} roll-only, {pitch_maneuver_count} pitch, Δpitch={total_pitch_used:.1f}°)"
+            "[roll_pitch_best_fit] Summary: %d targets (value-priority, total=%.2f, avg=%.3f, %d roll-only, %d pitch, Δpitch=%.1f°)",
+            len(schedule),
+            total_scheduled_value,
+            avg_value,
+            roll_only_count,
+            pitch_maneuver_count,
+            total_pitch_used,
         )
 
         return schedule
@@ -1948,15 +1965,21 @@ class MissionScheduler:
             key=lambda opp: -opp.value,  # Descending order (highest value first)
         )
 
-        logger.info(
-            f"[best_fit] Processing {len(sorted_opps)} opportunities sorted by VALUE (highest first)"
+        logger.debug(
+            "[best_fit] Processing %d opportunities sorted by VALUE (highest first)",
+            len(sorted_opps),
         )
 
         # Show best few opportunities with value breakdown
         for i, opp in enumerate(sorted_opps[:5]):
             inc = abs(opp.incidence_angle) if opp.incidence_angle else 90.0
-            logger.info(
-                f"[best_fit] Top {i+1}: {opp.target_id} value={opp.value:.3f} inc={inc:.1f}° at {str(opp.start_time)[11:19]}"
+            logger.debug(
+                "[best_fit] Top %d: %s value=%.3f inc=%.1f° at %s",
+                i + 1,
+                opp.target_id,
+                opp.value,
+                inc,
+                str(opp.start_time)[11:19],
             )
 
         schedule = []
@@ -2056,8 +2079,12 @@ class MissionScheduler:
             # Schedule this opportunity!
             scheduled_targets.add(opp.target_id)
 
-            logger.info(
-                f"[best_fit] ✅ {opp.target_id}: SCHEDULED value={opp.value:.3f} inc={incidence:.1f}° at {str(opp_start)[11:19]}"
+            logger.debug(
+                "[best_fit] scheduled %s: value=%.3f inc=%.1f° at %s",
+                opp.target_id,
+                opp.value,
+                incidence,
+                str(opp_start)[11:19],
             )
 
             density = opp.value / maneuver_time if maneuver_time > 0 else float("inf")
@@ -2165,7 +2192,10 @@ class MissionScheduler:
         total_scheduled_value = sum(s.value for s in schedule)
         avg_value = total_scheduled_value / len(schedule) if schedule else 0.0
         logger.info(
-            f"[best_fit] Summary: {len(scheduled_targets)} targets scheduled (value-priority, total={total_scheduled_value:.2f}, avg={avg_value:.3f})"
+            "[best_fit] Summary: %d targets scheduled (value-priority, total=%.2f, avg=%.3f)",
+            len(scheduled_targets),
+            total_scheduled_value,
+            avg_value,
         )
         return schedule
 

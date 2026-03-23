@@ -25,6 +25,13 @@ from backend.schedule_persistence import Acquisition, ScheduleDB
 logger = logging.getLogger(__name__)
 
 
+def _isoformat_z(value: datetime) -> str:
+    """Format a datetime as UTC with a trailing Z."""
+    if value.tzinfo is None:
+        return value.isoformat() + "Z"
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 # =============================================================================
 # Enums and Types
 # =============================================================================
@@ -42,6 +49,10 @@ class LockPolicy(str, Enum):
     """Lock policy determines which acquisition states are treated as blocked."""
 
     RESPECT_HARD_ONLY = "respect_hard_only"  # Only hard-locked items block planning
+    # Backward-compatible alias retained for older clients and tests.
+    # Soft locks no longer exist, so this currently behaves the same as
+    # RESPECT_HARD_ONLY.
+    RESPECT_HARD_AND_SOFT = "respect_hard_and_soft"
 
 
 class RepairScope(str, Enum):
@@ -722,8 +733,8 @@ def load_blocked_intervals(
     )
 
     # Build query filters based on lock policy
-    start_str = horizon_start.isoformat() + "Z"
-    end_str = horizon_end.isoformat() + "Z"
+    start_str = _isoformat_z(horizon_start)
+    end_str = _isoformat_z(horizon_end)
 
     # Get all acquisitions in horizon
     acquisitions = db.get_acquisitions_in_horizon(
@@ -1070,12 +1081,46 @@ def predict_commit_conflicts(
     """
     from backend.conflict_detection import ConflictDetectionConfig, ConflictDetector
 
+    def _normalize_utc(dt: datetime) -> datetime:
+        """Normalize datetimes so naive/aware values compare safely."""
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
     # Create a temporary detector
     detector = ConflictDetector(db)
 
+    # Expand the prediction window to always cover the items being previewed.
+    # This prevents far-future (or otherwise out-of-window) plan items from
+    # silently bypassing conflict checks when the caller supplies a generic
+    # horizon such as "now .. now+7d".
+    effective_start = _normalize_utc(horizon_start)
+    effective_end = _normalize_utc(horizon_end)
+    parsed_item_bounds: List[Tuple[datetime, datetime]] = []
+    for item in new_items:
+        try:
+            item_start = datetime.fromisoformat(
+                str(item.get("start_time", "")).replace("Z", "+00:00")
+            )
+            item_end = datetime.fromisoformat(
+                str(item.get("end_time", "")).replace("Z", "+00:00")
+            )
+        except (TypeError, ValueError):
+            continue
+        parsed_item_bounds.append((_normalize_utc(item_start), _normalize_utc(item_end)))
+
+    if parsed_item_bounds:
+        prediction_padding = timedelta(hours=1)
+        item_min = min(start for start, _ in parsed_item_bounds) - prediction_padding
+        item_max = max(end for _, end in parsed_item_bounds) + prediction_padding
+        if item_min < effective_start:
+            effective_start = item_min
+        if item_max > effective_end:
+            effective_end = item_max
+
     # Get existing acquisitions
-    start_str = horizon_start.isoformat() + "Z"
-    end_str = horizon_end.isoformat() + "Z"
+    start_str = effective_start.isoformat().replace("+00:00", "Z")
+    end_str = effective_end.isoformat().replace("+00:00", "Z")
 
     existing = db.get_acquisitions_in_horizon(
         start_time=start_str,
@@ -1091,8 +1136,8 @@ def predict_commit_conflicts(
     for idx, item in enumerate(new_items):
         pseudo = Acquisition(
             id=f"pseudo_{idx}",
-            created_at=datetime.now(timezone.utc).isoformat() + "Z",
-            updated_at=datetime.now(timezone.utc).isoformat() + "Z",
+            created_at=_isoformat_z(datetime.now(timezone.utc)),
+            updated_at=_isoformat_z(datetime.now(timezone.utc)),
             satellite_id=item.get("satellite_id", "unknown"),
             target_id=item.get("target_id", "unknown"),
             start_time=item.get("start_time", ""),
@@ -1139,15 +1184,18 @@ def predict_commit_conflicts(
         # Check temporal overlaps
         overlaps = detector._detect_temporal_overlaps(sat_acqs_sorted, satellite_id)
         for conflict in overlaps:
+            involves_new_item = any(
+                aid.startswith("pseudo_") for aid in conflict.acquisition_ids
+            )
+            if not involves_new_item:
+                continue
             predicted_conflicts.append(
                 {
                     "type": conflict.type,
                     "severity": conflict.severity,
                     "description": conflict.description,
                     "acquisition_ids": conflict.acquisition_ids,
-                    "involves_new_item": any(
-                        aid.startswith("pseudo_") for aid in conflict.acquisition_ids
-                    ),
+                    "involves_new_item": involves_new_item,
                     "reason": (
                         "Two acquisitions on the same satellite overlap in time. "
                         "The satellite cannot image two targets simultaneously."
@@ -1159,15 +1207,18 @@ def predict_commit_conflicts(
         # Check slew feasibility
         slew_issues = detector._detect_slew_infeasible(sat_acqs_sorted, satellite_id)
         for conflict in slew_issues:
+            involves_new_item = any(
+                aid.startswith("pseudo_") for aid in conflict.acquisition_ids
+            )
+            if not involves_new_item:
+                continue
             predicted_conflicts.append(
                 {
                     "type": conflict.type,
                     "severity": conflict.severity,
                     "description": conflict.description,
                     "acquisition_ids": conflict.acquisition_ids,
-                    "involves_new_item": any(
-                        aid.startswith("pseudo_") for aid in conflict.acquisition_ids
-                    ),
+                    "involves_new_item": involves_new_item,
                     "reason": (
                         "Insufficient time to repoint the satellite between consecutive "
                         "acquisitions. The maneuver requires more time than the gap allows."
@@ -1223,8 +1274,8 @@ def load_repair_context(
     )
 
     # Query acquisitions in horizon
-    start_str = horizon_start.isoformat() + "Z"
-    end_str = horizon_end.isoformat() + "Z"
+    start_str = _isoformat_z(horizon_start)
+    end_str = _isoformat_z(horizon_end)
 
     acquisitions = db.get_acquisitions_in_horizon(
         start_time=start_str,
@@ -1996,8 +2047,8 @@ def execute_repair_planning(
                 "acquisition_id": interval.acquisition_id,
                 "satellite_id": interval.satellite_id,
                 "target_id": interval.target_id,
-                "start_time": interval.start_time.isoformat() + "Z",
-                "end_time": interval.end_time.isoformat() + "Z",
+                "start_time": _isoformat_z(interval.start_time),
+                "end_time": _isoformat_z(interval.end_time),
                 "roll_angle_deg": interval.roll_angle_deg,
                 "pitch_angle_deg": interval.pitch_angle_deg,
                 "value": getattr(interval, "value", 1.0) or 1.0,
@@ -2014,8 +2065,8 @@ def execute_repair_planning(
                     "acquisition_id": flex.acquisition_id,
                     "satellite_id": flex.satellite_id,
                     "target_id": flex.target_id,
-                    "start_time": flex.original_start.isoformat() + "Z",
-                    "end_time": flex.original_end.isoformat() + "Z",
+                    "start_time": _isoformat_z(flex.original_start),
+                    "end_time": _isoformat_z(flex.original_end),
                     "roll_angle_deg": flex.roll_angle_deg,
                     "pitch_angle_deg": flex.pitch_angle_deg,
                     "value": flex.value or 1.0,
@@ -2112,8 +2163,8 @@ def execute_repair_planning(
                 acquisition_id=did,
                 satellite_id=flex_item.satellite_id if flex_item else "",
                 target_id=flex_item.target_id if flex_item else "",
-                start=flex_item.original_start.isoformat() + "Z" if flex_item else "",
-                end=flex_item.original_end.isoformat() + "Z" if flex_item else "",
+                start=_isoformat_z(flex_item.original_start) if flex_item else "",
+                end=_isoformat_z(flex_item.original_end) if flex_item else "",
                 reason_code=reason_code,
                 reason_text=reason_text,
                 replaced_by=replaced_by_ids,

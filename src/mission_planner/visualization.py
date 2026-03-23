@@ -42,7 +42,7 @@ class Visualizer:
         self.fig = None
         self.ax = None
         self._setup_plot_style()
-        logger.info("Initialized Visualizer")
+        logger.debug("Initialized Visualizer")
 
     def _setup_plot_style(self) -> None:
         """Set up matplotlib style for clean plots."""

@@ -25,12 +25,31 @@ from backend.auto_mode_selection import (
     record_schedule_diff,
     select_planning_mode,
 )
-from backend.schedule_persistence import ScheduleDB, get_schedule_db
+from backend.schedule_persistence import (
+    DEFAULT_WORKSPACE_ID,
+    Acquisition,
+    ScheduleDB,
+    get_schedule_db,
+)
 from backend.workspace_persistence import get_workspace_db
+from mission_planner.utils import update_log_context
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/schedule", tags=["schedule"])
+CONFLICT_HORIZON_PADDING = timedelta(hours=1)
+
+
+def _bind_schedule_log_context(
+    workspace_id: Optional[str] = None,
+    **extra: Any,
+) -> None:
+    """Attach schedule-scoped context to the current request logs."""
+    context: Dict[str, Any] = dict(extra)
+    if workspace_id:
+        context["workspace_id"] = workspace_id
+    if context:
+        update_log_context(**context)
 
 
 # =============================================================================
@@ -127,6 +146,204 @@ class ScheduleHorizonResponse(BaseModel):
     conflicts_summary: Optional[ConflictsSummary] = None
 
 
+def _parse_iso_timestamp(value: Optional[str]) -> Optional[datetime]:
+    """Parse an ISO timestamp, accepting a trailing Z."""
+    if not value:
+        return None
+    try:
+        normalized = value
+        if value.endswith("Z"):
+            normalized = value[:-1]
+            if not (
+                normalized.endswith("+00:00") or normalized.endswith("-00:00")
+            ):
+                normalized = f"{normalized}+00:00"
+        return datetime.fromisoformat(normalized)
+    except (AttributeError, ValueError):
+        return None
+
+
+def _isoformat_z(value: datetime) -> str:
+    """Format a datetime as UTC with a trailing Z."""
+    if value.tzinfo is None:
+        return value.isoformat() + "Z"
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _derive_horizon_from_timestamps(
+    windows: List[tuple[str, str]],
+    *,
+    fallback_start: datetime,
+    fallback_end: datetime,
+    padding: timedelta = CONFLICT_HORIZON_PADDING,
+) -> tuple[datetime, datetime]:
+    """Derive a padded horizon from timestamp windows."""
+    parsed_windows: List[tuple[datetime, datetime]] = []
+    for start_raw, end_raw in windows:
+        start_dt = _parse_iso_timestamp(start_raw)
+        end_dt = _parse_iso_timestamp(end_raw)
+        if start_dt is None or end_dt is None:
+            continue
+        parsed_windows.append((start_dt, end_dt))
+
+    if not parsed_windows:
+        return fallback_start, fallback_end
+
+    horizon_start = min(start for start, _ in parsed_windows) - padding
+    horizon_end = max(end for _, end in parsed_windows) + padding
+    return horizon_start, horizon_end
+
+
+def _derive_plan_items_horizon(
+    plan_items: List[Any],
+    *,
+    fallback_start: datetime,
+    fallback_end: datetime,
+    padding: timedelta = CONFLICT_HORIZON_PADDING,
+) -> tuple[datetime, datetime]:
+    """Derive a padded horizon from plan items."""
+    return _derive_horizon_from_timestamps(
+        [(item.start_time, item.end_time) for item in plan_items],
+        fallback_start=fallback_start,
+        fallback_end=fallback_end,
+        padding=padding,
+    )
+
+
+def _derive_workspace_conflict_horizon(
+    db: ScheduleDB,
+    workspace_id: str,
+    *,
+    fallback_start: datetime,
+    fallback_end: datetime,
+    padding: timedelta = CONFLICT_HORIZON_PADDING,
+) -> tuple[datetime, datetime]:
+    """Derive a padded horizon covering the workspace's active acquisitions."""
+    min_start_time, max_end_time = db.get_acquisition_horizon_bounds(
+        workspace_id=workspace_id,
+        include_tentative=True,
+    )
+    if min_start_time is None or max_end_time is None:
+        return fallback_start, fallback_end
+
+    return _derive_horizon_from_timestamps(
+        [(min_start_time, max_end_time)],
+        fallback_start=fallback_start,
+        fallback_end=fallback_end,
+        padding=padding,
+    )
+
+
+def _calculate_temporal_overlap_seconds(
+    acq1: Acquisition,
+    acq2: Acquisition,
+) -> Optional[float]:
+    """Compute overlap seconds using the same point/interval rules as detection."""
+    start1 = _parse_iso_timestamp(acq1.start_time)
+    end1 = _parse_iso_timestamp(acq1.end_time)
+    start2 = _parse_iso_timestamp(acq2.start_time)
+    end2 = _parse_iso_timestamp(acq2.end_time)
+    if not all((start1, end1, start2, end2)):
+        return None
+
+    if start1 == end1 and start2 == end2:
+        return 0.0 if start1 == start2 else None
+    if start1 == end1:
+        return 0.0 if start2 <= start1 <= end2 else None
+    if start2 == end2:
+        return 0.0 if start1 <= start2 <= end1 else None
+
+    overlap_seconds = (min(end1, end2) - max(start1, start2)).total_seconds()
+    return overlap_seconds if overlap_seconds > 0 else None
+
+
+def _build_conflict_details(
+    conflict: Any,
+    acquisition_map: Dict[str, Acquisition],
+) -> Optional[Dict[str, Any]]:
+    """Enrich persisted conflicts with acquisition metadata for readback/debugging."""
+    try:
+        acquisition_ids = json.loads(conflict.acquisition_ids_json)
+    except (AttributeError, TypeError, json.JSONDecodeError):
+        return None
+
+    if len(acquisition_ids) < 2:
+        return None
+
+    acq1 = acquisition_map.get(acquisition_ids[0])
+    acq2 = acquisition_map.get(acquisition_ids[1])
+    if acq1 is None or acq2 is None:
+        return None
+
+    details: Dict[str, Any] = {
+        "acq1_id": acq1.id,
+        "acq2_id": acq2.id,
+        "acq1_target": acq1.target_id,
+        "acq2_target": acq2.target_id,
+        "acq1_satellite_id": acq1.satellite_id,
+        "acq2_satellite_id": acq2.satellite_id,
+        "acq1_start": acq1.start_time,
+        "acq1_end": acq1.end_time,
+        "acq2_start": acq2.start_time,
+        "acq2_end": acq2.end_time,
+        "satellite_id": (
+            acq1.satellite_id if acq1.satellite_id == acq2.satellite_id else None
+        ),
+    }
+
+    if conflict.type == "temporal_overlap":
+        overlap_seconds = _calculate_temporal_overlap_seconds(acq1, acq2)
+        if overlap_seconds is not None:
+            details["overlap_seconds"] = overlap_seconds
+    elif conflict.type == "slew_infeasible":
+        end1 = _parse_iso_timestamp(acq1.end_time)
+        start2 = _parse_iso_timestamp(acq2.start_time)
+        if end1 is not None and start2 is not None:
+            details["gap_seconds"] = (start2 - end1).total_seconds()
+        details["acq1_roll_deg"] = acq1.roll_angle_deg
+        details["acq1_pitch_deg"] = acq1.pitch_angle_deg
+        details["acq2_roll_deg"] = acq2.roll_angle_deg
+        details["acq2_pitch_deg"] = acq2.pitch_angle_deg
+
+    return details
+
+
+def _refresh_workspace_conflicts_after_mutation(
+    db: ScheduleDB,
+    workspace_id: Optional[str],
+) -> tuple[int, List[str]]:
+    """Refresh persisted conflicts after schedule mutations like delete/rollback."""
+    if not workspace_id:
+        return 0, []
+
+    from backend.conflict_detection import detect_and_persist_conflicts
+
+    now = datetime.now(timezone.utc)
+    recompute_start, recompute_end = _derive_workspace_conflict_horizon(
+        db,
+        workspace_id,
+        fallback_start=now,
+        fallback_end=now + timedelta(days=7),
+    )
+
+    # If the workspace has no remaining acquisitions, clear stale conflicts.
+    min_start_time, max_end_time = db.get_acquisition_horizon_bounds(
+        workspace_id=workspace_id,
+        include_tentative=True,
+    )
+    if min_start_time is None or max_end_time is None:
+        db.clear_unresolved_conflicts(workspace_id)
+        return 0, []
+
+    detected_conflicts, conflict_ids = detect_and_persist_conflicts(
+        db=db,
+        workspace_id=workspace_id,
+        start_time=_isoformat_z(recompute_start),
+        end_time=_isoformat_z(recompute_end),
+    )
+    return len(detected_conflicts), conflict_ids
+
+
 # =============================================================================
 # Endpoints
 # =============================================================================
@@ -148,6 +365,7 @@ async def get_schedule_state(
     Returns:
         ScheduleStateResponse with current state from persistence layer
     """
+    _bind_schedule_log_context(workspace_id=workspace_id)
     db = get_schedule_db()
 
     # Get recent acquisitions and orders
@@ -195,7 +413,7 @@ async def get_schedule_state(
         horizon = HorizonInfo(
             start=min(start_times),
             end=max(end_times),
-            freeze_cutoff=(now + timedelta(hours=2)).isoformat() + "Z",
+            freeze_cutoff=_isoformat_z(now + timedelta(hours=2)),
         )
 
     # Query actual conflicts for this workspace
@@ -278,6 +496,7 @@ async def get_schedule_horizon(
     Returns:
         ScheduleHorizonResponse with horizon info and acquisitions
     """
+    _bind_schedule_log_context(workspace_id=workspace_id)
     db = get_schedule_db()
 
     # Parse or default times
@@ -314,8 +533,8 @@ async def get_schedule_horizon(
     )
 
     # Query acquisitions from persistence layer
-    start_str = horizon_start.isoformat() + "Z"
-    end_str = horizon_end.isoformat() + "Z"
+    start_str = _isoformat_z(horizon_start)
+    end_str = _isoformat_z(horizon_end)
 
     acquisitions = db.get_acquisitions_in_horizon(
         start_time=start_str,
@@ -347,9 +566,9 @@ async def get_schedule_horizon(
     )
 
     horizon = HorizonInfo(
-        start=horizon_start.isoformat() + "Z",
-        end=horizon_end.isoformat() + "Z",
-        freeze_cutoff=freeze_cutoff.isoformat() + "Z",
+        start=_isoformat_z(horizon_start),
+        end=_isoformat_z(horizon_end),
+        freeze_cutoff=_isoformat_z(freeze_cutoff),
     )
 
     # Optionally include conflicts summary
@@ -454,6 +673,7 @@ async def get_master_schedule(
     Required fields per item: acquisition_id, workspace_id, scheduled_start_time,
     satellite_id + display name, target_id + lat/lon, off_nadir_deg, mode.
     """
+    _bind_schedule_log_context(workspace_id=workspace_id)
     import time
 
     t0 = time.monotonic()
@@ -482,8 +702,8 @@ async def get_master_schedule(
     else:
         end_dt = now + timedelta(days=7)
 
-    start_str = start_dt.isoformat() + "Z"
-    end_str = end_dt.isoformat() + "Z"
+    start_str = _isoformat_z(start_dt)
+    end_str = _isoformat_z(end_dt)
 
     result = db.get_master_schedule(
         workspace_id=workspace_id,
@@ -545,6 +765,7 @@ async def get_schedule_target_locations(
     Fallback: workspace scenario_config blobs.
     When workspace_id is provided, results are scoped to that workspace only.
     """
+    _bind_schedule_log_context(workspace_id=workspace_id)
     from backend.workspace_persistence import get_workspace_db
 
     db = get_schedule_db()
@@ -636,6 +857,7 @@ class ConflictResponse(BaseModel):
     severity: str
     description: Optional[str]
     acquisition_ids: List[str]
+    details: Optional[Dict[str, Any]] = None
     resolved_at: Optional[str] = None
     resolution_action: Optional[str] = None
 
@@ -707,6 +929,10 @@ async def get_schedule_conflicts(
     - temporal_overlap: Two acquisitions for the same satellite overlap in time
     - slew_infeasible: Insufficient time to slew between consecutive acquisitions
     """
+    _bind_schedule_log_context(
+        workspace_id=workspace_id,
+        satellite_id=satellite_id,
+    )
     db = get_schedule_db()
 
     logger.info(
@@ -717,8 +943,8 @@ async def get_schedule_conflicts(
     # If horizon specified, use horizon-based query
     if from_time or to_time:
         now = datetime.now(timezone.utc)
-        start_str = from_time or (now.isoformat() + "Z")
-        end_str = to_time or ((now + timedelta(days=7)).isoformat() + "Z")
+        start_str = from_time or _isoformat_z(now)
+        end_str = to_time or _isoformat_z(now + timedelta(days=7))
 
         conflicts = db.get_conflicts_in_horizon(
             start_time=start_str,
@@ -736,8 +962,25 @@ async def get_schedule_conflicts(
             resolved=None if include_resolved else False,
         )
 
+    acquisition_ids: List[str] = []
+    for conflict in conflicts:
+        try:
+            acquisition_ids.extend(json.loads(conflict.acquisition_ids_json))
+        except (TypeError, json.JSONDecodeError):
+            continue
+
+    acquisition_map = db.get_acquisitions_by_ids(sorted(set(acquisition_ids)))
+
     # Convert to response format
-    conflict_responses = [ConflictResponse(**c.to_dict()) for c in conflicts]
+    conflict_responses = [
+        ConflictResponse(
+            **{
+                **c.to_dict(),
+                "details": _build_conflict_details(c, acquisition_map),
+            }
+        )
+        for c in conflicts
+    ]
 
     # Get statistics
     summary = db.get_conflict_statistics(
@@ -769,12 +1012,29 @@ async def recompute_conflicts(
     """
     from backend.conflict_detection import detect_and_persist_conflicts
 
+    _bind_schedule_log_context(
+        workspace_id=request.workspace_id,
+        satellite_id=request.satellite_id,
+    )
     db = get_schedule_db()
 
     # Parse or default times
     now = datetime.now(timezone.utc)
-    start_str = request.from_time or (now.isoformat() + "Z")
-    end_str = request.to_time or ((now + timedelta(days=7)).isoformat() + "Z")
+    if request.from_time or request.to_time:
+        start_str = request.from_time or _isoformat_z(now)
+        end_str = request.to_time or _isoformat_z(now + timedelta(days=7))
+    elif request.workspace_id:
+        recompute_start, recompute_end = _derive_workspace_conflict_horizon(
+            db,
+            request.workspace_id,
+            fallback_start=now,
+            fallback_end=now + timedelta(days=7),
+        )
+        start_str = _isoformat_z(recompute_start)
+        end_str = _isoformat_z(recompute_end)
+    else:
+        start_str = _isoformat_z(now)
+        end_str = _isoformat_z(now + timedelta(days=7))
 
     logger.info(
         f"[Recompute Conflicts] workspace={request.workspace_id}, "
@@ -989,6 +1249,7 @@ async def hard_lock_all_committed(
     This is a convenience operation for mission planners who want to
     "freeze" all committed work before running repair mode.
     """
+    _bind_schedule_log_context(workspace_id=request.workspace_id)
     db = get_schedule_db()
 
     result = db.hard_lock_all_committed(request.workspace_id)
@@ -1039,6 +1300,7 @@ async def auto_escalate_locks(
 
     This can be called manually or integrated with a cron/background task.
     """
+    _bind_schedule_log_context(workspace_id=request.workspace_id)
     db = get_schedule_db()
 
     result = db.auto_escalate_locks(
@@ -1109,6 +1371,10 @@ async def delete_acquisition(
     Cross-workspace deletion requires matching workspace_id.
     Use force=true to override all protections.
     """
+    _bind_schedule_log_context(
+        workspace_id=workspace_id,
+        acquisition_id=acquisition_id,
+    )
     db = get_schedule_db()
 
     # Check acquisition exists
@@ -1163,6 +1429,8 @@ async def delete_acquisition(
     if not success:
         raise HTTPException(status_code=500, detail="Failed to delete acquisition")
 
+    _refresh_workspace_conflicts_after_mutation(db, acq.workspace_id or workspace_id)
+
     logger.info(
         f"Deleted acquisition {acquisition_id} "
         f"(was {acq.state}, lock={acq.lock_level}, workspace={acq.workspace_id})"
@@ -1188,6 +1456,7 @@ async def bulk_delete_acquisitions(
     By default, hard-locked acquisitions are skipped.
     Use force=true to delete them as well.
     """
+    _bind_schedule_log_context(workspace_id=request.workspace_id)
     db = get_schedule_db()
 
     if not request.acquisition_ids:
@@ -1234,7 +1503,15 @@ async def bulk_delete_acquisitions(
         ids_to_delete = filtered_ids
 
     # Pass force=True since the router already validated protections above
+    refresh_workspace_ids = {
+        acq.workspace_id
+        for acq_id in ids_to_delete
+        if (acq := db.get_acquisition(acq_id)) is not None and acq.workspace_id
+    }
     result = db.bulk_delete_acquisitions(ids_to_delete, force=True)
+
+    for affected_workspace_id in sorted(refresh_workspace_ids):
+        _refresh_workspace_conflicts_after_mutation(db, affected_workspace_id)
 
     message = f"Deleted {result['deleted']} acquisitions"
     if result["failed"]:
@@ -1322,6 +1599,11 @@ async def commit_plan(request: CommitPlanRequest) -> CommitPlanResponse:
     """
     from backend.conflict_detection import detect_and_persist_conflicts
 
+    effective_workspace_id = request.workspace_id or DEFAULT_WORKSPACE_ID
+    _bind_schedule_log_context(
+        workspace_id=effective_workspace_id,
+        plan_id=request.plan_id,
+    )
     db = get_schedule_db()
 
     # Validate lock level
@@ -1346,7 +1628,7 @@ async def commit_plan(request: CommitPlanRequest) -> CommitPlanResponse:
 
     # Pre-commit conflict prediction: reject if error-severity conflicts
     # would be introduced, unless force=true
-    if not request.force and request.workspace_id:
+    if not request.force:
         from backend.incremental_planning import predict_commit_conflicts
 
         plan_items = db.get_plan_items(request.plan_id)
@@ -1363,12 +1645,17 @@ async def commit_plan(request: CommitPlanRequest) -> CommitPlanResponse:
                 for item in plan_items
             ]
             now = datetime.now(timezone.utc)
+            prediction_start, prediction_end = _derive_plan_items_horizon(
+                plan_items,
+                fallback_start=now,
+                fallback_end=now + timedelta(days=7),
+            )
             predicted, count = predict_commit_conflicts(
                 db=db,
-                workspace_id=request.workspace_id,
+                workspace_id=effective_workspace_id,
                 new_items=items_as_dicts,
-                horizon_start=now,
-                horizon_end=now + timedelta(days=7),
+                horizon_start=prediction_start,
+                horizon_end=prediction_end,
             )
             error_predicted = [c for c in predicted if c.get("severity") == "error"]
             if error_predicted:
@@ -1390,7 +1677,7 @@ async def commit_plan(request: CommitPlanRequest) -> CommitPlanResponse:
             item_ids=request.items_to_commit or [],
             lock_level=request.lock_level,
             mode=request.mode,
-            workspace_id=request.workspace_id,
+            workspace_id=effective_workspace_id,
         )
 
         logger.info(
@@ -1402,14 +1689,20 @@ async def commit_plan(request: CommitPlanRequest) -> CommitPlanResponse:
         conflicts_detected = 0
         conflict_ids: List[str] = []
 
-        if request.recompute_conflicts and request.workspace_id:
+        if request.recompute_conflicts:
             now = datetime.now(timezone.utc)
-            start_str = now.isoformat() + "Z"
-            end_str = (now + timedelta(days=7)).isoformat() + "Z"
+            recompute_start, recompute_end = _derive_workspace_conflict_horizon(
+                db,
+                effective_workspace_id,
+                fallback_start=now,
+                fallback_end=now + timedelta(days=7),
+            )
+            start_str = _isoformat_z(recompute_start)
+            end_str = _isoformat_z(recompute_end)
 
             detected_conflicts, new_conflict_ids = detect_and_persist_conflicts(
                 db=db,
-                workspace_id=request.workspace_id,
+                workspace_id=effective_workspace_id,
                 start_time=start_str,
                 end_time=end_str,
             )
@@ -1458,6 +1751,7 @@ def _check_commit_conflicts(
     from datetime import datetime as dt
 
     conflicts: List[str] = []
+    effective_workspace_id = workspace_id or DEFAULT_WORKSPACE_ID
 
     # Get time range for the new items
     if not items:
@@ -1490,7 +1784,7 @@ def _check_commit_conflicts(
     existing = db.get_acquisitions_in_horizon(
         start_time=min_time,
         end_time=max_time,
-        workspace_id=workspace_id,
+        workspace_id=effective_workspace_id,
         include_tentative=False,  # Only check against committed acquisitions
     )
 
@@ -1636,18 +1930,20 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
     import uuid
 
     db = get_schedule_db()
+    effective_workspace_id = request.workspace_id or DEFAULT_WORKSPACE_ID
+    _bind_schedule_log_context(workspace_id=effective_workspace_id)
 
     logger.info(
         f"[Direct Commit] Received request: items={len(request.items)}, "
         f"algorithm={request.algorithm}, mode={request.mode}, "
-        f"workspace_id={request.workspace_id}"
+        f"workspace_id={effective_workspace_id}"
     )
 
     if not request.items:
         raise HTTPException(status_code=400, detail="No items to commit")
 
     # Check for conflicts with existing committed acquisitions
-    conflicts = _check_commit_conflicts(db, request.items, request.workspace_id)
+    conflicts = _check_commit_conflicts(db, request.items, effective_workspace_id)
     if conflicts and not request.force:
         conflict_details = "; ".join(conflicts[:3])  # Show first 3 conflicts
         more = f" (+{len(conflicts) - 3} more)" if len(conflicts) > 3 else ""
@@ -1698,12 +1994,13 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
 
         # Generate run_id
         run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        _bind_schedule_log_context(workspace_id=effective_workspace_id, run_id=run_id)
 
         # Build metrics from items
         metrics = {
             "accepted": len(request.items),
             "algorithm": request.algorithm,
-            "committed_at": datetime.now(timezone.utc).isoformat() + "Z",
+            "committed_at": _isoformat_z(datetime.now(timezone.utc)),
         }
 
         # Create plan record
@@ -1713,7 +2010,12 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
             input_hash=input_hash,
             run_id=run_id,
             metrics=metrics,
-            workspace_id=request.workspace_id,
+            workspace_id=effective_workspace_id,
+        )
+        _bind_schedule_log_context(
+            workspace_id=effective_workspace_id,
+            run_id=run_id,
+            plan_id=plan.id,
         )
 
         # Create plan items
@@ -1737,7 +2039,7 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
             item_ids=[],  # Commit all items
             lock_level=request.lock_level,
             mode=request.mode,
-            workspace_id=request.workspace_id,
+            workspace_id=effective_workspace_id,
         )
 
         logger.info(
@@ -1898,6 +2200,7 @@ async def create_incremental_plan(
     )
 
     db = get_schedule_db()
+    _bind_schedule_log_context(workspace_id=request.workspace_id)
 
     # Parse horizon times
     now = datetime.now(timezone.utc)
@@ -1952,6 +2255,7 @@ async def create_incremental_plan(
     _audit = PipelineAuditTrail(
         run_id=_run_id, workspace_id=request.workspace_id or "default"
     )
+    _bind_schedule_log_context(workspace_id=request.workspace_id, run_id=_run_id)
     _req_hash = compute_request_hash(request.model_dump())
     _audit.add(
         "request_received",
@@ -1971,8 +2275,8 @@ async def create_incremental_plan(
 
     # Initialize response components
     existing_summary = ExistingAcquisitionsSummaryResponse(
-        horizon_start=horizon_start.isoformat() + "Z",
-        horizon_end=horizon_end.isoformat() + "Z",
+        horizon_start=_isoformat_z(horizon_start),
+        horizon_end=_isoformat_z(horizon_end),
     )
     schedule_context: Dict[str, Any] = {
         "planning_mode": planning_mode.value,
@@ -2234,8 +2538,8 @@ async def create_incremental_plan(
             by_state=context.loaded_acquisitions_by_state,
             by_satellite=by_satellite,
             acquisition_ids=all_acq_ids,
-            horizon_start=horizon_start.isoformat() + "Z",
-            horizon_end=horizon_end.isoformat() + "Z",
+            horizon_start=_isoformat_z(horizon_start),
+            horizon_end=_isoformat_z(horizon_end),
         )
 
         schedule_context["loaded_acquisitions"] = context.loaded_acquisitions_count
@@ -2370,6 +2674,11 @@ async def create_incremental_plan(
             "rejected_opportunities": len(rejected_opportunities),
         },
         workspace_id=effective_workspace_id,
+    )
+    _bind_schedule_log_context(
+        workspace_id=effective_workspace_id,
+        run_id=_run_id,
+        plan_id=plan.id,
     )
 
     if request.workspace_id:
@@ -2744,6 +3053,7 @@ async def create_repair_plan(
     )
 
     db = get_schedule_db()
+    _bind_schedule_log_context(workspace_id=request.workspace_id)
 
     # Parse horizon times
     now = datetime.now(timezone.utc)
@@ -2836,6 +3146,7 @@ async def create_repair_plan(
     _audit = PipelineAuditTrail(
         run_id=_run_id, workspace_id=request.workspace_id or "default"
     )
+    _bind_schedule_log_context(workspace_id=request.workspace_id, run_id=_run_id)
     _req_hash = compute_request_hash(request.model_dump())
     _audit.add(
         "request_received",
@@ -2886,8 +3197,8 @@ async def create_repair_plan(
         },
         by_satellite=by_satellite,
         acquisition_ids=all_acq_ids,
-        horizon_start=horizon_start.isoformat() + "Z",
-        horizon_end=horizon_end.isoformat() + "Z",
+        horizon_start=_isoformat_z(horizon_start),
+        horizon_end=_isoformat_z(horizon_end),
     )
 
     # Get opportunities from cache
@@ -3034,6 +3345,11 @@ async def create_repair_plan(
         run_id=run_id,
         metrics=metrics,
         workspace_id=effective_workspace_id,
+    )
+    _bind_schedule_log_context(
+        workspace_id=effective_workspace_id,
+        run_id=_run_id,
+        plan_id=plan.id,
     )
 
     # Build plan items for response
@@ -3210,8 +3526,8 @@ async def create_repair_plan(
         "target_acquisitions": target_acquisitions,
         "targets_not_scheduled": targets_not_scheduled,
         "horizon": {
-            "start": horizon_start.isoformat() + "Z",
-            "end": horizon_end.isoformat() + "Z",
+            "start": _isoformat_z(horizon_start),
+            "end": _isoformat_z(horizon_end),
         },
         "satellites_used": sorted(satellites_used),
         "total_targets_with_opportunities": len(all_opp_targets),
@@ -3320,6 +3636,10 @@ async def commit_repair_plan(request: RepairCommitRequest) -> RepairCommitRespon
     from backend.conflict_detection import detect_and_persist_conflicts
 
     db = get_schedule_db()
+    _bind_schedule_log_context(
+        workspace_id=request.workspace_id,
+        plan_id=request.plan_id,
+    )
 
     # Auto-escalate locks before commit — protect near-execution acquisitions
     escalation = db.auto_escalate_locks(workspace_id=request.workspace_id)
@@ -3436,8 +3756,14 @@ async def commit_repair_plan(request: RepairCommitRequest) -> RepairCommitRespon
 
         # Recompute conflicts
         now = datetime.now(timezone.utc)
-        start_str = now.isoformat() + "Z"
-        end_str = (now + timedelta(days=7)).isoformat() + "Z"
+        recompute_start, recompute_end = _derive_workspace_conflict_horizon(
+            db,
+            request.workspace_id,
+            fallback_start=now,
+            fallback_end=now + timedelta(days=7),
+        )
+        start_str = _isoformat_z(recompute_start)
+        end_str = _isoformat_z(recompute_end)
 
         detected_conflicts, conflict_ids = detect_and_persist_conflicts(
             db=db,
@@ -3553,6 +3879,7 @@ async def get_commit_history(
     - Understanding who committed what
     - Auditing repair mode changes
     """
+    _bind_schedule_log_context(workspace_id=workspace_id, plan_id=plan_id)
     db = get_schedule_db()
 
     audit_logs = db.get_commit_audit_logs(
@@ -3577,6 +3904,7 @@ async def get_commit_history(
 @router.get("/snapshots")
 async def list_snapshots(workspace_id: str = Query(..., description="Workspace ID")):
     """List available schedule snapshots for rollback."""
+    _bind_schedule_log_context(workspace_id=workspace_id)
     db = get_schedule_db()
     snapshots = db.list_snapshots(workspace_id)
     return {"snapshots": snapshots, "count": len(snapshots)}
@@ -3588,13 +3916,19 @@ async def rollback_schedule(
     workspace_id: str = Body(..., embed=True),
 ):
     """Rollback workspace schedule to a previous snapshot."""
+    _bind_schedule_log_context(workspace_id=workspace_id, snapshot_id=snapshot_id)
     db = get_schedule_db()
     try:
         result = db.rollback_to_snapshot(snapshot_id, workspace_id)
+        detected_conflicts, conflict_ids = _refresh_workspace_conflicts_after_mutation(
+            db, workspace_id
+        )
         return {
             "success": True,
             "message": f"Rolled back to snapshot {snapshot_id}",
             **result,
+            "conflicts_detected": detected_conflicts,
+            "conflict_ids": conflict_ids,
         }
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

@@ -9,9 +9,12 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any, Callable, DefaultDict, cast
 
+import pytest
 import requests
 
 BASE_URL = "http://localhost:8000"
+API = f"{BASE_URL}/api/v1"
+pytestmark = pytest.mark.requires_server
 
 # Real TLE data from CelesTrak
 SATELLITES = {
@@ -81,11 +84,16 @@ def analyze_mission(
 
     try:
         resp = requests.post(
-            f"{BASE_URL}/api/mission/analyze", json=payload, timeout=120
+            f"{API}/mission/analyze", json=payload, timeout=120
         )
-        return _json_dict_response(resp)
+        assert resp.status_code == 200, (
+            f"Mission analysis failed with {resp.status_code}: {resp.text}"
+        )
+        data = _json_dict_response(resp)
+        assert data.get("success") is True, f"Mission analysis reported failure: {data}"
+        return data
     except Exception as e:
-        return {"success": False, "message": str(e)}
+        raise AssertionError(f"Mission analysis request failed: {e}") from e
 
 
 def plan_mission(algorithm: str = "greedy") -> dict[str, Any]:
@@ -94,14 +102,19 @@ def plan_mission(algorithm: str = "greedy") -> dict[str, Any]:
 
     try:
         resp = requests.post(
-            f"{BASE_URL}/api/planning/schedule", json=payload, timeout=60
+            f"{API}/planning/schedule", json=payload, timeout=60
         )
-        return _json_dict_response(resp)
+        assert resp.status_code == 200, (
+            f"Mission planning failed with {resp.status_code}: {resp.text}"
+        )
+        data = _json_dict_response(resp)
+        assert data.get("success") is True, f"Mission planning reported failure: {data}"
+        return data
     except Exception as e:
-        return {"success": False, "message": str(e)}
+        raise AssertionError(f"Mission planning request failed: {e}") from e
 
 
-def test_large_constellation() -> bool:
+def test_large_constellation() -> None:
     """Test 1: Large constellation (5 satellites)."""
     print_header("TEST 1: LARGE CONSTELLATION (5 SATELLITES)")
 
@@ -133,10 +146,10 @@ def test_large_constellation() -> bool:
     else:
         print(f"Error: {result.get('message')}")
 
-    return bool(result.get("success", False))
+    assert result.get("data"), f"Expected mission payload, got: {result}"
 
 
-def test_many_targets() -> bool:
+def test_many_targets() -> None:
     """Test 2: Many targets (8 cities worldwide)."""
     print_header("TEST 2: MANY TARGETS (8 CITIES WORLDWIDE)")
 
@@ -167,10 +180,10 @@ def test_many_targets() -> bool:
     else:
         print(f"Error: {result.get('message')}")
 
-    return bool(result.get("success", False))
+    assert result.get("data"), f"Expected mission payload, got: {result}"
 
 
-def test_long_duration() -> bool:
+def test_long_duration() -> None:
     """Test 3: Long duration (2 weeks)."""
     print_header("TEST 3: LONG DURATION (2 WEEKS)")
 
@@ -204,10 +217,10 @@ def test_long_duration() -> bool:
     else:
         print(f"Error: {result.get('message')}")
 
-    return bool(result.get("success", False))
+    assert result.get("data"), f"Expected mission payload, got: {result}"
 
 
-def test_single_satellite_backward_compat() -> bool:
+def test_single_satellite_backward_compat() -> None:
     """Test 4: Single satellite (backward compatibility)."""
     print_header("TEST 4: SINGLE SATELLITE (BACKWARD COMPAT)")
 
@@ -222,11 +235,15 @@ def test_single_satellite_backward_compat() -> bool:
 
     try:
         resp = requests.post(
-            f"{BASE_URL}/api/mission/analyze", json=payload, timeout=60
+            f"{API}/mission/analyze", json=payload, timeout=60
+        )
+        assert resp.status_code == 200, (
+            f"Mission analysis failed with {resp.status_code}: {resp.text}"
         )
         result = _json_dict_response(resp)
+        assert result.get("success") is True, f"Mission analysis reported failure: {result}"
     except Exception as e:
-        result = {"success": False, "message": str(e)}
+        raise AssertionError(f"Mission analysis request failed: {e}") from e
 
     print(f"Status: {'✅ SUCCESS' if result.get('success') else '❌ FAILED'}")
 
@@ -238,10 +255,10 @@ def test_single_satellite_backward_compat() -> bool:
     else:
         print(f"Error: {result.get('message')}")
 
-    return bool(result.get("success", False))
+    assert result.get("data"), f"Expected mission payload, got: {result}"
 
 
-def test_mission_planning() -> bool:
+def test_mission_planning() -> None:
     """Test 5: Mission planning with scheduling."""
     print_header("TEST 5: MISSION PLANNING (GREEDY ALGORITHM)")
 
@@ -259,10 +276,6 @@ def test_mission_planning() -> bool:
         start="2025-12-08T00:00:00Z",
         end="2025-12-10T00:00:00Z",
     )
-
-    if not analyze_result.get("success"):
-        print(f"❌ Analysis failed: {analyze_result.get('message')}")
-        return False
 
     print(
         f"Analysis: ✅ {analyze_result['data']['mission_data']['total_passes']} passes found"
@@ -290,10 +303,10 @@ def test_mission_planning() -> bool:
     else:
         print(f"Error: {plan_result.get('message')}")
 
-    return bool(plan_result.get("success", False))
+    assert plan_result.get("results"), f"Expected planning results, got: {plan_result}"
 
 
-def test_czml_generation() -> bool:
+def test_czml_generation() -> None:
     """Test 6: CZML generation for constellation."""
     print_header("TEST 6: CZML GENERATION")
 
@@ -340,10 +353,10 @@ def test_czml_generation() -> bool:
     else:
         print(f"Error: {result.get('message')}")
 
-    return bool(result.get("success", False))
+    assert result.get("data"), f"Expected mission payload, got: {result}"
 
 
-def test_edge_case_empty_results() -> bool:
+def test_edge_case_empty_results() -> None:
     """Test 7: Edge case - no visibility (polar target)."""
     print_header("TEST 7: EDGE CASE - POLAR TARGET (LIKELY NO PASSES)")
 
@@ -367,7 +380,7 @@ def test_edge_case_empty_results() -> bool:
     else:
         print(f"Error: {result.get('message')}")
 
-    return bool(result.get("success", False))
+    assert result.get("data"), f"Expected mission payload, got: {result}"
 
 
 def run_all_tests() -> bool:
@@ -378,7 +391,7 @@ def run_all_tests() -> bool:
     print(f"Target: {BASE_URL}")
     print(f"Started: {datetime.now().isoformat()}")
 
-    tests: list[tuple[str, Callable[[], bool]]] = [
+    tests: list[tuple[str, Callable[[], None]]] = [
         ("Large Constellation", test_large_constellation),
         ("Many Targets", test_many_targets),
         ("Long Duration", test_long_duration),
@@ -391,8 +404,8 @@ def run_all_tests() -> bool:
     results: list[tuple[str, bool]] = []
     for name, test_fn in tests:
         try:
-            passed = test_fn()
-            results.append((name, passed))
+            test_fn()
+            results.append((name, True))
         except Exception as e:
             print(f"❌ Exception: {e}")
             results.append((name, False))

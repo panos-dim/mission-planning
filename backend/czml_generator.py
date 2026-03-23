@@ -13,6 +13,7 @@ distinct colors per satellite.
 
 import logging
 import math
+from collections import Counter
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Union
 
@@ -134,19 +135,41 @@ class CZMLGenerator:
                 # Convert to UTC and remove timezone info
                 dt_utc = dt.utctimetuple()
                 dt = datetime(*dt_utc[:6])  # Reconstruct as naive datetime
-                logger.debug(f"Converted timezone-aware datetime to naive UTC: {dt}")
+                logger.debug(
+                    "Converted timezone-aware datetime to naive UTC: %s",
+                    dt,
+                )
 
             # Remove microseconds and ensure proper ISO format
             formatted = dt.replace(microsecond=0).isoformat() + "Z"
-            logger.debug(f"Formatted datetime: {formatted}")
+            logger.debug("Formatted datetime: %s", formatted)
             return formatted
 
         except Exception as e:
-            logger.error(f"Error formatting datetime {dt}: {e}")
+            logger.error("Error formatting datetime %s: %s", dt, e)
             # Fallback to a simple format
             if hasattr(dt, "strftime"):
                 return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
             return str(dt)
+
+    @staticmethod
+    def _categorize_packet(packet_id: str) -> str:
+        """Group packet IDs into stable categories for compact logging."""
+        if packet_id == "document":
+            return "document"
+        if packet_id == "pointing_cone":
+            return "pointing_cone"
+        if packet_id.startswith("agility_envelope_"):
+            return "agility_envelope"
+        if packet_id.startswith("target_"):
+            return "target"
+        if packet_id.endswith("_ground_track") or packet_id == "satellite_ground_track":
+            return "ground_track"
+        if packet_id.startswith("pass_track"):
+            return "pass_track"
+        if packet_id.startswith("sat_"):
+            return "satellite"
+        return "other"
 
     def generate(self) -> List[Dict[str, Any]]:
         """Generate complete CZML document.
@@ -184,8 +207,10 @@ class CZMLGenerator:
                 and self.imaging_type != "sar"  # Skip cone for SAR missions
                 and self.sensor_fov_half_angle_deg
             ):
-                logger.info(
-                    f"Generating sensor footprint for {sat_id} with FOV={self.sensor_fov_half_angle_deg}°"
+                logger.debug(
+                    "Generating sensor footprint for %s with FOV=%s°",
+                    sat_id,
+                    self.sensor_fov_half_angle_deg,
                 )
                 pointing_cone_packet = self._create_pointing_cone_packet()
                 if pointing_cone_packet:
@@ -217,15 +242,35 @@ class CZMLGenerator:
         ):
             optical_packets = self._create_optical_pass_packets()
             czml.extend(optical_packets)
-            logger.info(f"📸 Added {len(optical_packets)} optical pass CZML packets")
+            logger.info(
+                "Added %d optical pass CZML packets",
+                len(optical_packets),
+            )
 
-        # Log the complete CZML for debugging
-        logger.info(f"Generated CZML with {len(czml)} packets")
-        for i, packet in enumerate(czml):
+        packet_counts: Counter[str] = Counter()
+        availability_count = 0
+        epoch_count = 0
+        for packet in czml:
+            packet_counts[self._categorize_packet(str(packet.get("id", "unknown")))] += 1
             if "availability" in packet:
-                logger.info(f"Packet {i} availability: {packet['availability']}")
+                availability_count += 1
             if "position" in packet and "epoch" in packet["position"]:
-                logger.info(f"Packet {i} epoch: {packet['position']['epoch']}")
+                epoch_count += 1
+
+        logger.info(
+            "Generated CZML packets: total=%d satellites=%d ground_tracks=%d targets=%d pass_tracks=%d pointing_cones=%d agility_envelopes=%d availability=%d epochs=%d other=%d",
+            len(czml),
+            packet_counts.get("satellite", 0),
+            packet_counts.get("ground_track", 0),
+            packet_counts.get("target", 0),
+            packet_counts.get("pass_track", 0),
+            packet_counts.get("pointing_cone", 0),
+            packet_counts.get("agility_envelope", 0),
+            availability_count,
+            epoch_count,
+            packet_counts.get("other", 0),
+        )
+        logger.debug("CZML packet categories: %s", dict(packet_counts))
 
         return czml
 
@@ -462,12 +507,13 @@ class CZMLGenerator:
                     [seconds_from_epoch, lon, lat, 0]
                 )  # Altitude = 0
             except Exception as e:
-                logger.warning(f"Failed to get ground position at {current_time}: {e}")
+                logger.warning("Failed to get ground position at %s: %s", current_time, e)
 
             current_time = current_time + time_step
 
-        logger.info(
-            f"Generated dynamic ground track with {len(ground_positions)//4} position samples"
+        logger.debug(
+            "Generated dynamic ground track with %d position samples",
+            len(ground_positions) // 4,
         )
 
         return {
@@ -505,7 +551,9 @@ class CZMLGenerator:
             or self.sensor_fov_half_angle_deg <= 0
         ):
             logger.debug(
-                f"⏭️ Skipping footprint: mission_type={self.mission_type}, sensor_fov_half_angle_deg={self.sensor_fov_half_angle_deg}"
+                "Skipping footprint: mission_type=%s sensor_fov_half_angle_deg=%s",
+                self.mission_type,
+                self.sensor_fov_half_angle_deg,
             )
             return None
 
@@ -513,7 +561,8 @@ class CZMLGenerator:
             return None
 
         logger.debug(
-            f"🛰️ Creating sensor footprint visualization: FOV half-angle={self.sensor_fov_half_angle_deg}°"
+            "Creating sensor footprint visualization: FOV half-angle=%s°",
+            self.sensor_fov_half_angle_deg,
         )
 
         # Generate footprint positions at same time points as satellite
@@ -539,16 +588,22 @@ class CZMLGenerator:
                 sample_count += 1
 
             except Exception as e:
-                logger.error(f"❌ Failed to generate footprint at {current_time}: {e}")
+                logger.error(
+                    "Failed to generate footprint at %s: %s",
+                    current_time,
+                    e,
+                )
 
             current_time = current_time + time_step
 
         if not polygon_positions:
-            logger.warning("⚠️ No valid footprint positions generated")
+            logger.warning("No valid footprint positions generated")
             return None
 
         logger.info(
-            f"✅ Generated sensor footprint: {sample_count} samples, {self.sensor_fov_half_angle_deg}° angle"
+            "Generated sensor footprint: %d samples at %s°",
+            sample_count,
+            self.sensor_fov_half_angle_deg,
         )
 
         # Create simplified ellipse footprint that follows satellite
@@ -579,7 +634,10 @@ class CZMLGenerator:
         # Log the actual radius being used for debugging
         sample_radius_km = radius_data[1] / 1000 if len(radius_data) > 1 else 0
         logger.info(
-            f"📏 Sensor footprint: {self.sensor_fov_half_angle_deg}° FOV half-angle → ~{sample_radius_km:.0f}km radius at {alt_km:.0f}km altitude"
+            "Sensor footprint radius: ~%.0fkm at %.0fkm altitude (FOV half-angle=%s°)",
+            sample_radius_km,
+            alt_km,
+            self.sensor_fov_half_angle_deg,
         )
 
         return {
@@ -641,7 +699,10 @@ class CZMLGenerator:
             or self.max_spacecraft_roll_deg <= 0
         ):
             logger.debug(
-                f"⏭️ Skipping agility envelope for {sat_id}: mission_type={self.mission_type}, max_roll={self.max_spacecraft_roll_deg}"
+                "Skipping agility envelope for %s: mission_type=%s max_roll=%s",
+                sat_id,
+                self.mission_type,
+                self.max_spacecraft_roll_deg,
             )
             return None
 
@@ -652,7 +713,9 @@ class CZMLGenerator:
             sat_orbit, "satellite_name", sat_id.replace("sat_", "")
         )
         logger.debug(
-            f"🎯 Creating agility envelope for {satellite_name}: Max roll={self.max_spacecraft_roll_deg}°"
+            "Creating agility envelope for %s: max_roll=%s°",
+            satellite_name,
+            self.max_spacecraft_roll_deg,
         )
 
         # Generate envelope positions at same time points as satellite
@@ -682,7 +745,11 @@ class CZMLGenerator:
         # Log the actual radius being used
         sample_radius_km = radius_data[1] / 1000 if len(radius_data) > 1 else 0
         logger.info(
-            f"📏 Agility envelope for {satellite_name}: {self.max_spacecraft_roll_deg}° max roll → ~{sample_radius_km:.0f}km radius at {alt_km:.0f}km altitude"
+            "Agility envelope radius for %s: ~%.0fkm at %.0fkm altitude (max_roll=%s°)",
+            satellite_name,
+            sample_radius_km,
+            alt_km,
+            self.max_spacecraft_roll_deg,
         )
 
         # Create color variants from satellite color

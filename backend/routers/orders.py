@@ -21,10 +21,26 @@ from pydantic import BaseModel, Field
 
 from backend.policy_engine import get_policy_manager, rank_orders
 from backend.schedule_persistence import get_schedule_db
+from mission_planner.utils import update_log_context
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/orders", tags=["orders"])
+
+
+def _bind_order_log_context(
+    workspace_id: Optional[str] = None,
+    order_id: Optional[str] = None,
+    **extra: Any,
+) -> None:
+    """Attach order-scoped context to the current request logs."""
+    context: Dict[str, Any] = dict(extra)
+    if workspace_id:
+        context["workspace_id"] = workspace_id
+    if order_id:
+        context["order_id"] = order_id
+    if context:
+        update_log_context(**context)
 
 
 # =============================================================================
@@ -255,6 +271,7 @@ async def create_order(request: CreateOrderRequest) -> OrderCreateResponse:
     new → planned → committed → completed
     """
     db = get_schedule_db()
+    _bind_order_log_context(workspace_id=request.workspace_id)
 
     try:
         constraints_dict = (
@@ -272,6 +289,7 @@ async def create_order(request: CreateOrderRequest) -> OrderCreateResponse:
             external_ref=request.external_ref,
             workspace_id=request.workspace_id,
         )
+        _bind_order_log_context(workspace_id=order.workspace_id, order_id=order.id)
 
         logger.info(f"Created order {order.id} for target {request.target_id}")
 
@@ -304,6 +322,7 @@ async def list_orders(
 
     Returns orders sorted by creation time (newest first).
     """
+    _bind_order_log_context(workspace_id=workspace_id)
     db = get_schedule_db()
 
     # Validate status if provided
@@ -362,6 +381,7 @@ async def get_inbox(
     - order_type: IMAGING | DOWNLINK | MAINTENANCE
     - tags: Comma-separated list of tags (any match)
     """
+    _bind_order_log_context(workspace_id=workspace_id)
     db = get_schedule_db()
     policy_manager = get_policy_manager()
 
@@ -439,10 +459,12 @@ async def get_order(order_id: str) -> OrderCreateResponse:
     Get a single order by ID.
     """
     db = get_schedule_db()
+    _bind_order_log_context(order_id=order_id)
 
     order = db.get_order(order_id)
     if not order:
         raise HTTPException(status_code=404, detail=f"Order not found: {order_id}")
+    _bind_order_log_context(workspace_id=order.workspace_id, order_id=order_id)
 
     return OrderCreateResponse(
         success=True,
@@ -464,11 +486,13 @@ async def update_order(
     - committed → completed (after execution)
     """
     db = get_schedule_db()
+    _bind_order_log_context(order_id=order_id)
 
     # Check order exists
     existing = db.get_order(order_id)
     if not existing:
         raise HTTPException(status_code=404, detail=f"Order not found: {order_id}")
+    _bind_order_log_context(workspace_id=existing.workspace_id, order_id=order_id)
 
     # Enforce valid status transitions
     VALID_TRANSITIONS: dict[str, set[str]] = {
@@ -536,11 +560,13 @@ async def delete_order(
     because their acquisitions are live in the schedule.
     """
     db = get_schedule_db()
+    _bind_order_log_context(order_id=order_id)
 
     # Check order exists
     existing = db.get_order(order_id)
     if not existing:
         raise HTTPException(status_code=404, detail=f"Order not found: {order_id}")
+    _bind_order_log_context(workspace_id=existing.workspace_id, order_id=order_id)
 
     # Guard: committed/completed orders have live acquisitions
     if existing.status in ("committed", "completed") and not force:
@@ -597,6 +623,7 @@ async def import_orders(request: ImportOrdersRequest) -> ImportOrdersResponse:
     All orders are created with 'new' status and 'import' source.
     """
     db = get_schedule_db()
+    _bind_order_log_context(workspace_id=request.workspace_id)
 
     try:
         orders_data = [
@@ -650,11 +677,13 @@ async def reject_order(
     Rejected orders will not be included in future batches.
     """
     db = get_schedule_db()
+    _bind_order_log_context(order_id=order_id)
 
     # Check order exists
     existing = db.get_order(order_id)
     if not existing:
         raise HTTPException(status_code=404, detail=f"Order not found: {order_id}")
+    _bind_order_log_context(workspace_id=existing.workspace_id, order_id=order_id)
 
     # Validate current status
     if existing.status in ["committed", "completed"]:
@@ -700,11 +729,13 @@ async def defer_order(order_id: str, request: DeferOrderRequest) -> OrderUpdateR
     The order status is set back to 'queued' if it was in a batch.
     """
     db = get_schedule_db()
+    _bind_order_log_context(order_id=order_id)
 
     # Check order exists
     existing = db.get_order(order_id)
     if not existing:
         raise HTTPException(status_code=404, detail=f"Order not found: {order_id}")
+    _bind_order_log_context(workspace_id=existing.workspace_id, order_id=order_id)
 
     # Validate current status
     if existing.status in ["committed", "completed", "rejected"]:

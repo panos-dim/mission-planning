@@ -167,6 +167,89 @@ class TestTemporalOverlapDetection:
         overlap_conflicts = [c for c in conflicts if c.type == "temporal_overlap"]
         assert len(overlap_conflicts) == 0
 
+    def test_nested_overlaps_report_all_pairs(self, workspace_with_acquisitions):
+        """A long acquisition overlapping multiple later items should report every pair."""
+        workspace_id, db = workspace_with_acquisitions
+        now = datetime.utcnow()
+
+        db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="T1",
+            start_time=(now + timedelta(minutes=0)).isoformat() + "Z",
+            end_time=(now + timedelta(minutes=10)).isoformat() + "Z",
+            roll_angle_deg=0.0,
+            workspace_id=workspace_id,
+        )
+        db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="T2",
+            start_time=(now + timedelta(minutes=5)).isoformat() + "Z",
+            end_time=(now + timedelta(minutes=6)).isoformat() + "Z",
+            roll_angle_deg=0.0,
+            workspace_id=workspace_id,
+        )
+        db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="T3",
+            start_time=(now + timedelta(minutes=9)).isoformat() + "Z",
+            end_time=(now + timedelta(minutes=11)).isoformat() + "Z",
+            roll_angle_deg=0.0,
+            workspace_id=workspace_id,
+        )
+
+        detector = ConflictDetector(db)
+        conflicts = detector.detect_conflicts(
+            workspace_id=workspace_id,
+            start_time=now.isoformat() + "Z",
+            end_time=(now + timedelta(hours=1)).isoformat() + "Z",
+        )
+
+        overlap_pairs = {
+            frozenset({c.details["acq1_target"], c.details["acq2_target"]})
+            for c in conflicts
+            if c.type == "temporal_overlap"
+        }
+        assert overlap_pairs == {
+            frozenset({"T1", "T2"}),
+            frozenset({"T1", "T3"}),
+        }
+
+    def test_point_overlap_boundary_is_inclusive(self, workspace_with_acquisitions):
+        """Point acquisitions should conflict when they land exactly on an interval boundary."""
+        workspace_id, db = workspace_with_acquisitions
+        now = datetime.utcnow()
+
+        db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="WINDOW",
+            start_time=(now + timedelta(minutes=0)).isoformat() + "Z",
+            end_time=(now + timedelta(minutes=10)).isoformat() + "Z",
+            roll_angle_deg=0.0,
+            workspace_id=workspace_id,
+        )
+        db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="POINT",
+            start_time=(now + timedelta(minutes=10)).isoformat() + "Z",
+            end_time=(now + timedelta(minutes=10)).isoformat() + "Z",
+            roll_angle_deg=0.0,
+            workspace_id=workspace_id,
+        )
+
+        detector = ConflictDetector(db)
+        conflicts = detector.detect_conflicts(
+            workspace_id=workspace_id,
+            start_time=now.isoformat() + "Z",
+            end_time=(now + timedelta(hours=1)).isoformat() + "Z",
+        )
+
+        overlap_pairs = {
+            frozenset({c.details["acq1_target"], c.details["acq2_target"]})
+            for c in conflicts
+            if c.type == "temporal_overlap"
+        }
+        assert overlap_pairs == {frozenset({"WINDOW", "POINT"})}
+
 
 class TestSlewInfeasibleDetection:
     """Tests for slew infeasibility conflict detection (roll + pitch)."""

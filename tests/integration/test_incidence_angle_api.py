@@ -10,7 +10,7 @@ This script:
 """
 
 import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import requests
@@ -20,6 +20,10 @@ BASE_URL = "http://127.0.0.1:8000"
 pytestmark = pytest.mark.requires_server  # All tests in this module require server
 
 
+def _iso_z(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
+
+
 def print_header(text: str) -> None:
     """Print formatted section header."""
     print(f"\n{'='*80}")
@@ -27,7 +31,7 @@ def print_header(text: str) -> None:
     print(f"{'='*80}\n")
 
 
-def test_mission_analysis() -> bool:
+def test_mission_analysis() -> None:
     """Run mission analysis with 4 nearby Eastern Mediterranean targets."""
     print_header("STEP 1: Running Mission Analysis")
 
@@ -60,7 +64,7 @@ def test_mission_analysis() -> bool:
     ]
 
     # Mission parameters
-    start_time = datetime.utcnow()
+    start_time = datetime.now(UTC)
     end_time = start_time + timedelta(hours=24)
 
     payload = {
@@ -70,8 +74,8 @@ def test_mission_analysis() -> bool:
             "line2": "2 62707  97.4500 332.0000 0001500  90.0000 270.0000 15.19000000000000",
         },
         "targets": targets,
-        "start_time": start_time.isoformat() + "Z",
-        "end_time": end_time.isoformat() + "Z",
+        "start_time": _iso_z(start_time),
+        "end_time": _iso_z(end_time),
         "mission_type": "imaging",
         "elevation_mask": 10.0,
         "pointing_angle": 45.0,
@@ -93,59 +97,63 @@ def test_mission_analysis() -> bool:
     response = requests.post(
         f"{BASE_URL}/api/v1/mission/analyze", json=payload, timeout=60
     )
+    assert response.status_code == 200, (
+        f"Mission analysis failed with {response.status_code}: {response.text}"
+    )
+    data = response.json()
+    assert data.get("success") is True, f"Mission analysis reported failure: {data}"
+    payload_data = data.get("data", {})
+    mission_data = payload_data.get("mission_data", {})
+    assert isinstance(mission_data, dict), f"Unexpected mission payload: {data}"
+    passes = mission_data.get("passes", [])
+    assert isinstance(passes, list), f"Unexpected passes payload: {mission_data}"
 
-    if response.status_code == 200:
-        data = response.json()
-        print(f"\n✅ Mission analysis completed successfully!")
-        print(f"   Total opportunities found: {len(data.get('passes', []))}")
+    print(f"\n✅ Mission analysis completed successfully!")
+    print(f"   Total opportunities found: {len(passes)}")
 
-        # Count opportunities per target
-        target_counts: dict[str, int] = {}
-        for pass_data in data.get("passes", []):
-            target = pass_data.get("target")
-            target_counts[target] = target_counts.get(target, 0) + 1
+    # Count opportunities per target
+    target_counts: dict[str, int] = {}
+    for pass_data in passes:
+        target = pass_data.get("target")
+        target_counts[target] = target_counts.get(target, 0) + 1
 
-        print(f"\n   Opportunities by target:")
-        for target, count in sorted(
-            target_counts.items(), key=lambda x: x[1], reverse=True
-        ):
-            print(f"     {target}: {count} opportunities")
+    print(f"\n   Opportunities by target:")
+    for target, count in sorted(target_counts.items(), key=lambda x: x[1], reverse=True):
+        print(f"     {target}: {count} opportunities")
 
-        # Check if incidence angles are present
-        passes_with_incidence = [
-            p for p in data.get("passes", []) if "incidence_angle_deg" in p
-        ]
+    # Check if incidence angles are present
+    passes_with_incidence = [p for p in passes if "incidence_angle_deg" in p]
+    print(
+        f"\n   Passes with incidence angle: {len(passes_with_incidence)}/{len(passes)}"
+    )
+
+    if passes_with_incidence:
+        incidence_angles = [p["incidence_angle_deg"] for p in passes_with_incidence]
+        avg_incidence = sum(incidence_angles) / len(incidence_angles)
+        min_incidence = min(incidence_angles)
+        max_incidence = max(incidence_angles)
         print(
-            f"\n   Passes with incidence angle: {len(passes_with_incidence)}/{len(data.get('passes', []))}"
+            f"   Incidence angle range: {min_incidence:.1f}° - {max_incidence:.1f}° (avg: {avg_incidence:.1f}°)"
         )
 
-        if passes_with_incidence:
-            incidence_angles = [p["incidence_angle_deg"] for p in passes_with_incidence]
-            avg_incidence = sum(incidence_angles) / len(incidence_angles)
-            min_incidence = min(incidence_angles)
-            max_incidence = max(incidence_angles)
-            print(
-                f"   Incidence angle range: {min_incidence:.1f}° - {max_incidence:.1f}° (avg: {avg_incidence:.1f}°)"
-            )
-
-        return True
-    else:
-        print(f"❌ Mission analysis failed: {response.status_code}")
-        print(f"   {response.text}")
-        return False
+    assert len(passes_with_incidence) == len(passes), (
+        "All mission-analysis passes should expose incidence_angle_deg"
+    )
 
 
-def test_scheduling_algorithms() -> bool:
+def test_scheduling_algorithms() -> None:
     """Run all 3 scheduling algorithms and compare results."""
     print_header("STEP 2: Running Scheduling Algorithms")
+
+    # Seed the shared opportunities store so this test remains self-contained.
+    test_mission_analysis()
 
     # First, get opportunities
     print("Fetching opportunities from mission analysis...")
     opp_response = requests.get(f"{BASE_URL}/api/v1/planning/opportunities", timeout=30)
-
-    if opp_response.status_code != 200:
-        print(f"❌ Failed to get opportunities: {opp_response.status_code}")
-        return False
+    assert opp_response.status_code == 200, (
+        f"Failed to get opportunities: {opp_response.status_code} {opp_response.text}"
+    )
 
     opp_data = opp_response.json()
     print(f"✅ Found {len(opp_data.get('opportunities', []))} opportunities")
@@ -175,13 +183,12 @@ def test_scheduling_algorithms() -> bool:
     response = requests.post(
         f"{BASE_URL}/api/v1/planning/schedule", json=schedule_payload, timeout=60
     )
-
-    if response.status_code != 200:
-        print(f"❌ Scheduling failed: {response.status_code}")
-        print(f"   {response.text}")
-        return False
+    assert response.status_code == 200, (
+        f"Scheduling failed: {response.status_code} {response.text}"
+    )
 
     data = response.json()
+    assert data.get("success") is True, f"Scheduling reported failure: {data}"
     print(f"\n✅ Scheduling completed successfully!")
 
     # Analyze results for each algorithm
@@ -295,7 +302,7 @@ def test_scheduling_algorithms() -> bool:
         print("❌ FAILURE: Some scheduled opportunities missing incidence angle")
     print(f"{'='*80}\n")
 
-    return all_have_incidence
+    assert all_have_incidence, "Some scheduled opportunities are missing incidence angle"
 
 
 def main() -> bool:
@@ -308,14 +315,10 @@ def main() -> bool:
 
     try:
         # Test 1: Mission analysis
-        if not test_mission_analysis():
-            print("\n❌ Mission analysis test failed. Stopping.")
-            return False
+        test_mission_analysis()
 
         # Test 2: Scheduling algorithms
-        if not test_scheduling_algorithms():
-            print("\n❌ Scheduling test failed.")
-            return False
+        test_scheduling_algorithms()
 
         print_header("🎉 ALL TESTS PASSED!")
         print("✅ Incidence angles are correctly integrated")

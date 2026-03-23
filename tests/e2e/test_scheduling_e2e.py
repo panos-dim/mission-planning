@@ -3159,6 +3159,68 @@ class TestConflictResolution:
         finally:
             _safe_cleanup(ws, TLE_SAT1, TARGETS_PHASE1)
 
+    def test_05_repair_change_log_marks_hard_lock_constraint(self) -> None:
+        ws = _create_workspace(f"conflict05_{uuid.uuid4().hex[:6]}")
+        try:
+            start_time = (datetime.now(timezone.utc) + timedelta(hours=6)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+            fixed = _direct_commit_synthetic(
+                ws,
+                "sat_ICEYE-X53",
+                "chg_fixed",
+                start_time,
+                start_time,
+                lock_level="hard",
+            )
+            conflict = _direct_commit_synthetic(
+                ws,
+                "sat_ICEYE-X53",
+                "chg_conflict",
+                start_time,
+                start_time,
+                force=True,
+            )
+            fixed_id = fixed["acquisition_ids"][0]
+            conflict_id = conflict["acquisition_ids"][0]
+
+            repair = _post("/schedule/repair", {"workspace_id": ws})
+            diff = repair.get("repair_diff", {})
+            dropped = diff.get("dropped", [])
+            assert (
+                conflict_id in dropped
+            ), f"Expected {conflict_id} in dropped={dropped}"
+
+            reason_summary = diff.get("reason_summary", {}).get("dropped", [])
+            summary_entry = next(
+                (entry for entry in reason_summary if entry.get("id") == conflict_id),
+                None,
+            )
+            assert (
+                summary_entry is not None
+            ), f"No reason summary entry for {conflict_id}"
+            assert "hard-locked" in str(summary_entry.get("reason", "")).lower()
+
+            change_log = diff.get("change_log", {})
+            dropped_entries = change_log.get("dropped", [])
+            change_entry = next(
+                (
+                    entry
+                    for entry in dropped_entries
+                    if entry.get("acquisition_id") == conflict_id
+                ),
+                None,
+            )
+            assert change_entry is not None, f"No change_log entry for {conflict_id}"
+            assert change_entry.get("reason_code") == "HARD_LOCK_CONSTRAINT"
+            assert "hard-locked" in str(change_entry.get("reason_text", "")).lower()
+            assert fixed_id in diff.get("kept", [])
+            print(
+                f"Repair change_log captured hard-lock constraint for {conflict_id} ✓"
+            )
+        finally:
+            _safe_cleanup(ws)
+
 
 # =============================================================================
 # Phase 12: State Pagination — /horizon returns full count
@@ -3566,6 +3628,91 @@ class TestRepairCommitProtections:
         finally:
             _safe_cleanup(ws1, TLE_SAT1, TARGETS_PHASE1)
             _safe_cleanup(ws2)
+
+    def test_03_repair_commit_only_applies_selected_satellite_drops(self) -> None:
+        ws = _create_workspace(f"rcp03_{uuid.uuid4().hex[:6]}")
+        try:
+            start_sat1 = (datetime.now(timezone.utc) + timedelta(hours=6)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+            start_sat2 = (datetime.now(timezone.utc) + timedelta(hours=7)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+            _direct_commit_synthetic(
+                ws,
+                "sat_ICEYE-X53",
+                "rcp_sat1_fixed",
+                start_sat1,
+                start_sat1,
+                lock_level="hard",
+            )
+            conflict_sat1 = _direct_commit_synthetic(
+                ws,
+                "sat_ICEYE-X53",
+                "rcp_sat1_conflict",
+                start_sat1,
+                start_sat1,
+                force=True,
+            )
+            fixed_sat2 = _direct_commit_synthetic(
+                ws,
+                "sat_ICEYE-X56",
+                "rcp_sat2_fixed",
+                start_sat2,
+                start_sat2,
+                lock_level="hard",
+            )
+            conflict_sat2 = _direct_commit_synthetic(
+                ws,
+                "sat_ICEYE-X56",
+                "rcp_sat2_conflict",
+                start_sat2,
+                start_sat2,
+                force=True,
+            )
+
+            conflict_sat1_id = conflict_sat1["acquisition_ids"][0]
+            fixed_sat2_id = fixed_sat2["acquisition_ids"][0]
+            conflict_sat2_id = conflict_sat2["acquisition_ids"][0]
+
+            repair = _post(
+                "/schedule/repair",
+                {
+                    "workspace_id": ws,
+                    "repair_scope": "satellite_subset",
+                    "satellite_subset": ["sat_ICEYE-X53"],
+                },
+            )
+            plan_id = repair.get("plan_id")
+            assert plan_id, f"No plan_id returned from scoped repair: {repair}"
+            drops = repair.get("repair_diff", {}).get("dropped", [])
+            assert drops == [
+                conflict_sat1_id
+            ], f"Expected only selected-satellite drop, got drops={drops}"
+
+            repair_commit = _post(
+                "/schedule/repair/commit",
+                {
+                    "plan_id": plan_id,
+                    "workspace_id": ws,
+                    "drop_acquisition_ids": drops,
+                    "force": True,
+                },
+            )
+            assert repair_commit[
+                "success"
+            ], f"Scoped repair commit failed: {repair_commit}"
+
+            post_by_id = {a["id"]: a for a in _horizon(ws)}
+            assert conflict_sat1_id in post_by_id
+            assert post_by_id[conflict_sat1_id].get("state") == "failed"
+            assert fixed_sat2_id in post_by_id
+            assert post_by_id[fixed_sat2_id].get("state") != "failed"
+            assert conflict_sat2_id in post_by_id
+            assert post_by_id[conflict_sat2_id].get("state") != "failed"
+            print("Scoped repair commit only applied the selected-satellite drop ✓")
+        finally:
+            _safe_cleanup(ws)
 
 
 class TestRollbackVsLocks:
@@ -4190,6 +4337,162 @@ class TestRepairScopeVariants:
             print(f"target_subset repair (target={tgt_id}): ok ✓")
         finally:
             _safe_cleanup(ws, TLE_SAT1, TARGETS_PHASE1)
+
+    def test_05_satellite_subset_scope_isolates_multi_satellite_conflicts(self) -> None:
+        ws = _create_workspace(f"rscope05_{uuid.uuid4().hex[:6]}")
+        try:
+            start_sat1 = (datetime.now(timezone.utc) + timedelta(hours=6)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+            start_sat2 = (datetime.now(timezone.utc) + timedelta(hours=7)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+            fixed_sat1 = _direct_commit_synthetic(
+                ws,
+                "sat_ICEYE-X53",
+                "scope_sat1_fixed",
+                start_sat1,
+                start_sat1,
+                lock_level="hard",
+            )
+            conflict_sat1 = _direct_commit_synthetic(
+                ws,
+                "sat_ICEYE-X53",
+                "scope_sat1_conflict",
+                start_sat1,
+                start_sat1,
+                force=True,
+            )
+            fixed_sat2 = _direct_commit_synthetic(
+                ws,
+                "sat_ICEYE-X56",
+                "scope_sat2_fixed",
+                start_sat2,
+                start_sat2,
+                lock_level="hard",
+            )
+            conflict_sat2 = _direct_commit_synthetic(
+                ws,
+                "sat_ICEYE-X56",
+                "scope_sat2_conflict",
+                start_sat2,
+                start_sat2,
+                force=True,
+            )
+
+            fixed_sat1_id = fixed_sat1["acquisition_ids"][0]
+            conflict_sat1_id = conflict_sat1["acquisition_ids"][0]
+            fixed_sat2_id = fixed_sat2["acquisition_ids"][0]
+            conflict_sat2_id = conflict_sat2["acquisition_ids"][0]
+
+            repair = _post(
+                "/schedule/repair",
+                {
+                    "workspace_id": ws,
+                    "repair_scope": "satellite_subset",
+                    "satellite_subset": ["sat_ICEYE-X53"],
+                },
+            )
+            assert repair["fixed_count"] == 1
+            assert repair["flex_count"] == 1
+
+            diff = repair.get("repair_diff", {})
+            dropped = diff.get("dropped", [])
+            kept = diff.get("kept", [])
+            mentioned_ids = set(dropped) | set(kept) | set(diff.get("added", []))
+
+            assert (
+                conflict_sat1_id in dropped
+            ), f"Selected-satellite conflict should be dropped, dropped={dropped}"
+            assert (
+                fixed_sat1_id in kept
+            ), f"Selected hard lock should be kept, kept={kept}"
+            assert (
+                conflict_sat2_id not in dropped
+            ), f"Out-of-scope satellite conflict should remain untouched, dropped={dropped}"
+            assert fixed_sat2_id not in mentioned_ids
+            assert conflict_sat2_id not in mentioned_ids
+            print(
+                "satellite_subset repair isolated changes to the selected satellite ✓"
+            )
+        finally:
+            _safe_cleanup(ws)
+
+    def test_06_explicit_horizon_scope_isolates_windowed_conflicts(self) -> None:
+        ws = _create_workspace(f"rscope06_{uuid.uuid4().hex[:6]}")
+        try:
+            start_in_window_dt = datetime.now(timezone.utc) + timedelta(hours=6)
+            start_out_window_dt = datetime.now(timezone.utc) + timedelta(hours=30)
+            start_in_window = start_in_window_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            start_out_window = start_out_window_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            fixed_in = _direct_commit_synthetic(
+                ws,
+                "sat_ICEYE-X53",
+                "horizon_fixed_in",
+                start_in_window,
+                start_in_window,
+                lock_level="hard",
+            )
+            conflict_in = _direct_commit_synthetic(
+                ws,
+                "sat_ICEYE-X53",
+                "horizon_conflict_in",
+                start_in_window,
+                start_in_window,
+                force=True,
+            )
+            _direct_commit_synthetic(
+                ws,
+                "sat_ICEYE-X53",
+                "horizon_fixed_out",
+                start_out_window,
+                start_out_window,
+                lock_level="hard",
+            )
+            conflict_out = _direct_commit_synthetic(
+                ws,
+                "sat_ICEYE-X53",
+                "horizon_conflict_out",
+                start_out_window,
+                start_out_window,
+                force=True,
+            )
+
+            fixed_in_id = fixed_in["acquisition_ids"][0]
+            conflict_in_id = conflict_in["acquisition_ids"][0]
+            conflict_out_id = conflict_out["acquisition_ids"][0]
+
+            repair = _post(
+                "/schedule/repair",
+                {
+                    "workspace_id": ws,
+                    "repair_scope": "workspace_horizon",
+                    "horizon_from": (
+                        start_in_window_dt - timedelta(minutes=1)
+                    ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "horizon_to": (start_in_window_dt + timedelta(minutes=1)).strftime(
+                        "%Y-%m-%dT%H:%M:%SZ"
+                    ),
+                },
+            )
+            assert repair["fixed_count"] == 1
+            assert repair["flex_count"] == 1
+
+            diff = repair.get("repair_diff", {})
+            dropped = diff.get("dropped", [])
+            kept = diff.get("kept", [])
+            mentioned_ids = set(dropped) | set(kept) | set(diff.get("added", []))
+
+            assert conflict_in_id in dropped
+            assert fixed_in_id in kept
+            assert conflict_out_id not in dropped
+            assert conflict_out_id not in mentioned_ids
+            print(
+                "Explicit repair horizon limited conflict handling to the requested window ✓"
+            )
+        finally:
+            _safe_cleanup(ws)
 
 
 class TestGlobalStateQuery:

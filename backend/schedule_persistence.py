@@ -25,9 +25,48 @@ logger = logging.getLogger(__name__)
 
 # Schema version for this module
 SCHEMA_VERSION = "2.5"
+DEFAULT_WORKSPACE_ID = "default"
 
 # Default database path (same as workspace_persistence.py)
 DEFAULT_DB_PATH = Path(__file__).parent.parent / "data" / "workspaces.db"
+
+
+def _isoformat_z(value: datetime) -> str:
+    """Format datetimes consistently as UTC with a single trailing Z."""
+    if value.tzinfo is None:
+        return value.isoformat() + "Z"
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _utc_now_z() -> str:
+    """Return the current UTC time formatted with a single trailing Z."""
+    return _isoformat_z(datetime.now(timezone.utc))
+
+
+def _normalize_workspace_id(workspace_id: Optional[str]) -> str:
+    """Canonicalize the implicit workspace used by schedule writes."""
+    return workspace_id or DEFAULT_WORKSPACE_ID
+
+
+def _ensure_workspace_exists(
+    cursor: sqlite3.Cursor,
+    workspace_id: str,
+) -> None:
+    """Ensure the implicit default workspace exists for FK-backed schedule writes."""
+    if workspace_id != DEFAULT_WORKSPACE_ID:
+        return
+
+    try:
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO workspaces (id, name)
+            VALUES (?, ?)
+        """,
+            (DEFAULT_WORKSPACE_ID, "Default Workspace"),
+        )
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc):
+            raise
 
 
 # =============================================================================
@@ -509,7 +548,7 @@ class ScheduleDB:
     def _migrate_to_v2(self, conn: sqlite3.Connection) -> None:
         """Migrate database schema to v2.0."""
         cursor = conn.cursor()
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
 
         logger.info("Running migration to schema v2.0...")
 
@@ -736,7 +775,7 @@ class ScheduleDB:
     def _migrate_to_v2_1(self, conn: sqlite3.Connection) -> None:
         """Migrate database schema to v2.1 - Order inbox & batch planning."""
         cursor = conn.cursor()
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
 
         logger.info("Running migration to schema v2.1...")
 
@@ -845,7 +884,7 @@ class ScheduleDB:
         Only hard and none lock levels are supported going forward.
         """
         cursor = conn.cursor()
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
 
         logger.info("Running migration to schema v2.2...")
 
@@ -887,7 +926,7 @@ class ScheduleDB:
         Formula: new_priority = 6 - old_priority  (1<->5, 2<->4, 3 stays 3)
         """
         cursor = conn.cursor()
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
 
         logger.info(
             "Running migration to schema v2.3 (priority semantics inversion)..."
@@ -930,7 +969,7 @@ class ScheduleDB:
         to the CREATE TABLE definition without an ALTER migration.
         """
         cursor = conn.cursor()
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
 
         logger.info("Running migration to schema v2.4...")
 
@@ -973,7 +1012,7 @@ class ScheduleDB:
         targets and hover tooltips without recomputing feasibility.
         """
         cursor = conn.cursor()
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
 
         logger.info("Running migration to schema v2.5 (geo-backfill)...")
 
@@ -1085,7 +1124,7 @@ class ScheduleDB:
         3. Add UNIQUE constraint on (satellite_id, target_id, start_time, workspace_id)
         """
         cursor = conn.cursor()
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
 
         logger.info(
             "Running migration to schema v2.6 (workspace cleanup + revision)..."
@@ -1220,7 +1259,7 @@ class ScheduleDB:
     def _migrate_to_v2_7(self, conn: sqlite3.Connection) -> None:
         """Migrate database schema to v2.7 — schedule snapshots for rollback."""
         cursor = conn.cursor()
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
 
         logger.info("Running migration to schema v2.7...")
 
@@ -1302,7 +1341,7 @@ class ScheduleDB:
             Created Order object
         """
         order_id = f"ord_{uuid.uuid4().hex[:12]}"
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
 
         constraints_json = json.dumps(constraints) if constraints else None
         tags_json = json.dumps(tags) if tags else None
@@ -1432,7 +1471,7 @@ class ScheduleDB:
                 f"Invalid status: {status}. Must be one of {valid_statuses}"
             )
 
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -1570,7 +1609,8 @@ class ScheduleDB:
     ) -> Acquisition:
         """Create a new acquisition (scheduled slot)."""
         acq_id = f"acq_{uuid.uuid4().hex[:12]}"
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
+        effective_workspace_id = _normalize_workspace_id(workspace_id)
 
         # Auto-compute off_nadir_deg from roll_angle if not provided
         if off_nadir_deg is None and roll_angle_deg is not None:
@@ -1578,6 +1618,7 @@ class ScheduleDB:
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            _ensure_workspace_exists(cursor, effective_workspace_id)
             cursor.execute(
                 """
                 INSERT INTO acquisitions (
@@ -1616,7 +1657,7 @@ class ScheduleDB:
                     quality_score,
                     maneuver_time_s,
                     slack_time_s,
-                    workspace_id,
+                    effective_workspace_id,
                     target_lat,
                     target_lon,
                     satellite_display_name,
@@ -1655,7 +1696,7 @@ class ScheduleDB:
             quality_score=quality_score,
             maneuver_time_s=maneuver_time_s,
             slack_time_s=slack_time_s,
-            workspace_id=workspace_id,
+            workspace_id=effective_workspace_id,
             target_lat=target_lat,
             target_lon=target_lon,
             satellite_display_name=satellite_display_name,
@@ -1671,6 +1712,22 @@ class ScheduleDB:
             if not row:
                 return None
             return self._row_to_acquisition(row)
+
+    def get_acquisitions_by_ids(self, acquisition_ids: List[str]) -> Dict[str, Acquisition]:
+        """Get acquisitions by ID in a single query."""
+        if not acquisition_ids:
+            return {}
+
+        placeholders = ",".join("?" for _ in acquisition_ids)
+        query = f"SELECT * FROM acquisitions WHERE id IN ({placeholders})"
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, acquisition_ids)
+            rows = cursor.fetchall()
+
+        acquisitions = [self._row_to_acquisition(row) for row in rows]
+        return {acq.id: acq for acq in acquisitions}
 
     def list_acquisitions(
         self,
@@ -1910,6 +1967,51 @@ class ScheduleDB:
             cursor.execute(query, params)
             return [self._row_to_acquisition(row) for row in cursor.fetchall()]
 
+    def get_acquisition_horizon_bounds(
+        self,
+        workspace_id: Optional[str] = None,
+        satellite_id: Optional[str] = None,
+        include_tentative: bool = True,
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Get the earliest start and latest end across matching acquisitions.
+
+        Args:
+            workspace_id: Optional workspace filter
+            satellite_id: Optional satellite filter
+            include_tentative: Include tentative acquisitions in the bounds
+
+        Returns:
+            Tuple of (earliest_start_time, latest_end_time). Each element is
+            None when no matching acquisitions exist.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            query = """
+                SELECT
+                    MIN(start_time) AS min_start_time,
+                    MAX(end_time) AS max_end_time
+                FROM acquisitions
+                WHERE 1=1
+            """
+            params: List[Any] = []
+
+            if workspace_id:
+                query += " AND workspace_id = ?"
+                params.append(workspace_id)
+            if satellite_id:
+                query += " AND satellite_id = ?"
+                params.append(satellite_id)
+            if not include_tentative:
+                query += " AND state != 'tentative'"
+
+            cursor.execute(query, params)
+            row = cursor.fetchone()
+            if row is None:
+                return None, None
+
+            return row["min_start_time"], row["max_end_time"]
+
     def get_committed_acquisitions_for_satellite(
         self,
         satellite_id: str,
@@ -1960,7 +2062,7 @@ class ScheduleDB:
         lock_level: Optional[str] = None,
     ) -> bool:
         """Update acquisition state and/or lock level."""
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
 
         updates = ["updated_at = ?"]
         params: List[Any] = [now]
@@ -2020,8 +2122,8 @@ class ScheduleDB:
         """
         window_hours = escalation_window_hours or self.FREEZE_WINDOW_HOURS
         now = datetime.now(timezone.utc)
-        cutoff = (now + timedelta(hours=window_hours)).isoformat() + "Z"
-        now_str = now.isoformat() + "Z"
+        cutoff = _isoformat_z(now + timedelta(hours=window_hours))
+        now_str = _isoformat_z(now)
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -2238,13 +2340,15 @@ class ScheduleDB:
     ) -> Plan:
         """Create a new plan."""
         plan_id = f"plan_{uuid.uuid4().hex[:12]}"
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
+        effective_workspace_id = _normalize_workspace_id(workspace_id)
 
         config_json = json.dumps(config)
         metrics_json = json.dumps(metrics)
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            _ensure_workspace_exists(cursor, effective_workspace_id)
             cursor.execute(
                 """
                 INSERT INTO plans (
@@ -2262,7 +2366,7 @@ class ScheduleDB:
                     score,
                     metrics_json,
                     "candidate",
-                    workspace_id,
+                    effective_workspace_id,
                 ),
             )
             conn.commit()
@@ -2279,7 +2383,7 @@ class ScheduleDB:
             score=score,
             metrics_json=metrics_json,
             status="candidate",
-            workspace_id=workspace_id,
+            workspace_id=effective_workspace_id,
         )
 
     def get_plan(self, plan_id: str) -> Optional[Plan]:
@@ -2494,7 +2598,7 @@ class ScheduleDB:
                 snapshot_id,
                 workspace_id,
                 plan_id,
-                datetime.now(timezone.utc).isoformat() + "Z",
+                _utc_now_z(),
                 json.dumps(snapshot_data),
                 description,
             ),
@@ -2615,12 +2719,14 @@ class ScheduleDB:
             lock_level = "none"
         if lock_level not in ["none", "hard"]:
             lock_level = "none"
+        effective_workspace_id = _normalize_workspace_id(workspace_id)
 
         created_acquisitions = []
         updated_orders = set()
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            _ensure_workspace_exists(cursor, effective_workspace_id)
 
             # Get the plan
             cursor.execute("SELECT * FROM plans WHERE id = ?", (plan_id,))
@@ -2635,10 +2741,9 @@ class ScheduleDB:
                 raise ValueError(f"Plan {plan_id} is already committed")
 
             # Create pre-commit snapshot for rollback
-            effective_ws = workspace_id or "default"
             snapshot_id = self._create_snapshot(
                 cursor,
-                effective_ws,
+                effective_workspace_id,
                 plan_id,
                 description=f"Pre-commit snapshot for plan {plan_id}",
             )
@@ -2655,10 +2760,12 @@ class ScheduleDB:
                 cursor.execute("SELECT * FROM plan_items WHERE plan_id = ?", (plan_id,))
 
             items = cursor.fetchall()
-            now = datetime.now(timezone.utc).isoformat() + "Z"
+            now = _utc_now_z()
 
             # v2.5: resolve target coords from workspace scenario_config
-            target_coords = self._resolve_target_coords(cursor, workspace_id)
+            target_coords = self._resolve_target_coords(
+                cursor, effective_workspace_id
+            )
 
             for item in items:
                 acq_id = f"acq_{uuid.uuid4().hex[:12]}"
@@ -2704,7 +2811,7 @@ class ScheduleDB:
                             item["quality_score"],
                             item["maneuver_time_s"],
                             item["slack_time_s"],
-                            workspace_id,
+                            effective_workspace_id,
                             off_nadir,
                             t_lat,
                             t_lon,
@@ -2835,11 +2942,13 @@ class ScheduleDB:
             Created Conflict object
         """
         conflict_id = f"conflict_{uuid.uuid4().hex[:12]}"
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
+        effective_workspace_id = _normalize_workspace_id(workspace_id)
         acquisition_ids_json = json.dumps(acquisition_ids)
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            _ensure_workspace_exists(cursor, effective_workspace_id)
             cursor.execute(
                 """
                 INSERT INTO conflicts (
@@ -2854,7 +2963,7 @@ class ScheduleDB:
                     severity,
                     description,
                     acquisition_ids_json,
-                    workspace_id,
+                    effective_workspace_id,
                 ),
             )
             conn.commit()
@@ -2874,7 +2983,7 @@ class ScheduleDB:
             resolved_at=None,
             resolution_action=None,
             resolution_notes=None,
-            workspace_id=workspace_id,
+            workspace_id=effective_workspace_id,
         )
 
     def get_conflict(self, conflict_id: str) -> Optional[Conflict]:
@@ -3056,7 +3165,7 @@ class ScheduleDB:
         Returns:
             True if updated
         """
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -3204,7 +3313,7 @@ class ScheduleDB:
                 f"Invalid lock_level: {lock_level}. Must be one of {valid_locks}"
             )
 
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
         updated = 0
         failed: List[str] = []
 
@@ -3247,7 +3356,7 @@ class ScheduleDB:
         Returns:
             Dict with updated count
         """
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -3343,7 +3452,7 @@ class ScheduleDB:
             Created CommitAuditLog object
         """
         audit_id = f"audit_{uuid.uuid4().hex[:12]}"
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
         repair_diff_json = json.dumps(repair_diff) if repair_diff else None
 
         with self._get_connection() as conn:
@@ -3495,6 +3604,7 @@ class ScheduleDB:
         """
         if lock_level not in ["none", "hard"]:
             lock_level = "none"
+        effective_workspace_id = _normalize_workspace_id(workspace_id)
 
         created_acquisitions: List[Dict[str, str]] = []
         dropped_acquisitions: List[str] = []
@@ -3502,16 +3612,17 @@ class ScheduleDB:
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            _ensure_workspace_exists(cursor, effective_workspace_id)
 
             try:
                 # Start transaction (implicit with BEGIN)
                 cursor.execute("BEGIN IMMEDIATE")
 
                 # Optimistic concurrency check: reject if revision has changed
-                if expected_revision is not None and workspace_id:
+                if expected_revision is not None:
                     cursor.execute(
                         "SELECT revision FROM workspace_schedule_revision WHERE workspace_id = ?",
-                        (workspace_id,),
+                        (effective_workspace_id,),
                     )
                     rev_row = cursor.fetchone()
                     current_rev = rev_row["revision"] if rev_row else 1
@@ -3531,7 +3642,7 @@ class ScheduleDB:
                 if plan_row["status"] == "committed":
                     raise ValueError(f"Plan {plan_id} is already committed")
 
-                now = datetime.now(timezone.utc).isoformat() + "Z"
+                now = _utc_now_z()
 
                 # Step 1: Drop acquisitions (for repair commits)
                 if drop_acquisition_ids:
@@ -3563,7 +3674,9 @@ class ScheduleDB:
                 items = cursor.fetchall()
 
                 # v2.5: resolve target coords from workspace scenario_config
-                target_coords = self._resolve_target_coords(cursor, workspace_id)
+                target_coords = self._resolve_target_coords(
+                    cursor, effective_workspace_id
+                )
 
                 # Step 3: Create acquisitions from plan items
                 for item in items:
@@ -3608,7 +3721,7 @@ class ScheduleDB:
                             item["quality_score"],
                             item["maneuver_time_s"],
                             item["slack_time_s"],
-                            workspace_id,
+                            effective_workspace_id,
                             off_nadir,
                             t_lat,
                             t_lon,
@@ -3636,17 +3749,16 @@ class ScheduleDB:
                 )
 
                 # Step 6: Bump workspace schedule revision
-                if workspace_id:
-                    cursor.execute(
-                        """
-                        INSERT INTO workspace_schedule_revision
-                            (workspace_id, revision, updated_at)
-                        VALUES (?, 1, ?)
-                        ON CONFLICT(workspace_id) DO UPDATE
-                        SET revision = revision + 1, updated_at = ?
-                    """,
-                        (workspace_id, now, now),
-                    )
+                cursor.execute(
+                    """
+                    INSERT INTO workspace_schedule_revision
+                        (workspace_id, revision, updated_at)
+                    VALUES (?, 1, ?)
+                    ON CONFLICT(workspace_id) DO UPDATE
+                    SET revision = revision + 1, updated_at = ?
+                """,
+                    (effective_workspace_id, now, now),
+                )
 
                 # Commit transaction
                 conn.commit()
@@ -3707,7 +3819,7 @@ class ScheduleDB:
             Created OrderBatch object
         """
         batch_id = f"batch_{uuid.uuid4().hex[:12]}"
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -3817,7 +3929,7 @@ class ScheduleDB:
                 f"Invalid status: {status}. Must be one of {valid_statuses}"
             )
 
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
         metrics_json = json.dumps(metrics) if metrics else None
 
         with self._get_connection() as conn:
@@ -3871,7 +3983,7 @@ class ScheduleDB:
             Created BatchMember object
         """
         member_id = f"bm_{uuid.uuid4().hex[:12]}"
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -3909,7 +4021,7 @@ class ScheduleDB:
         Returns:
             True if removed
         """
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -4074,7 +4186,7 @@ class ScheduleDB:
         Returns:
             True if updated
         """
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
 
         updates = ["updated_at = ?"]
         params: List[Any] = [now]
@@ -4127,7 +4239,7 @@ class ScheduleDB:
             List of created Order objects
         """
         created_orders: List[Order] = []
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _utc_now_z()
 
         with self._get_connection() as conn:
             cursor = conn.cursor()

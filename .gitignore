@@ -55,6 +55,7 @@ coverage/
 .nyc_output/
 .pytest_cache/
 .mypy_cache/
+.hypothesis/
 
 # Temporary files
 *.tmp
@@ -88,4 +89,3 @@ artifacts/demo/SCALE_TEST_EVIDENCE.*
 *_results.json
 *_results.txt
 *_counts.txt
-

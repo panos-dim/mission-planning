@@ -47,9 +47,10 @@ class MissionPlanner:
         self.visibility_calculator = VisibilityCalculator(satellite)
         self.visualizer = Visualizer()
 
-        logger.info(
-            f"Initialized MissionPlanner for {satellite.satellite_name} "
-            f"with {len(self.target_manager)} targets"
+        logger.debug(
+            "Initialized MissionPlanner for %s with %d targets",
+            satellite.satellite_name,
+            len(self.target_manager),
         )
 
     def add_target(self, target: GroundTarget) -> None:

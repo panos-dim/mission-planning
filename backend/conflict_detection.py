@@ -154,42 +154,55 @@ class ConflictDetector:
         """
         conflicts: List[DetectedConflict] = []
 
-        for i in range(len(acquisitions) - 1):
-            acq1 = acquisitions[i]
-            acq2 = acquisitions[i + 1]
+        parsed_acquisitions: List[Tuple[Acquisition, Optional[datetime], Optional[datetime]]] = []
+        for acq in acquisitions:
+            parsed_acquisitions.append(
+                (
+                    acq,
+                    self._parse_time(acq.start_time),
+                    self._parse_time(acq.end_time),
+                )
+            )
 
-            # Parse times
-            end1 = self._parse_time(acq1.end_time)
-            start2 = self._parse_time(acq2.start_time)
-
-            if end1 is None or start2 is None:
+        for i in range(len(parsed_acquisitions) - 1):
+            acq1, start1, end1 = parsed_acquisitions[i]
+            if start1 is None or end1 is None:
                 continue
 
-            # Check for overlap
-            acq1_is_point = self._parse_time(acq1.start_time) == end1
-            acq2_is_point = self._parse_time(acq2.end_time) == start2
-            start1 = self._parse_time(acq1.start_time)
-            end2 = self._parse_time(acq2.end_time)
-            if acq1_is_point and acq2_is_point:
-                overlaps = start1 is not None and start1 == start2
-                overlap_seconds = 0.0
-            elif acq1_is_point:
-                point_time = start1
-                overlaps = (
-                    point_time is not None
-                    and end2 is not None
-                    and start2 <= point_time <= end2
-                )
-                overlap_seconds = 0.0 if overlaps else (end1 - start2).total_seconds()
-            elif acq2_is_point:
-                point_time = start2
-                overlaps = start1 is not None and start1 <= point_time <= end1
-                overlap_seconds = 0.0 if overlaps else (end1 - start2).total_seconds()
-            else:
-                overlap_seconds = (end1 - start2).total_seconds()
-                overlaps = overlap_seconds > self.config.overlap_threshold_s
+            acq1_is_point = start1 == end1
 
-            if overlaps:
+            for j in range(i + 1, len(parsed_acquisitions)):
+                acq2, start2, end2 = parsed_acquisitions[j]
+                if start2 is None or end2 is None:
+                    continue
+
+                # Acquisitions are sorted by start time. Once a later acquisition
+                # starts after the earlier one can no longer overlap, we can stop.
+                if acq1_is_point:
+                    if start2 > start1:
+                        break
+                elif start2 > end1:
+                    break
+
+                acq2_is_point = start2 == end2
+                if acq1_is_point and acq2_is_point:
+                    overlaps = start1 == start2
+                    overlap_seconds = 0.0
+                elif acq1_is_point:
+                    overlaps = start2 <= start1 <= end2
+                    overlap_seconds = 0.0
+                elif acq2_is_point:
+                    overlaps = start1 <= start2 <= end1
+                    overlap_seconds = 0.0
+                else:
+                    overlap_seconds = (
+                        min(end1, end2) - max(start1, start2)
+                    ).total_seconds()
+                    overlaps = overlap_seconds > self.config.overlap_threshold_s
+
+                if not overlaps:
+                    continue
+
                 conflict = DetectedConflict(
                     type="temporal_overlap",
                     severity="error",

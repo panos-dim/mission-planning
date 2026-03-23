@@ -8,6 +8,7 @@ Endpoints:
 - GET  /api/v1/dev/schedule-snapshot  — snapshot metadata + acquisition IDs for a workspace
 - POST /api/v1/dev/write-artifacts    — write demo evidence artifacts to disk
 - GET  /api/v1/dev/metrics            — process RSS/VMS + last feasibility timing
+- GET  /api/v1/dev/route-latency      — inspect in-memory route latency batches
 """
 
 import gc
@@ -157,6 +158,111 @@ class MetricsResponse(BaseModel):
     last_pass_count: Optional[int] = None
     last_request_params: Optional[LastRequestParams] = None
     gc_stats: Optional[GcStats] = None
+
+
+class RouteLatencyEntry(BaseModel):
+    """Single in-memory route latency batch."""
+
+    route: str
+    route_family: str
+    count: int
+    avg_ms: float
+    p95_ms: float
+    max_ms: float
+    slow_count: int
+    error_count: int
+    status_counts: Dict[str, int] = Field(default_factory=dict)
+    profile: str
+    slow_threshold_ms: float
+    baseline_windows: Optional[int] = None
+    baseline_avg_ms: Optional[float] = None
+    baseline_p95_ms: Optional[float] = None
+    avg_delta_ms: Optional[float] = None
+    p95_delta_ms: Optional[float] = None
+    is_hot: bool = False
+    hot_reason: Optional[str] = None
+
+
+class RouteLatencyHistoryEntry(BaseModel):
+    """Previously emitted route latency summary."""
+
+    route: str
+    route_family: str
+    emitted_at: str
+    count: int
+    avg_ms: float
+    p95_ms: float
+    max_ms: float
+    slow_count: int
+    error_count: int
+    status_counts: Dict[str, int] = Field(default_factory=dict)
+    profile: str
+    slow_threshold_ms: float
+    is_hot: bool = False
+    hot_reason: Optional[str] = None
+
+
+class RouteLatencyFamilyEntry(BaseModel):
+    """Aggregate latency and status counters for a route family."""
+
+    family: str
+    route_count: int
+    request_count: int
+    avg_ms: float
+    p95_ms: float
+    max_ms: float
+    slow_count: int
+    error_count: int
+    hot_count: int
+    status_counts: Dict[str, int] = Field(default_factory=dict)
+
+
+class RecentRouteErrorEntry(BaseModel):
+    """Single recent non-success request outcome."""
+
+    occurred_at: str
+    method: str
+    route: str
+    route_family: str
+    status_code: int
+    status_class: str
+    duration_ms: float
+    profile: str
+
+
+class RecentErrorFamilyEntry(BaseModel):
+    """Aggregate recent errors for a route family."""
+
+    family: str
+    error_count: int
+    route_count: int
+    max_duration_ms: float
+    latest_occurred_at: Optional[str] = None
+    status_counts: Dict[str, int] = Field(default_factory=dict)
+
+
+class RouteLatencyResponse(BaseModel):
+    """Dev snapshot of active route latency batches."""
+
+    success: bool
+    captured_at: str
+    summary_every: int
+    history_limit: int
+    baseline_windows: int
+    status_counts: Dict[str, int] = Field(default_factory=dict)
+    history_status_counts: Dict[str, int] = Field(default_factory=dict)
+    recent_error_limit: int
+    recent_error_count: int = 0
+    recent_error_status_counts: Dict[str, int] = Field(default_factory=dict)
+    error_family_count: int = 0
+    error_families: List[RecentErrorFamilyEntry] = Field(default_factory=list)
+    recent_errors: List[RecentRouteErrorEntry] = Field(default_factory=list)
+    family_count: int = 0
+    families: List[RouteLatencyFamilyEntry] = Field(default_factory=list)
+    route_count: int
+    routes: List[RouteLatencyEntry] = Field(default_factory=list)
+    history_count: int = 0
+    history: List[RouteLatencyHistoryEntry] = Field(default_factory=list)
 
 
 # =============================================================================
@@ -336,6 +442,54 @@ async def get_metrics() -> MetricsResponse:
         last_pass_count=_last_feasibility_stats.get("pass_count"),
         last_request_params=last_req_params,
         gc_stats=gc_info,
+    )
+
+
+@router.get("/route-latency", response_model=RouteLatencyResponse)
+async def get_route_latency(
+    limit: int = Query(20, ge=1, le=200, description="Max route batches to return"),
+    reset: bool = Query(False, description="Clear batches after capturing snapshot"),
+) -> RouteLatencyResponse:
+    """
+    Dev-only endpoint returning current in-memory route latency batches.
+
+    Useful when diagnosing hot routes without waiting for periodic summary log lines.
+    """
+    _check_dev_mode()
+
+    from backend.main import get_route_latency_snapshot
+
+    snapshot = get_route_latency_snapshot(limit=limit, reset=reset)
+    routes = [RouteLatencyEntry(**route) for route in snapshot["routes"]]
+    history = [RouteLatencyHistoryEntry(**entry) for entry in snapshot["history"]]
+    families = [RouteLatencyFamilyEntry(**entry) for entry in snapshot["families"]]
+    error_families = [
+        RecentErrorFamilyEntry(**entry) for entry in snapshot["error_families"]
+    ]
+    recent_errors = [
+        RecentRouteErrorEntry(**entry) for entry in snapshot["recent_errors"]
+    ]
+
+    return RouteLatencyResponse(
+        success=True,
+        captured_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        summary_every=int(snapshot["summary_every"]),
+        history_limit=int(snapshot["history_limit"]),
+        baseline_windows=int(snapshot["baseline_windows"]),
+        status_counts=dict(snapshot["status_counts"]),
+        history_status_counts=dict(snapshot["history_status_counts"]),
+        recent_error_limit=int(snapshot["recent_error_limit"]),
+        recent_error_count=int(snapshot["recent_error_count"]),
+        recent_error_status_counts=dict(snapshot["recent_error_status_counts"]),
+        error_family_count=len(error_families),
+        error_families=error_families,
+        recent_errors=recent_errors,
+        family_count=len(families),
+        families=families,
+        route_count=len(routes),
+        routes=routes,
+        history_count=len(history),
+        history=history,
     )
 
 
