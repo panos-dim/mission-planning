@@ -1,4 +1,4 @@
-import { useSlewVisStore } from '../store/slewVisStore'
+import { type ColorByMode, useSlewVisStore } from '../store/slewVisStore'
 
 export default function LiveSlewControls(): JSX.Element {
   const {
@@ -55,7 +55,7 @@ export default function LiveSlewControls(): JSX.Element {
         <span className="text-xs font-medium text-gray-400">Color by:</span>
         <select
           value={colorBy}
-          onChange={(e) => setColorBy(e.target.value as any)}
+          onChange={(e) => setColorBy(e.target.value as ColorByMode)}
           className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs text-gray-300"
         >
           <option value="quality">Quality (Off-Nadir)</option>

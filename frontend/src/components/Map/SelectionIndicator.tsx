@@ -7,11 +7,12 @@
  */
 
 import React, { useEffect, useRef } from 'react'
-import { SceneTransforms, Cartesian2, defined, Viewer } from 'cesium'
+import { SceneTransforms, Cartesian2, defined, Entity } from 'cesium'
 import { getSatCssColor } from '../../utils/satelliteColors'
+import type { CesiumViewerRef } from '../../types/cesiumHelpers'
 
 interface SelectionIndicatorProps {
-  viewerRef: React.RefObject<{ cesiumElement: Viewer | undefined } | null>
+  viewerRef: CesiumViewerRef
 }
 
 const scratchCartesian2 = new Cartesian2()
@@ -59,7 +60,7 @@ const SelectionIndicator: React.FC<SelectionIndicatorProps> = ({ viewerRef }) =>
   const outerRef = useRef<HTMLDivElement>(null)
   const innerRef = useRef<HTMLDivElement>(null)
   const rafRef = useRef<number | null>(null)
-  const lastEntityRef = useRef<any>(null)
+  const lastEntityRef = useRef<Entity | null>(null)
   const outerAnimRef = useRef<Animation | null>(null)
   const innerAnimRef = useRef<Animation | null>(null)
 

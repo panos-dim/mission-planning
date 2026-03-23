@@ -1,8 +1,9 @@
 import { useEffect, useState, useRef } from 'react'
 import { useMission } from '../../../context/MissionContext'
+import type { CZMLPacket } from '../../../types'
 
 interface CzmlCache {
-  data: any[] | null
+  data: CZMLPacket[] | null
   timestamp: number
   missionId: string | null
 }
@@ -16,7 +17,7 @@ let czmlCache: CzmlCache = {
 
 export const useCzmlShared = () => {
   const { state } = useMission()
-  const [sharedCzml, setSharedCzml] = useState<any[] | null>(null)
+  const [sharedCzml, setSharedCzml] = useState<CZMLPacket[] | null>(null)
   const lastMissionIdRef = useRef<string | null>(null)
   
   useEffect(() => {

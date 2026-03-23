@@ -18,7 +18,9 @@ import {
   ConstantProperty,
   Property,
   JulianDate,
+  Viewer,
 } from "cesium";
+import type { CesiumViewerRef } from '../types/cesiumHelpers'
 
 const isDev = import.meta.env?.DEV ?? false;
 
@@ -53,6 +55,11 @@ export interface OriginalEntityStyle {
 // Storage key for original style on entity
 const ORIGINAL_STYLE_KEY = "__highlightOriginalStyle";
 const GHOST_CLONE_KEY = "__isGhostClone";
+
+interface HighlightMetadataEntity extends Entity {
+  __highlightOriginalStyle?: OriginalEntityStyle
+  __isGhostClone?: boolean
+}
 
 // =============================================================================
 // Color Definitions
@@ -192,7 +199,7 @@ function entityMatchesPatterns(
 let entityCache: Map<string, Entity> | null = null;
 let lastCacheSize = 0;
 
-function buildEntityCache(viewer: any): Map<string, Entity> {
+function buildEntityCache(viewer: Viewer): Map<string, Entity> {
   const cache = new Map<string, Entity>();
 
   // Collect from regular entities
@@ -221,7 +228,7 @@ function buildEntityCache(viewer: any): Map<string, Entity> {
   return cache;
 }
 
-function getEntityCache(viewer: any): Map<string, Entity> {
+function getEntityCache(viewer: Viewer): Map<string, Entity> {
   // Simple cache invalidation: if entity count changed, rebuild
   let currentSize = 0;
   if (viewer.entities?.values) {
@@ -254,7 +261,7 @@ export function invalidateEntityCache(): void {
   lastCacheSize = 0;
 }
 
-export function resolveEntityIds(viewer: any, logicalIds: string[]): Entity[] {
+export function resolveEntityIds(viewer: Viewer, logicalIds: string[]): Entity[] {
   if (!viewer || !logicalIds.length) return [];
 
   const cache = getEntityCache(viewer);
@@ -290,7 +297,8 @@ export function resolveEntityIds(viewer: any, logicalIds: string[]): Entity[] {
 // =============================================================================
 
 function storeOriginalStyle(entity: Entity): void {
-  if ((entity as any)[ORIGINAL_STYLE_KEY]) return; // Already stored
+  const metadataEntity = entity as HighlightMetadataEntity
+  if (metadataEntity[ORIGINAL_STYLE_KEY]) return // Already stored
 
   const original: OriginalEntityStyle = {};
 
@@ -313,21 +321,20 @@ function storeOriginalStyle(entity: Entity): void {
     original.billboardScale = entity.billboard.scale;
   }
 
-  (entity as any)[ORIGINAL_STYLE_KEY] = original;
+  metadataEntity[ORIGINAL_STYLE_KEY] = original;
 }
 
 function restoreOriginalStyle(entity: Entity): void {
-  const original = (entity as any)[ORIGINAL_STYLE_KEY] as
-    | OriginalEntityStyle
-    | undefined;
+  const metadataEntity = entity as HighlightMetadataEntity
+  const original = metadataEntity[ORIGINAL_STYLE_KEY]
   if (!original) return;
 
   if (entity.polygon) {
     if (original.polygonMaterial !== undefined) {
-      (entity.polygon as any).material = original.polygonMaterial;
+      entity.polygon.material = original.polygonMaterial;
     }
     if (original.polygonOutlineColor !== undefined) {
-      (entity.polygon as any).outlineColor = original.polygonOutlineColor;
+      entity.polygon.outlineColor = original.polygonOutlineColor;
     }
     if (original.polygonOutlineWidth !== undefined) {
       entity.polygon.outlineWidth = original.polygonOutlineWidth;
@@ -361,7 +368,7 @@ function restoreOriginalStyle(entity: Entity): void {
     }
   }
 
-  delete (entity as any)[ORIGINAL_STYLE_KEY];
+  delete metadataEntity[ORIGINAL_STYLE_KEY];
 }
 
 function getColorsForMode(
@@ -385,7 +392,7 @@ function applyStyleToEntity(
 
   // Highlight polygons (SAR swaths, footprints)
   if (entity.polygon) {
-    (entity.polygon as any).material = new ColorMaterialProperty(colors.fill);
+    entity.polygon.material = new ColorMaterialProperty(colors.fill);
     entity.polygon.outlineColor = new ConstantProperty(colors.outline);
     entity.polygon.outlineWidth = new ConstantProperty(3);
     entity.polygon.outline = new ConstantProperty(true);
@@ -411,7 +418,7 @@ function applyGhostStyleToEntity(entity: Entity): void {
   const colors = HIGHLIGHT_COLORS.ghost;
 
   if (entity.polygon) {
-    (entity.polygon as any).material = new ColorMaterialProperty(colors.fill);
+    entity.polygon.material = new ColorMaterialProperty(colors.fill);
     entity.polygon.outlineColor = new ConstantProperty(colors.outline);
     entity.polygon.outlineWidth = new ConstantProperty(2);
     entity.polygon.outline = new ConstantProperty(true);
@@ -484,7 +491,7 @@ export function clearHighlights(entities: Entity[]): void {
 const createdGhostClones = new Set<string>();
 
 export function createGhostClone(
-  viewer: any,
+  viewer: Viewer,
   sourceEntity: Entity,
   ghostId: string,
 ): Entity | null {
@@ -501,7 +508,7 @@ export function createGhostClone(
 
   try {
     // Create a lightweight clone with the same geometry
-    const cloneOptions: any = {
+    const cloneOptions: Entity.ConstructorOptions = {
       id: ghostId,
       name: `Ghost: ${sourceEntity.name || sourceEntity.id}`,
     };
@@ -574,7 +581,7 @@ export function createGhostClone(
     }
 
     const ghostEntity = viewer.entities.add(cloneOptions);
-    (ghostEntity as any)[GHOST_CLONE_KEY] = true;
+    ;(ghostEntity as HighlightMetadataEntity)[GHOST_CLONE_KEY] = true
     createdGhostClones.add(ghostId);
 
     if (isDev) {
@@ -588,11 +595,11 @@ export function createGhostClone(
   }
 }
 
-export function removeGhostClone(viewer: any, ghostId: string): void {
+export function removeGhostClone(viewer: Viewer, ghostId: string): void {
   if (!viewer) return;
 
   const entity = viewer.entities.getById(ghostId);
-  if (entity && (entity as any)[GHOST_CLONE_KEY]) {
+  if (entity && (entity as HighlightMetadataEntity)[GHOST_CLONE_KEY]) {
     viewer.entities.remove(entity);
     createdGhostClones.delete(ghostId);
 
@@ -602,7 +609,7 @@ export function removeGhostClone(viewer: any, ghostId: string): void {
   }
 }
 
-export function removeAllGhostClones(viewer: any): void {
+export function removeAllGhostClones(viewer: Viewer): void {
   if (!viewer) return;
 
   for (const ghostId of createdGhostClones) {
@@ -637,7 +644,7 @@ export interface HighlightController {
 }
 
 export function createHighlightController(
-  viewerRef: React.RefObject<any>,
+  viewerRef: CesiumViewerRef,
 ): HighlightController {
   const highlightedEntityIds = new Set<string>();
   const ghostEntityIds = new Set<string>();

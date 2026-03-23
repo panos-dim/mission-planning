@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Viewer, CzmlDataSource } from 'resium'
 import {
+  Clock,
   JulianDate,
   ClockRange,
   ShadowMode,
@@ -14,16 +15,21 @@ import { useMission } from '../context/MissionContext'
 import { CesiumViewerProps, SceneObject } from '../types'
 import { useSelectionStore } from '../store/selectionStore'
 import debug from '../utils/debug'
+import type {
+  CesiumDataSourceRefValue,
+  CesiumViewerRefValue,
+  TimelineInternals,
+} from '../types/cesiumHelpers'
 
 const CesiumViewer: React.FC<CesiumViewerProps> = () => {
   const { state, setCesiumViewer, addSceneObject, selectObject } = useMission()
   const { selectTarget, selectOpportunity, clearSelection } = useSelectionStore()
-  const viewerRef = useRef<any>(null)
-  const czmlDataSourceRef = useRef<any>(null)
+  const viewerRef = useRef<CesiumViewerRefValue | null>(null)
+  const czmlDataSourceRef = useRef<CesiumDataSourceRefValue | null>(null)
   const [trackedEntity, setTrackedEntity] = useState<Entity | null>(null)
   const [isTrackingLocked, setIsTrackingLocked] = useState(false)
   const trackingIntervalRef = useRef<number | null>(null)
-  const eventHandlerRef = useRef<any>(null)
+  const eventHandlerRef = useRef<ScreenSpaceEventHandler | null>(null)
 
   // Ref to prevent duplicate clock configuration
   const clockConfiguredRef = useRef<string | null>(null)
@@ -131,7 +137,7 @@ const CesiumViewer: React.FC<CesiumViewerProps> = () => {
               // Add event listeners to prevent timeline reset on play/pause
               if (viewer.clock) {
                 // Override clock tick to maintain current time within bounds
-                viewer.clock.onTick.addEventListener((clock: any) => {
+                viewer.clock.onTick.addEventListener((clock: Clock) => {
                   // Ensure current time stays within mission bounds
                   if (JulianDate.lessThan(clock.currentTime, start)) {
                     clock.currentTime = start.clone()
@@ -171,7 +177,7 @@ const CesiumViewer: React.FC<CesiumViewerProps> = () => {
     } catch (error) {
       console.error('Error in CesiumViewer useEffect:', error)
     }
-  }, [state.missionData, state.czmlData])
+  }, [state.missionData, state.czmlData, setCesiumViewer])
 
   // Effect to maintain camera tracking during timeline animation
   useEffect(() => {
@@ -265,7 +271,7 @@ const CesiumViewer: React.FC<CesiumViewerProps> = () => {
         // Create new handler
         eventHandlerRef.current = new ScreenSpaceEventHandler(viewer.scene.canvas)
 
-        eventHandlerRef.current.setInputAction((click: any) => {
+        eventHandlerRef.current.setInputAction((click: ScreenSpaceEventHandler.PositionedEvent) => {
           const pickedObject = viewer.scene.pick(click.position)
 
           if (defined(pickedObject) && pickedObject.id instanceof Entity) {
@@ -410,7 +416,7 @@ const CesiumViewer: React.FC<CesiumViewerProps> = () => {
 
               // Ensure coverage circles are hidden by default after CZML loads
               if (dataSource && dataSource.entities) {
-                dataSource.entities.values.forEach((entity: any) => {
+                dataSource.entities.values.forEach((entity: Entity) => {
                   if (entity.name && entity.name.includes('Coverage Area')) {
                     entity.show = false // Ensure coverage areas are hidden by default
                   }
@@ -429,7 +435,7 @@ const CesiumViewer: React.FC<CesiumViewerProps> = () => {
                   lightingInitializedRef.current = missionId
 
                   // Set global flag to prevent conflicting toggles
-                  ;(window as any).lightingInitializationInProgress = true
+                  window.lightingInitializationInProgress = true
 
                   // Set lighting properties directly without triggering toggle
                   viewer.scene.globe.enableLighting = true
@@ -447,7 +453,7 @@ const CesiumViewer: React.FC<CesiumViewerProps> = () => {
 
                   // Clear the flag after initialization is complete
                   setTimeout(() => {
-                    ;(window as any).lightingInitializationInProgress = false
+                    window.lightingInitializationInProgress = false
                     debug.verbose('Lighting initialization complete - toggles now allowed')
                   }, 500)
                 }
@@ -487,7 +493,7 @@ const CesiumViewer: React.FC<CesiumViewerProps> = () => {
                       viewer.timeline.updateFromClock()
 
                       // Force timeline to stay at exact bounds by manipulating internal properties
-                      const timeline = viewer.timeline as any
+                      const timeline = viewer.timeline as TimelineInternals
                       if (timeline._startJulian && timeline._endJulian) {
                         // Override the internal timeline bounds to prevent padding
                         timeline._startJulian = start

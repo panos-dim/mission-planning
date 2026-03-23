@@ -16,6 +16,7 @@ import {
   ConstantProperty,
   JulianDate,
   Property,
+  Viewer,
 } from "cesium";
 import {
   useRepairHighlightStore,
@@ -24,6 +25,7 @@ import {
   type RepairDiffType,
 } from "../store/repairHighlightStore";
 import { useVisStore } from "../store/visStore";
+import type { CesiumViewerRef } from '../types/cesiumHelpers'
 
 // Dev mode check
 const isDev = import.meta.env?.DEV ?? false;
@@ -68,6 +70,10 @@ const GHOST_COLOR = {
 // Original style storage key on entity
 const ORIGINAL_STYLE_KEY = "__repairOriginalStyle";
 
+interface RepairMetadataEntity extends Entity {
+  __repairOriginalStyle?: OriginalEntityStyle
+}
+
 interface OriginalEntityStyle {
   polygonMaterial?: Property | undefined;
   polygonOutlineColor?: Property | undefined;
@@ -87,7 +93,7 @@ interface OriginalEntityStyle {
  * Hook to apply repair diff highlighting to Cesium entities
  * @param viewerRef - Ref to the Cesium viewer
  */
-export function useRepairMapHighlight(viewerRef: React.RefObject<any>) {
+export function useRepairMapHighlight(viewerRef: CesiumViewerRef) {
   // Track previously highlighted entities for cleanup
   const highlightedEntitiesRef = useRef<Set<string>>(new Set());
   const ghostEntitiesRef = useRef<Set<string>>(new Set());
@@ -110,7 +116,8 @@ export function useRepairMapHighlight(viewerRef: React.RefObject<any>) {
    * Store original style before applying highlight
    */
   const storeOriginalStyle = useCallback((entity: Entity): void => {
-    if ((entity as any)[ORIGINAL_STYLE_KEY]) return; // Already stored
+    const metadataEntity = entity as RepairMetadataEntity
+    if (metadataEntity[ORIGINAL_STYLE_KEY]) return // Already stored
 
     const original: OriginalEntityStyle = {};
 
@@ -131,7 +138,7 @@ export function useRepairMapHighlight(viewerRef: React.RefObject<any>) {
       original.billboardScale = entity.billboard.scale;
     }
 
-    (entity as any)[ORIGINAL_STYLE_KEY] = original;
+    metadataEntity[ORIGINAL_STYLE_KEY] = original;
   }, []);
 
   /**
@@ -145,9 +152,7 @@ export function useRepairMapHighlight(viewerRef: React.RefObject<any>) {
 
       // Highlight polygons (SAR swaths, footprints)
       if (entity.polygon) {
-        (entity.polygon as any).material = new ColorMaterialProperty(
-          colors.fill,
-        );
+        entity.polygon.material = new ColorMaterialProperty(colors.fill)
         entity.polygon.outlineColor = new ConstantProperty(colors.outline);
         entity.polygon.outlineWidth = new ConstantProperty(3);
         entity.polygon.outline = new ConstantProperty(true);
@@ -184,9 +189,7 @@ export function useRepairMapHighlight(viewerRef: React.RefObject<any>) {
       storeOriginalStyle(entity);
 
       if (entity.polygon) {
-        (entity.polygon as any).material = new ColorMaterialProperty(
-          GHOST_COLOR.fill,
-        );
+        entity.polygon.material = new ColorMaterialProperty(GHOST_COLOR.fill)
         entity.polygon.outlineColor = new ConstantProperty(GHOST_COLOR.outline);
         entity.polygon.outlineWidth = new ConstantProperty(2);
         entity.polygon.outline = new ConstantProperty(true);
@@ -212,17 +215,16 @@ export function useRepairMapHighlight(viewerRef: React.RefObject<any>) {
    * Restore original style to an entity
    */
   const restoreOriginalStyle = useCallback((entity: Entity): void => {
-    const original = (entity as any)[ORIGINAL_STYLE_KEY] as
-      | OriginalEntityStyle
-      | undefined;
+    const metadataEntity = entity as RepairMetadataEntity
+    const original = metadataEntity[ORIGINAL_STYLE_KEY]
     if (!original) return;
 
     if (entity.polygon) {
       if (original.polygonMaterial) {
-        (entity.polygon as any).material = original.polygonMaterial;
+        entity.polygon.material = original.polygonMaterial
       }
       if (original.polygonOutlineColor) {
-        (entity.polygon as any).outlineColor = original.polygonOutlineColor;
+        entity.polygon.outlineColor = original.polygonOutlineColor
       }
       if (original.polygonOutlineWidth) {
         entity.polygon.outlineWidth = original.polygonOutlineWidth;
@@ -250,7 +252,7 @@ export function useRepairMapHighlight(viewerRef: React.RefObject<any>) {
       }
     }
 
-    delete (entity as any)[ORIGINAL_STYLE_KEY];
+    delete metadataEntity[ORIGINAL_STYLE_KEY]
 
     if (isDev) {
       console.log(
@@ -263,7 +265,7 @@ export function useRepairMapHighlight(viewerRef: React.RefObject<any>) {
    * Find entities matching IDs
    */
   const findEntitiesForIds = useCallback(
-    (viewer: any, itemIds: string[]): Entity[] => {
+    (viewer: Viewer, itemIds: string[]): Entity[] => {
       const matchedEntities: Entity[] = [];
       if (!viewer || !itemIds.length) return matchedEntities;
 

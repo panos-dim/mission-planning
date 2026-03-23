@@ -4,14 +4,16 @@
  */
 
 import { useEffect, useRef } from 'react'
-import { Viewer, JulianDate } from 'cesium'
+import { JulianDate } from 'cesium'
 import { useVisStore } from '../../../store/visStore'
 import debug from '../../../utils/debug'
+import type { CZMLPacket } from '../../../types'
+import type { CesiumViewerRef } from '../../../types/cesiumHelpers'
 
 interface UseClockSyncOptions {
   viewportId: 'primary' | 'secondary'
   viewMode: 'single' | 'split'
-  czmlData: any[] | null
+  czmlData: CZMLPacket[] | null
 }
 
 /**
@@ -19,7 +21,7 @@ interface UseClockSyncOptions {
  * Primary viewport drives the clock, secondary viewport follows
  */
 export function useClockSync(
-  viewerRef: React.RefObject<{ cesiumElement: Viewer | null } | null>,
+  viewerRef: CesiumViewerRef,
   options: UseClockSyncOptions
 ) {
   const { viewportId, viewMode, czmlData } = options

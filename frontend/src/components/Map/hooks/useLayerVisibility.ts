@@ -4,8 +4,9 @@
  */
 
 import { useEffect, useCallback } from 'react'
-import { Viewer, Entity, DataSource } from 'cesium'
+import { Entity, DataSource, ConstantProperty } from 'cesium'
 import { useVisStore } from '../../../store/visStore'
+import type { CesiumViewerRef } from '../../../types/cesiumHelpers'
 
 interface UseLayerVisibilityOptions {
   viewportId: 'primary' | 'secondary'
@@ -16,7 +17,7 @@ interface UseLayerVisibilityOptions {
  * Hook to synchronize layer visibility with CZML entities
  */
 export function useLayerVisibility(
-  viewerRef: React.RefObject<{ cesiumElement: Viewer | null } | null>,
+  viewerRef: CesiumViewerRef,
   dataSourceRef: React.RefObject<DataSource | null>,
   options: UseLayerVisibilityOptions
 ) {
@@ -48,7 +49,7 @@ export function useLayerVisibility(
       if (entity.id === 'satellite_ground_track') {
         entity.show = true
         if (entity.path) {
-          (entity.path.show as any) = activeLayers.orbitLine
+          entity.path.show = new ConstantProperty(activeLayers.orbitLine)
         }
         return
       }
@@ -57,14 +58,14 @@ export function useLayerVisibility(
       if (entity.name?.includes('Target') || entity.id?.startsWith('target_')) {
         entity.show = activeLayers.targets
         if (entity.label) {
-          (entity.label.show as any) = activeLayers.labels
+          entity.label.show = new ConstantProperty(activeLayers.labels)
         }
         return
       }
       
       // Other labels
       if (entity.label && !entity.name?.includes('Target')) {
-        (entity.label.show as any) = activeLayers.labels
+        entity.label.show = new ConstantProperty(activeLayers.labels)
       }
     } catch (error) {
       console.warn(`[${viewportId}] Error setting entity visibility for ${entity.name || entity.id}:`, error)

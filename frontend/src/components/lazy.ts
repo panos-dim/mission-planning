@@ -4,6 +4,7 @@
  */
 
 import { lazy } from 'react'
+import type { ComponentType } from 'react'
 
 // Heavy components that are not already part of the main shell can be lazy loaded
 export const LazyAdminPanel = lazy(() => import('./AdminPanel'))
@@ -14,7 +15,7 @@ export const LazyMultiViewContainer = lazy(() =>
 )
 
 // Export a helper for creating lazy components with display names
-export function createLazyComponent<T extends React.ComponentType<any>>(
+export function createLazyComponent<T extends ComponentType<unknown>>(
   importFn: () => Promise<{ default: T }>,
   _displayName: string
 ) {

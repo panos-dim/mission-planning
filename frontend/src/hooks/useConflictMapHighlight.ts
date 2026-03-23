@@ -16,6 +16,7 @@ import {
   ConstantProperty,
   JulianDate,
   Property,
+  Viewer,
 } from "cesium";
 import { useSelectionStore } from "../store/selectionStore";
 import {
@@ -24,6 +25,7 @@ import {
   useShouldFocusTimeline,
 } from "../store/conflictHighlightStore";
 import { useVisStore } from "../store/visStore";
+import type { CesiumViewerRef } from '../types/cesiumHelpers'
 // Note: Unified highlight store integration available via useUnifiedMapHighlight hook
 // This hook is maintained for backward compatibility (PR-CONFLICT-UX-02)
 
@@ -37,6 +39,10 @@ const CONFLICT_GLOW_COLOR = Color.ORANGE.withAlpha(0.5);
 
 // Original style storage key on entity
 const ORIGINAL_STYLE_KEY = "__conflictOriginalStyle";
+
+interface ConflictMetadataEntity extends Entity {
+  __conflictOriginalStyle?: OriginalEntityStyle
+}
 
 interface OriginalEntityStyle {
   polygonMaterial?: Property | undefined;
@@ -53,7 +59,7 @@ interface OriginalEntityStyle {
  * Hook to apply conflict highlighting to Cesium entities
  * @param viewerRef - Ref to the Cesium viewer
  */
-export function useConflictMapHighlight(viewerRef: React.RefObject<any>) {
+export function useConflictMapHighlight(viewerRef: CesiumViewerRef) {
   // Track previously highlighted entities for cleanup
   const highlightedEntitiesRef = useRef<Set<string>>(new Set());
   const cleanupTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -80,7 +86,8 @@ export function useConflictMapHighlight(viewerRef: React.RefObject<any>) {
    * Store original style before applying highlight
    */
   const storeOriginalStyle = useCallback((entity: Entity): void => {
-    if ((entity as any)[ORIGINAL_STYLE_KEY]) return; // Already stored
+    const metadataEntity = entity as ConflictMetadataEntity
+    if (metadataEntity[ORIGINAL_STYLE_KEY]) return // Already stored
 
     const original: OriginalEntityStyle = {};
 
@@ -101,7 +108,7 @@ export function useConflictMapHighlight(viewerRef: React.RefObject<any>) {
       original.billboardScale = entity.billboard.scale;
     }
 
-    (entity as any)[ORIGINAL_STYLE_KEY] = original;
+    metadataEntity[ORIGINAL_STYLE_KEY] = original;
   }, []);
 
   /**
@@ -113,10 +120,7 @@ export function useConflictMapHighlight(viewerRef: React.RefObject<any>) {
 
       // Highlight polygons (SAR swaths, footprints)
       if (entity.polygon) {
-        // Use type assertion to work around Cesium's complex MaterialProperty types
-        (entity.polygon as any).material = new ColorMaterialProperty(
-          CONFLICT_HIGHLIGHT_COLOR,
-        );
+        entity.polygon.material = new ColorMaterialProperty(CONFLICT_HIGHLIGHT_COLOR)
         entity.polygon.outlineColor = new ConstantProperty(
           CONFLICT_OUTLINE_COLOR,
         );
@@ -153,17 +157,16 @@ export function useConflictMapHighlight(viewerRef: React.RefObject<any>) {
    * Restore original style to an entity
    */
   const restoreOriginalStyle = useCallback((entity: Entity): void => {
-    const original = (entity as any)[ORIGINAL_STYLE_KEY] as
-      | OriginalEntityStyle
-      | undefined;
+    const metadataEntity = entity as ConflictMetadataEntity
+    const original = metadataEntity[ORIGINAL_STYLE_KEY]
     if (!original) return;
 
     if (entity.polygon) {
       if (original.polygonMaterial) {
-        (entity.polygon as any).material = original.polygonMaterial;
+        entity.polygon.material = original.polygonMaterial
       }
       if (original.polygonOutlineColor) {
-        (entity.polygon as any).outlineColor = original.polygonOutlineColor;
+        entity.polygon.outlineColor = original.polygonOutlineColor
       }
       if (original.polygonOutlineWidth) {
         entity.polygon.outlineWidth = original.polygonOutlineWidth;
@@ -191,7 +194,7 @@ export function useConflictMapHighlight(viewerRef: React.RefObject<any>) {
       }
     }
 
-    delete (entity as any)[ORIGINAL_STYLE_KEY];
+    delete metadataEntity[ORIGINAL_STYLE_KEY]
 
     if (isDev) {
       console.log(
@@ -204,7 +207,7 @@ export function useConflictMapHighlight(viewerRef: React.RefObject<any>) {
    * Find entities matching acquisition IDs
    */
   const findEntitiesForAcquisitions = useCallback(
-    (viewer: any, acquisitionIds: string[]): Entity[] => {
+    (viewer: Viewer, acquisitionIds: string[]): Entity[] => {
       const matchedEntities: Entity[] = [];
       if (!viewer || !acquisitionIds.length) return matchedEntities;
 

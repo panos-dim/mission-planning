@@ -10,7 +10,6 @@ import React, {
 import {
   JulianDate,
   HeadingPitchRange,
-  Viewer,
   Entity,
 } from 'cesium'
 import {
@@ -29,6 +28,7 @@ import { useWorkspaceStore } from '../store/workspaceStore'
 import { useSessionStore } from '../store/sessionStore'
 import debug from '../utils/debug'
 import { missionApi, tleApi, getErrorMessage } from '../api'
+import type { CesiumViewerRefValue } from '../types/cesiumHelpers'
 
 // Core mission state (scene objects & workspaces now in Zustand stores)
 const initialState: MissionState = {
@@ -87,7 +87,7 @@ interface MissionContextType {
   clearMission: () => void
   navigateToPassWindow: (passIndex: number) => void // Mission Results: jump to pass start
   navigateToImagingTime: (passIndex: number) => void // Mission Planning: jump to optimal imaging time
-  setCesiumViewer: (viewer: Viewer | null) => void
+  setCesiumViewer: (viewer: CesiumViewerRefValue | null) => void
   addSceneObject: (object: SceneObject) => void
   updateSceneObject: (id: string, updates: Partial<SceneObject>) => void
   removeSceneObject: (id: string) => void
@@ -112,8 +112,7 @@ interface MissionProviderProps {
 
 export function MissionProvider({ children }: MissionProviderProps): JSX.Element {
   const [reducerState, dispatch] = useReducer(missionReducer, initialState)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [cesiumViewer, setCesiumViewer] = React.useState<any>(null)
+  const [cesiumViewer, setCesiumViewer] = React.useState<CesiumViewerRefValue | null>(null)
   const { setClockTime } = useVisStore()
 
   // Read from Zustand stores reactively for backward-compatible composed state
@@ -654,7 +653,7 @@ export function MissionProvider({ children }: MissionProviderProps): JSX.Element
     // Handle day/night lighting toggle
     if (entityType === 'day_night_lighting') {
       // Prevent lighting toggles during initialization
-      if ((window as any).lightingInitializationInProgress) {
+      if (window.lightingInitializationInProgress) {
         return
       }
 
@@ -735,6 +734,7 @@ export function MissionProvider({ children }: MissionProviderProps): JSX.Element
 }
 
 // Hook to use the context
+// eslint-disable-next-line react-refresh/only-export-components
 export function useMission(): MissionContextType {
   const context = useContext(MissionContext)
   if (context === undefined) {

@@ -44,11 +44,32 @@ const styles = {
   section: 'color: #00BCD4; font-weight: bold; font-size: 14px',
 }
 
+type DebugPayload = unknown
+
+type OpportunityLike = {
+  target?: string
+  target_name?: string
+  target_id?: string
+  max_elevation_time?: string
+  start_time?: string
+  incidence_angle_deg?: number
+  max_elevation?: number
+}
+
+type ScheduleItemLike = {
+  target_id?: string
+  value?: number
+  incidence_angle?: number
+  roll_angle?: number
+  pitch_angle?: number
+  start_time?: string
+}
+
 export const debug = {
   /**
    * Log API request
    */
-  apiRequest: (endpoint: string, data?: any) => {
+  apiRequest: (endpoint: string, data?: DebugPayload) => {
     if (!shouldLog('api')) return
     console.log(`%c📤 API REQUEST: ${endpoint}`, styles.apiRequest)
     console.log(data ?? null)
@@ -57,7 +78,7 @@ export const debug = {
   /**
    * Log API response
    */
-  apiResponse: (endpoint: string, data: any, options?: { summary?: string }) => {
+  apiResponse: (endpoint: string, data: DebugPayload, options?: { summary?: string }) => {
     if (!shouldLog('api')) return
     console.log(`%c📥 API RESPONSE: ${endpoint}`, styles.apiResponse)
     if (options?.summary) {
@@ -69,7 +90,7 @@ export const debug = {
   /**
    * Log API error
    */
-  apiError: (endpoint: string, error: any) => {
+  apiError: (endpoint: string, error: DebugPayload) => {
     console.log(`%c❌ API ERROR: ${endpoint}`, styles.error)
     console.error(error)
   },
@@ -77,7 +98,7 @@ export const debug = {
   /**
    * Log important info (state changes, key events)
    */
-  info: (message: string, data?: any) => {
+  info: (message: string, data?: DebugPayload) => {
     if (!shouldLog('info')) return
     console.log(`%cℹ️ ${message}`, styles.info)
     if (data !== undefined) console.log(data)
@@ -86,7 +107,7 @@ export const debug = {
   /**
    * Log verbose/debug info (internal state, rendering, etc.)
    */
-  verbose: (message: string, data?: any) => {
+  verbose: (message: string, data?: DebugPayload) => {
     if (!shouldLog('verbose')) return
     console.log(`%c🔧 ${message}`, styles.verbose)
     if (data !== undefined) console.log(data)
@@ -95,7 +116,7 @@ export const debug = {
   /**
    * Log warning
    */
-  warn: (message: string, data?: any) => {
+  warn: (message: string, data?: DebugPayload) => {
     if (!shouldLog('warn')) return
     console.log(`%c⚠️ ${message}`, styles.warn)
     if (data !== undefined) console.log(data)
@@ -104,7 +125,7 @@ export const debug = {
   /**
    * Log error
    */
-  error: (message: string, data?: any) => {
+  error: (message: string, data?: DebugPayload) => {
     console.log(`%c❌ ${message}`, styles.error)
     if (data !== undefined) console.error(data)
   },
@@ -120,7 +141,7 @@ export const debug = {
   /**
    * Log mission opportunities in a clean table format
    */
-  opportunities: (opportunities: any[]) => {
+  opportunities: (opportunities: OpportunityLike[]) => {
     if (!shouldLog('api')) return
     console.log(`%c📋 Mission Opportunities (${opportunities.length})`, styles.section)
     console.table(
@@ -138,7 +159,7 @@ export const debug = {
   /**
    * Log schedule results in a clean table format
    */
-  schedule: (algorithmName: string, schedule: any[]) => {
+  schedule: (algorithmName: string, schedule: ScheduleItemLike[]) => {
     if (!shouldLog('api')) return
     console.log(`%c📋 ${algorithmName} Schedule (${schedule.length} items)`, styles.section)
     console.table(
@@ -170,7 +191,7 @@ export const debug = {
 
 // Expose to window for easy access in console
 if (typeof window !== 'undefined') {
-  ;(window as any).debug = debug
+  window.debug = debug
 }
 
 export default debug

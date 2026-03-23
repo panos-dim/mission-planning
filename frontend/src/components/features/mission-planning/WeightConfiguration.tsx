@@ -2,6 +2,8 @@ import React from 'react'
 import { Card, Select } from '../../ui'
 import { PlanningConfig, WEIGHT_PRESETS } from './usePlanningState'
 
+type QualityModel = NonNullable<PlanningConfig['quality_model']>
+
 interface WeightConfigurationProps {
   config: PlanningConfig
   onConfigChange: (config: PlanningConfig) => void
@@ -130,7 +132,7 @@ export const WeightConfiguration: React.FC<WeightConfigurationProps> = ({
           label="Quality Model"
           value={config.quality_model || 'monotonic'}
           onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
-            onConfigChange({ ...config, quality_model: e.target.value as any })
+            onConfigChange({ ...config, quality_model: e.target.value as QualityModel })
           }
           options={[
             { value: 'off', label: 'Off (no quality adjustment)' },

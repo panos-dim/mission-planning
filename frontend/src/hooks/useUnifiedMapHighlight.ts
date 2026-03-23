@@ -33,6 +33,7 @@ import {
   type HighlightMode,
   type RepairDiffType,
 } from "../adapters/highlightAdapter";
+import type { CesiumViewerRef } from '../types/cesiumHelpers'
 
 const isDev = import.meta.env?.DEV ?? false;
 
@@ -40,7 +41,7 @@ const isDev = import.meta.env?.DEV ?? false;
 // Hook Implementation
 // =============================================================================
 
-export function useUnifiedMapHighlight(viewerRef: React.RefObject<any>) {
+export function useUnifiedMapHighlight(viewerRef: CesiumViewerRef) {
   // Track previously highlighted entities for cleanup
   const highlightedEntitiesRef = useRef<Set<string>>(new Set());
   const ghostEntitiesRef = useRef<Set<string>>(new Set());

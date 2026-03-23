@@ -269,7 +269,7 @@ export default function ScheduledAcquisitionsList({
         setBulkLoading(false)
       }
     },
-    [selectedIds, onRefresh],
+    [selectedIds, onRefresh, workspaceId],
   )
 
   // Handle "Hard-lock all committed"

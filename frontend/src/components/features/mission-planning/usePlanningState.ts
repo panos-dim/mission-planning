@@ -130,22 +130,6 @@ export function usePlanningState() {
     ? new Set(opportunities.map((opp) => opp.target_id)).size
     : 0
 
-  // Load opportunities when mission data changes
-  useEffect(() => {
-    if (missionState.missionData) {
-      loadOpportunities()
-    }
-  }, [missionState.missionData, loadOpportunities])
-
-  // Update slew visualization
-  useEffect(() => {
-    if (slewVisEnabled && results && results[activeTab]) {
-      setActiveSchedule(results[activeTab])
-    } else {
-      setActiveSchedule(null)
-    }
-  }, [slewVisEnabled, results, activeTab, setActiveSchedule])
-
   const loadOpportunities = useCallback(async () => {
     setOpportunitiesLoading(true)
     setError(null)
@@ -179,6 +163,22 @@ export function usePlanningState() {
       setOpportunitiesLoading(false)
     }
   }, [workspaceId])
+
+  // Load opportunities when mission data changes
+  useEffect(() => {
+    if (missionState.missionData) {
+      loadOpportunities()
+    }
+  }, [missionState.missionData, loadOpportunities])
+
+  // Update slew visualization
+  useEffect(() => {
+    if (slewVisEnabled && results && results[activeTab]) {
+      setActiveSchedule(results[activeTab])
+    } else {
+      setActiveSchedule(null)
+    }
+  }, [slewVisEnabled, results, activeTab, setActiveSchedule])
 
   const applyPreset = useCallback((presetName: string) => {
     const preset = WEIGHT_PRESETS[presetName]
@@ -286,7 +286,7 @@ export function usePlanningState() {
         setIsPlanning(false)
       }
     },
-    [workspaceId],
+    [activeTab, workspaceId],
   )
 
   const handleRunSelected = useCallback(() => {
