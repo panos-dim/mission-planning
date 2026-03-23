@@ -47,4 +47,22 @@ export default defineConfig({
       '@': '/src',
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/cesium') || id.includes('node_modules/resium')) {
+            return 'cesium-vendor'
+          }
+          if (id.includes('/src/components/AdminPanel') || id.includes('/src/components/admin/')) {
+            return 'admin-panel'
+          }
+          if (id.includes('node_modules')) {
+            return 'vendor'
+          }
+          return undefined
+        },
+      },
+    },
+  },
 })

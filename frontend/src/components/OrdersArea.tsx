@@ -21,6 +21,9 @@ import {
   cancelBatch,
   rejectOrder,
   deferOrder,
+  deleteAcquisition,
+  deleteOrder,
+  getScheduleState,
   PlanBatchResponse,
 } from '../api/scheduleApi'
 
@@ -788,7 +791,6 @@ function ScheduleTab({ workspaceId, formatDate }: ScheduleTabProps) {
     setLoading(true)
     setError(null)
     try {
-      const { getScheduleState } = await import('../api/scheduleApi')
       const res = await getScheduleState(workspaceId)
       setOrders(res.state.orders || [])
       setAcquisitions(res.state.acquisitions || [])
@@ -813,7 +815,6 @@ function ScheduleTab({ workspaceId, formatDate }: ScheduleTabProps) {
 
     setError(null)
     try {
-      const { deleteOrder } = await import('../api/scheduleApi')
       await deleteOrder(orderId, true)
       loadSchedule()
     } catch (err) {
@@ -830,7 +831,6 @@ function ScheduleTab({ workspaceId, formatDate }: ScheduleTabProps) {
 
     setError(null)
     try {
-      const { deleteAcquisition } = await import('../api/scheduleApi')
       await deleteAcquisition(acqId, isLocked)
       loadSchedule()
     } catch (err) {

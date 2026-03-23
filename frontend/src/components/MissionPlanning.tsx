@@ -11,7 +11,12 @@ import { JulianDate } from 'cesium'
 import { Eye, EyeOff, Shield, Lock, Download } from 'lucide-react'
 import debug from '../utils/debug'
 import { ApiError, NetworkError, TimeoutError } from '../api/errors'
-import { createRepairPlan, type PlanningMode, type RepairPlanResponse } from '../api/scheduleApi'
+import {
+  createRepairPlan,
+  getScheduleContext,
+  type PlanningMode,
+  type RepairPlanResponse,
+} from '../api/scheduleApi'
 import { useOpportunities, useScheduleContext } from '../hooks/queries'
 import { planningApi } from '../api'
 import { queryClient, queryKeys } from '../lib/queryClient'
@@ -230,14 +235,12 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
           include_tentative: includeTentative,
         }),
         queryFn: () =>
-          import('../api/scheduleApi').then((m) =>
-            m.getScheduleContext({
-              workspace_id: workspaceId,
-              from: scheduleContextParams.from,
-              to: scheduleContextParams.to,
-              include_tentative: includeTentative,
-            }),
-          ),
+          getScheduleContext({
+            workspace_id: workspaceId,
+            from: scheduleContextParams.from,
+            to: scheduleContextParams.to,
+            include_tentative: includeTentative,
+          }),
         staleTime: 0,
       })
 

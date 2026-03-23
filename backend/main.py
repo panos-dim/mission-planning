@@ -27,8 +27,9 @@ from typing import Any, Dict, List, Optional, Union
 
 import requests
 import yaml  # type: ignore[import-untyped]
-from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel  # Only used for inline models if any remain
 
@@ -93,6 +94,7 @@ from backend.routers.orders import router as orders_router
 from backend.routers.schedule import router as schedule_router
 from backend.routers.validation import router as validation_router
 from backend.routers.workspaces import router as workspaces_router
+from backend.security import require_admin_access, require_dev_access
 from backend.satellite_manager import SatelliteManager
 from backend.schedule_persistence import get_schedule_db
 from backend.validation.mission_input_validator import (
@@ -1194,8 +1196,73 @@ def get_satellite_info_list(satellite_list: List[TLEData]) -> List[Dict[str, str
 
 @app.get("/")
 async def root() -> Dict[str, str]:
-    """Root endpoint - health check"""
+    """Root endpoint."""
     return {"message": "Satellite Mission Planning API is running"}
+
+
+def _utc_now_iso() -> str:
+    """Return a compact UTC ISO timestamp."""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _build_readiness_payload() -> Dict[str, Any]:
+    """Run lightweight dependency checks for readiness probes."""
+    checks: Dict[str, Dict[str, Any]] = {}
+
+    try:
+        checks["schedule_db"] = get_schedule_db().health_check()
+    except Exception as exc:
+        checks["schedule_db"] = {"ready": False, "error": str(exc)}
+
+    try:
+        ground_stations = config_manager.get_ground_stations_list()
+        checks["config"] = {
+            "ready": True,
+            "ground_station_count": len(ground_stations),
+        }
+    except Exception as exc:
+        checks["config"] = {"ready": False, "error": str(exc)}
+
+    try:
+        satellites = satellite_manager.get_satellites()
+        checks["satellites"] = {
+            "ready": True,
+            "satellite_count": len(satellites),
+        }
+    except Exception as exc:
+        checks["satellites"] = {"ready": False, "error": str(exc)}
+
+    ready = all(bool(check.get("ready")) for check in checks.values())
+    return {
+        "service": "mission-planning",
+        "status": "ready" if ready else "degraded",
+        "ready": ready,
+        "timestamp": _utc_now_iso(),
+        "checks": checks,
+    }
+
+
+@app.get("/health")
+@app.get("/api/v1/health")
+async def health() -> Dict[str, Any]:
+    """Liveness probe for load balancers and uptime checks."""
+    return {
+        "service": "mission-planning",
+        "status": "ok",
+        "ready": True,
+        "timestamp": _utc_now_iso(),
+    }
+
+
+@app.get("/ready")
+@app.get("/api/v1/ready")
+async def ready() -> JSONResponse:
+    """Readiness probe that exercises core runtime dependencies."""
+    payload = _build_readiness_payload()
+    return JSONResponse(
+        status_code=200 if payload["ready"] else 503,
+        content=payload,
+    )
 
 
 @app.post("/api/v1/tle/validate")
@@ -2464,7 +2531,7 @@ async def validate_targets(targets: List[TargetData]) -> Dict[str, Any]:
 
 
 # Configuration Management Endpoints
-@app.get("/api/v1/config/ground-stations")
+@app.get("/api/v1/config/ground-stations", dependencies=[Depends(require_admin_access)])
 async def get_ground_stations() -> Dict[str, Any]:
     """Get all configured ground stations"""
     try:
@@ -2475,7 +2542,7 @@ async def get_ground_stations() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/v1/config/ground-stations")
+@app.post("/api/v1/config/ground-stations", dependencies=[Depends(require_admin_access)])
 async def add_ground_station(station: Dict[str, Any]) -> Dict[str, Any]:
     """Add a new ground station"""
     try:
@@ -2489,7 +2556,10 @@ async def add_ground_station(station: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.put("/api/v1/config/ground-stations/{name}")
+@app.put(
+    "/api/v1/config/ground-stations/{name}",
+    dependencies=[Depends(require_admin_access)],
+)
 async def update_ground_station(name: str, station: Dict[str, Any]) -> Dict[str, Any]:
     """Update an existing ground station"""
     try:
@@ -2503,7 +2573,10 @@ async def update_ground_station(name: str, station: Dict[str, Any]) -> Dict[str,
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/v1/config/ground-stations/{name}")
+@app.delete(
+    "/api/v1/config/ground-stations/{name}",
+    dependencies=[Depends(require_admin_access)],
+)
 async def delete_ground_station(name: str) -> Dict[str, Any]:
     """Delete a ground station"""
     try:
@@ -2517,7 +2590,7 @@ async def delete_ground_station(name: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/v1/config/full")
+@app.get("/api/v1/config/full", dependencies=[Depends(require_admin_access)])
 async def get_full_config() -> Dict[str, Any]:
     """Get the full configuration"""
     try:
@@ -2528,7 +2601,7 @@ async def get_full_config() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/v1/config/reload")
+@app.post("/api/v1/config/reload", dependencies=[Depends(require_admin_access)])
 async def reload_configuration() -> Dict[str, Any]:
     """Reload configuration from file"""
     try:
@@ -2548,7 +2621,7 @@ async def reload_configuration() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/v1/config/upload")
+@app.post("/api/v1/config/upload", dependencies=[Depends(require_admin_access)])
 async def upload_config(file: UploadFile = File(...)) -> Dict[str, Any]:
     """Upload a configuration file (YAML or JSON)"""
     try:
@@ -2637,7 +2710,7 @@ async def get_satellite(satellite_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/v1/satellites")
+@app.post("/api/v1/satellites", dependencies=[Depends(require_admin_access)])
 async def create_satellite(request: SatelliteCreateRequest) -> Dict[str, Any]:
     """Add new satellite to managed list"""
     try:
@@ -2654,7 +2727,10 @@ async def create_satellite(request: SatelliteCreateRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.put("/api/v1/satellites/{satellite_id}")
+@app.put(
+    "/api/v1/satellites/{satellite_id}",
+    dependencies=[Depends(require_admin_access)],
+)
 async def update_satellite(
     satellite_id: str, request: SatelliteUpdateRequest
 ) -> Dict[str, Any]:
@@ -2682,7 +2758,10 @@ async def update_satellite(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/v1/satellites/{satellite_id}")
+@app.delete(
+    "/api/v1/satellites/{satellite_id}",
+    dependencies=[Depends(require_admin_access)],
+)
 async def delete_satellite(satellite_id: str) -> Dict[str, Any]:
     """Remove satellite from managed list"""
     try:
@@ -2698,7 +2777,10 @@ async def delete_satellite(satellite_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/v1/satellites/config/full")
+@app.get(
+    "/api/v1/satellites/config/full",
+    dependencies=[Depends(require_admin_access)],
+)
 async def get_satellite_config() -> Dict[str, Any]:
     """Get full satellite configuration including defaults and mission settings"""
     try:
@@ -2708,7 +2790,10 @@ async def get_satellite_config() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/v1/satellites/config/reload")
+@app.post(
+    "/api/v1/satellites/config/reload",
+    dependencies=[Depends(require_admin_access)],
+)
 async def reload_satellite_config() -> Dict[str, Any]:
     """Reload satellite configuration from file"""
     try:
@@ -2729,7 +2814,10 @@ async def reload_satellite_config() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/v1/satellites/{satellite_id}/refresh-tle")
+@app.post(
+    "/api/v1/satellites/{satellite_id}/refresh-tle",
+    dependencies=[Depends(require_admin_access)],
+)
 async def refresh_satellite_tle(
     satellite_id: str, source_url: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -2758,7 +2846,10 @@ async def refresh_satellite_tle(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/v1/satellites/{satellite_id}/tle-age")
+@app.get(
+    "/api/v1/satellites/{satellite_id}/tle-age",
+    dependencies=[Depends(require_admin_access)],
+)
 async def get_satellite_tle_age(satellite_id: str) -> Dict[str, Any]:
     """Get the age of TLE data for a specific satellite"""
     try:
@@ -2824,7 +2915,10 @@ async def update_mission_setting(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/v1/config/mission-settings")
+@app.post(
+    "/api/v1/config/mission-settings",
+    dependencies=[Depends(require_admin_access)],
+)
 async def save_mission_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
     """Save mission settings to file"""
     try:
@@ -4079,7 +4173,10 @@ async def test_baseline_performance() -> Dict[str, Any]:
 # ===== DEBUG / AUDIT API ENDPOINTS =====
 
 
-@app.post("/api/v1/debug/planning/run_scenario")
+@app.post(
+    "/api/v1/debug/planning/run_scenario",
+    dependencies=[Depends(require_dev_access)],
+)
 async def run_debug_scenario(request: RunScenarioRequest) -> Dict[str, Any]:
     """
     Run a single planning scenario with multiple algorithms for deep audit.
@@ -4407,7 +4504,10 @@ async def run_debug_scenario(request: RunScenarioRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/v1/debug/planning/benchmark")
+@app.post(
+    "/api/v1/debug/planning/benchmark",
+    dependencies=[Depends(require_dev_access)],
+)
 async def run_benchmark(request: BenchmarkRequest) -> Dict[str, Any]:
     """
     Run benchmark across multiple scenarios with different parameter configurations.
@@ -4558,7 +4658,10 @@ async def run_benchmark(request: BenchmarkRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/v1/debug/planning/presets")
+@app.get(
+    "/api/v1/debug/planning/presets",
+    dependencies=[Depends(require_dev_access)],
+)
 async def list_preset_scenarios() -> Dict[str, Any]:
     """List available preset scenarios for benchmarking."""
     return {

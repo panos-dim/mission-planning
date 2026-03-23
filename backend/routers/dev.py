@@ -2,7 +2,7 @@
 Dev-only Router for Mission Planning.
 
 Provides endpoints used exclusively by the Demo Runner and DX tooling.
-These endpoints are read-only and guarded behind DEV_MODE env var.
+These endpoints are read-only and guarded behind DEV_MODE plus local/token access.
 
 Endpoints:
 - GET  /api/v1/dev/schedule-snapshot  — snapshot metadata + acquisition IDs for a workspace
@@ -14,16 +14,16 @@ Endpoints:
 import gc
 import json
 import logging
-import os
 import resource
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from backend.security import require_dev_access
 from backend.schedule_persistence import get_schedule_db
 
 # ---------------------------------------------------------------------------
@@ -58,22 +58,11 @@ _last_feasibility_stats: Dict[str, Any] = {}
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/dev", tags=["dev"])
-
-
-# =============================================================================
-# Guard: only register if DEV_MODE
-# =============================================================================
-
-_DEV_MODE = os.environ.get("DEV_MODE", "1") == "1"  # default ON for local dev
-
-
-def _check_dev_mode() -> None:
-    if not _DEV_MODE:
-        raise HTTPException(
-            status_code=403,
-            detail="Dev endpoints are disabled (set DEV_MODE=1 to enable)",
-        )
+router = APIRouter(
+    prefix="/api/v1/dev",
+    tags=["dev"],
+    dependencies=[Depends(require_dev_access)],
+)
 
 
 # =============================================================================
@@ -280,8 +269,6 @@ async def get_schedule_snapshot(
     Returns all acquisitions, plans, and summary statistics.
     Used by the Demo Runner to capture reshuffle evidence after each Apply.
     """
-    _check_dev_mode()
-
     db = get_schedule_db()
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -366,8 +353,6 @@ async def write_artifacts(request: WriteArtifactsRequest) -> WriteArtifactsRespo
     Creates JSON and Markdown files in the specified output directory.
     Used by the Demo Runner to persist reshuffle evidence.
     """
-    _check_dev_mode()
-
     output_dir = Path(request.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -408,8 +393,6 @@ async def get_metrics() -> MetricsResponse:
     Returns RSS/VMS memory usage, last feasibility timing stats,
     last response/pass metadata, and GC collection counts.
     """
-    _check_dev_mode()
-
     # GC stats
     gc_counts = list(gc.get_count())
     gc_thresholds = list(gc.get_threshold())
@@ -455,8 +438,6 @@ async def get_route_latency(
 
     Useful when diagnosing hot routes without waiting for periodic summary log lines.
     """
-    _check_dev_mode()
-
     from backend.main import get_route_latency_snapshot
 
     snapshot = get_route_latency_snapshot(limit=limit, reset=reset)
@@ -523,8 +504,6 @@ async def get_last_planning_run() -> LastPlanningRunResponse:
     - Acquisition IDs before/after
     - Diff counts (added/removed/kept)
     """
-    _check_dev_mode()
-
     from backend.auto_mode_selection import get_last_planning_run as _get_last
 
     data = _get_last()

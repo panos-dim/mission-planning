@@ -300,3 +300,44 @@ def test_default_workspace_direct_commit_is_isolated_from_other_workspaces() -> 
         if default_acquisition_ids:
             _bulk_delete("default", default_acquisition_ids)
         _delete_workspace(other_workspace_id)
+
+
+def test_recompute_cycle_clears_conflicts_after_bulk_delete() -> None:
+    """Repeated recompute/delete cycles should clear conflicts once overlap is removed."""
+    workspace_id = _create_workspace(f"extreme_cycle_{uuid.uuid4().hex[:8]}")
+    try:
+        base = datetime.now(timezone.utc) + timedelta(days=55)
+        _direct_commit(
+            workspace_id,
+            "CYCLE-A",
+            "SAT-EXTREME-CYCLE",
+            _iso(base),
+            _iso(base + timedelta(minutes=6)),
+        )
+        _direct_commit(
+            workspace_id,
+            "CYCLE-B",
+            "SAT-EXTREME-CYCLE",
+            _iso(base + timedelta(minutes=2)),
+            _iso(base + timedelta(minutes=7)),
+        )
+
+        first_recompute = _post("/schedule/conflicts/recompute", {"workspace_id": workspace_id})
+        assert first_recompute["success"], first_recompute
+        assert first_recompute["detected"] >= 1, first_recompute
+
+        state = _get("/schedule/state", {"workspace_id": workspace_id})
+        acquisition_by_target = {
+            acquisition["target_id"]: acquisition["id"]
+            for acquisition in state["state"]["acquisitions"]
+        }
+        _bulk_delete(workspace_id, [acquisition_by_target["CYCLE-B"]])
+
+        second_recompute = _post("/schedule/conflicts/recompute", {"workspace_id": workspace_id})
+        assert second_recompute["success"], second_recompute
+
+        conflicts = _get("/schedule/conflicts", {"workspace_id": workspace_id})
+        temporal = [c for c in conflicts.get("conflicts", []) if c.get("type") == "temporal_overlap"]
+        assert temporal == [], conflicts
+    finally:
+        _delete_workspace(workspace_id)

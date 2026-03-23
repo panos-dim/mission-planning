@@ -15,9 +15,10 @@ Workflow Validation (PR-VALIDATION-01):
 import logging
 from typing import Any, Dict, List, Optional, cast
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from backend.security import require_admin_access
 from backend.validation import (
     SARScenario,
     SatelliteConfig,
@@ -38,7 +39,11 @@ from backend.validation.models import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/validate", tags=["Validation"])
+router = APIRouter(
+    prefix="/api/v1/validate",
+    tags=["Validation"],
+    dependencies=[Depends(require_admin_access)],
+)
 
 # Initialize storage and runner
 _storage = ScenarioStorage()

@@ -141,6 +141,122 @@ def test_temporal_overlap_detector_matches_naive_model(
     deadline=None,
     suppress_health_check=[HealthCheck.too_slow],
 )
+@given(
+    primary_specs=specs_strategy,
+    secondary_specs=specs_strategy,
+    new_specs=specs_strategy,
+)
+def test_predict_commit_conflicts_stays_within_workspace_boundary(
+    primary_specs: list[tuple[str, int, int]],
+    secondary_specs: list[tuple[str, int, int]],
+    new_specs: list[tuple[str, int, int]],
+) -> None:
+    """Commit preview must ignore overlapping acquisitions in unrelated workspaces."""
+    for db, workspace_id, db_path in _temp_db():
+        secondary_workspace_id = WorkspaceDB(db_path).create_workspace(
+            name="Secondary Property Workspace",
+            mission_mode="OPTICAL",
+        )
+        primary_existing: list[dict[str, Any]] = []
+        new_items: list[dict[str, Any]] = []
+
+        for idx, (satellite_id, slot, duration_seconds) in enumerate(primary_specs):
+            start_dt = _make_time(slot)
+            end_dt = start_dt + timedelta(seconds=duration_seconds)
+            target_id = f"P{idx}"
+            db.create_acquisition(
+                satellite_id=satellite_id,
+                target_id=target_id,
+                start_time=_iso(start_dt),
+                end_time=_iso(end_dt),
+                roll_angle_deg=0.0,
+                pitch_angle_deg=0.0,
+                workspace_id=workspace_id,
+                state="committed",
+            )
+            primary_existing.append(
+                {
+                    "satellite_id": satellite_id,
+                    "target_id": target_id,
+                    "start": start_dt,
+                    "end": end_dt,
+                }
+            )
+
+        for idx, (satellite_id, slot, duration_seconds) in enumerate(secondary_specs):
+            start_dt = _make_time(slot)
+            end_dt = start_dt + timedelta(seconds=duration_seconds)
+            db.create_acquisition(
+                satellite_id=satellite_id,
+                target_id=f"S{idx}",
+                start_time=_iso(start_dt),
+                end_time=_iso(end_dt),
+                roll_angle_deg=0.0,
+                pitch_angle_deg=0.0,
+                workspace_id=secondary_workspace_id,
+                state="committed",
+            )
+
+        for idx, (satellite_id, slot, duration_seconds) in enumerate(new_specs):
+            start_dt = _make_time(slot)
+            end_dt = start_dt + timedelta(seconds=duration_seconds)
+            new_items.append(
+                {
+                    "satellite_id": satellite_id,
+                    "target_id": f"N{idx}",
+                    "start_time": _iso(start_dt),
+                    "end_time": _iso(end_dt),
+                    "roll_angle_deg": 0.0,
+                    "pitch_angle_deg": 0.0,
+                }
+            )
+
+        predicted, _count = predict_commit_conflicts(
+            db=db,
+            workspace_id=workspace_id,
+            new_items=new_items,
+            horizon_start=BASE_TIME,
+            horizon_end=BASE_TIME + timedelta(hours=1),
+        )
+
+        expected_pairs: set[frozenset[str]] = set()
+        combined = primary_existing + [
+            {
+                "satellite_id": item["satellite_id"],
+                "target_id": item["target_id"],
+                "start": datetime.fromisoformat(item["start_time"].replace("Z", "+00:00")),
+                "end": datetime.fromisoformat(item["end_time"].replace("Z", "+00:00")),
+            }
+            for item in new_items
+        ]
+
+        for i, left in enumerate(combined):
+            for right in combined[i + 1 :]:
+                if left["satellite_id"] != right["satellite_id"]:
+                    continue
+                if not (
+                    left["target_id"].startswith("N") or right["target_id"].startswith("N")
+                ):
+                    continue
+                if _overlaps(left["start"], left["end"], right["start"], right["end"]):
+                    expected_pairs.add(
+                        frozenset({left["target_id"], right["target_id"]})
+                    )
+
+        actual_pairs = {
+            frozenset({c["details"]["acq1_target"], c["details"]["acq2_target"]})
+            for c in predicted
+            if c["type"] == "temporal_overlap"
+        }
+
+        assert actual_pairs == expected_pairs
+
+
+@settings(
+    max_examples=80,
+    deadline=None,
+    suppress_health_check=[HealthCheck.too_slow],
+)
 @given(existing_specs=specs_strategy, new_specs=specs_strategy)
 def test_predict_commit_conflicts_matches_naive_new_item_model(
     existing_specs: list[tuple[str, int, int]],

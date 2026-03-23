@@ -24,7 +24,7 @@ from typing import Any, Dict, Generator, List, Optional
 logger = logging.getLogger(__name__)
 
 # Schema version for this module
-SCHEMA_VERSION = "2.5"
+SCHEMA_VERSION = "2.7"
 DEFAULT_WORKSPACE_ID = "default"
 
 # Default database path (same as workspace_persistence.py)
@@ -544,6 +544,50 @@ class ScheduleDB:
                 self._migrate_to_v2_7(conn)
 
             conn.commit()
+
+    def health_check(self) -> Dict[str, Any]:
+        """Run a lightweight database readiness check."""
+        required_tables = {
+            "workspaces",
+            "plans",
+            "plan_items",
+            "acquisitions",
+            "conflicts",
+        }
+
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1 AS ok")
+                cursor.fetchone()
+
+                cursor.execute(
+                    """
+                    SELECT name
+                    FROM sqlite_master
+                    WHERE type = 'table'
+                """
+                )
+                available_tables = {row["name"] for row in cursor.fetchall()}
+
+                cursor.execute("SELECT COUNT(*) AS count FROM workspaces")
+                workspace_count = int(cursor.fetchone()["count"])
+
+                missing_tables = sorted(required_tables - available_tables)
+                return {
+                    "ready": not missing_tables,
+                    "db_path": str(self.db_path),
+                    "schema_version": SCHEMA_VERSION,
+                    "workspace_count": workspace_count,
+                    "missing_tables": missing_tables,
+                }
+        except Exception as exc:
+            return {
+                "ready": False,
+                "db_path": str(self.db_path),
+                "schema_version": SCHEMA_VERSION,
+                "error": str(exc),
+            }
 
     def _migrate_to_v2(self, conn: sqlite3.Connection) -> None:
         """Migrate database schema to v2.0."""

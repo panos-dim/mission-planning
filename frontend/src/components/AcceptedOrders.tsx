@@ -13,6 +13,7 @@ import {
   Target,
   Camera,
 } from 'lucide-react'
+import { bulkDeleteAcquisitions, deleteOrder } from '../api/scheduleApi'
 import { AcceptedOrder } from '../types'
 import { formatDateTimeShort } from '../utils/date'
 
@@ -117,7 +118,6 @@ export default function AcceptedOrders({
     // Delete from backend DB using real acquisition IDs
     if (order) {
       try {
-        const { bulkDeleteAcquisitions } = await import('../api/scheduleApi')
         // Use backend acq_* IDs if available, fall back to opportunity_ids for legacy orders
         const acqIds = order.backend_acquisition_ids?.length
           ? order.backend_acquisition_ids
@@ -127,7 +127,6 @@ export default function AcceptedOrders({
           console.log('[AcceptedOrders] Backend delete:', res.message)
         }
         // Also try deleting the plan itself
-        const { deleteOrder } = await import('../api/scheduleApi')
         await deleteOrder(orderId, true).catch(() => {
           // Plan may not exist in backend (legacy local-only orders) — ignore
         })

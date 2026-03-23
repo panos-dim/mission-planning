@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml  # type: ignore[import-untyped]
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.config_resolver import (
@@ -28,10 +28,15 @@ from backend.config_resolver import (
     get_config_snapshot,
     resolve_mission_config,
 )
+from backend.security import require_admin_access
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/config", tags=["config-admin"])
+router = APIRouter(
+    prefix="/api/v1/config",
+    tags=["config-admin"],
+    dependencies=[Depends(require_admin_access)],
+)
 
 # Config directory path
 CONFIG_DIR = Path(__file__).parent.parent.parent / "config"

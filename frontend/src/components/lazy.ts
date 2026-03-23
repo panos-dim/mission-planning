@@ -5,12 +5,8 @@
 
 import { lazy } from 'react'
 
-// Heavy components that can be lazy loaded
+// Heavy components that are not already part of the main shell can be lazy loaded
 export const LazyAdminPanel = lazy(() => import('./AdminPanel'))
-
-export const LazyMissionPlanning = lazy(() => import('./MissionPlanning'))
-
-export const LazyAcceptedOrders = lazy(() => import('./AcceptedOrders'))
 
 // Multi-view can be lazy loaded since it includes heavy Cesium components
 export const LazyMultiViewContainer = lazy(() => 
