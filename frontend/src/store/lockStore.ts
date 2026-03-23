@@ -131,7 +131,7 @@ export const useLockStore = create<LockState & LockActions>()(
               ),
             ],
           });
-        } catch (err) {
+        } catch {
           // Rollback
           const rollbackLevels = new Map(get().levels);
           rollbackLevels.set(acquisitionId, previous);
@@ -227,7 +227,7 @@ export const useLockStore = create<LockState & LockActions>()(
           }
 
           set({ levels: finalLevels, pending: finalPending, toasts });
-        } catch (err) {
+        } catch {
           // Full rollback
           const rollbackLevels = new Map(get().levels);
           const rollbackPending = new Set(get().pending);

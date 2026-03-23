@@ -1,7 +1,12 @@
 # Mission Planning Tool - Development Commands
 # Usage: make <target>
 
-.PHONY: help install dev test lint format clean build release-gate
+ROOT_DIR := $(CURDIR)
+VENV_PYTHON := $(ROOT_DIR)/.venv/bin/python
+PYTHON_BIN ?= $(if $(wildcard $(VENV_PYTHON)),$(VENV_PYTHON),python3)
+PDM_BIN := $(shell if command -v pdm >/dev/null 2>&1; then command -v pdm; elif [ -x "$(VENV_PYTHON)" ] && "$(VENV_PYTHON)" -m pdm --version >/dev/null 2>&1; then printf '%s -m pdm' "$(VENV_PYTHON)"; elif python3 -m pdm --version >/dev/null 2>&1; then printf '%s -m pdm' "python3"; fi)
+
+.PHONY: help install dev test lint format clean build release-gate lint-fe-strict assert-pdm
 
 # Default target
 help:
@@ -28,6 +33,7 @@ help:
 	@echo "  make test-fe     Run frontend tests"
 	@echo "  make format-fe   Format frontend code (Prettier)"
 	@echo "  make lint-fe     Lint TypeScript code"
+	@echo "  make lint-fe-strict  Fail on frontend warnings too"
 	@echo ""
 
 # ============================================
@@ -36,6 +42,12 @@ help:
 
 install: install-py install-fe
 	@echo "✅ All dependencies installed"
+
+assert-pdm:
+	@if [ -z "$(strip $(PDM_BIN))" ]; then \
+		echo "❌ PDM not found. Install it with 'python3 -m pip install pdm' or activate an environment that provides it."; \
+		exit 1; \
+	fi
 
 dev:
 	@./run_dev.sh
@@ -70,33 +82,34 @@ release-gate:
 # ============================================
 
 install-py:
+	@$(MAKE) assert-pdm
 	@echo "📦 Installing Python dependencies (via PDM)..."
-	@pdm install --dev -q
+	@$(PDM_BIN) install --dev -q
 
 backend:
 	@echo "🚀 Starting backend server..."
-	@pdm run uvicorn backend.main:app --reload --port 8000
+	@PYTHONPATH=. $(PYTHON_BIN) -m uvicorn backend.main:app --reload --port 8000
 
 test-py:
 	@echo "🧪 Running Python tests..."
-	@pdm run pytest tests/ -v
+	@PYTHONPATH=. $(PYTHON_BIN) -m pytest tests/ -v
 
 test-py-cov:
 	@echo "🧪 Running Python tests with coverage..."
-	@pdm run pytest tests/ --cov=src/mission_planner --cov-report=html
+	@PYTHONPATH=. $(PYTHON_BIN) -m pytest tests/ --cov=src/mission_planner --cov-report=html
 
 lint-py:
 	@echo "🔍 Linting Python code..."
-	@pdm run flake8 src/ backend/ --max-line-length=88 --extend-ignore=E203,W503
+	@PYTHONPATH=. $(PYTHON_BIN) -m flake8 src/ backend/ --max-line-length=88 --extend-ignore=E203,W503
 
 format-py:
 	@echo "🎨 Formatting Python code..."
-	@pdm run black src/ backend/ tests/
-	@pdm run isort src/ backend/ tests/
+	@PYTHONPATH=. $(PYTHON_BIN) -m black src/ backend/ tests/
+	@PYTHONPATH=. $(PYTHON_BIN) -m isort src/ backend/ tests/
 
 typecheck-py:
 	@echo "📝 Type checking Python..."
-	@pdm run mypy src/ --ignore-missing-imports
+	@PYTHONPATH=. $(PYTHON_BIN) -m mypy src/ --ignore-missing-imports
 
 # ============================================
 # Frontend (TypeScript) Commands
@@ -126,6 +139,10 @@ lint-fe:
 	@echo "🔍 Linting TypeScript code..."
 	@cd frontend && npm run lint
 
+lint-fe-strict:
+	@echo "🔍 Linting TypeScript code (strict)..."
+	@cd frontend && npm run lint:strict
+
 typecheck-fe:
 	@echo "📝 Type checking TypeScript..."
 	@cd frontend && npx tsc --noEmit
@@ -140,11 +157,11 @@ build-fe:
 
 benchmark:
 	@echo "📊 Running benchmarks..."
-	@pdm run python scripts/benchmark_adaptive.py
+	@PYTHONPATH=. $(PYTHON_BIN) scripts/benchmark_adaptive.py
 
 validate:
 	@echo "✅ Running validation..."
-	@pdm run python scripts/validate_adaptive_stepping.py
+	@PYTHONPATH=. $(PYTHON_BIN) scripts/validate_adaptive_stepping.py
 
 # Quick checks before commit
 precommit: format lint typecheck test

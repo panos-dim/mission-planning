@@ -61,6 +61,7 @@ coverage/
 *.tmp
 *.temp
 .cache/
+.run/
 
 # SQLite databases (runtime/test artifacts)
 *.db
