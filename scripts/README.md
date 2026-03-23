@@ -25,6 +25,26 @@ make dev
 ./run_dev.sh
 ```
 
+### Run The Local Release Gate
+
+```bash
+# Full backend + frontend verification, plus health/readiness and observability checks
+make release-gate
+
+# Or directly
+./scripts/release_gate.sh
+```
+
+The release gate will:
+
+- start the backend locally on `127.0.0.1:${RELEASE_GATE_PORT:-8000}`
+- verify `/health` and `/ready`
+- run `tests/unit`, `tests/integration`, and `tests/e2e`
+- run frontend tests and production build
+- fail if the post-run route-latency snapshot reports any `5xx`
+
+If port `8000` is already in use, stop the existing server first or set `RELEASE_GATE_PORT`.
+
 ### Run Benchmarks
 
 ```bash

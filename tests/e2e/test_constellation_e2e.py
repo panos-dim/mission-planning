@@ -5,6 +5,7 @@ Tests extreme scenarios and mission planning with the real backend API.
 """
 
 import json
+import os
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any, Callable, DefaultDict, cast
@@ -12,7 +13,9 @@ from typing import Any, Callable, DefaultDict, cast
 import pytest
 import requests
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = os.getenv("MISSION_PLANNER_TEST_BASE_URL", "http://localhost:8000").rstrip(
+    "/"
+)
 API = f"{BASE_URL}/api/v1"
 pytestmark = pytest.mark.requires_server
 

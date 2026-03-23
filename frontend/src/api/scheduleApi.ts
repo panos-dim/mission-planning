@@ -788,6 +788,7 @@ export interface DeleteAcquisitionResponse {
 export interface BulkDeleteAcquisitionsRequest {
   acquisition_ids: string[]
   force?: boolean
+  workspace_id?: string
 }
 
 export interface BulkDeleteAcquisitionsResponse {
@@ -796,6 +797,8 @@ export interface BulkDeleteAcquisitionsResponse {
   deleted: number
   failed: string[]
   skipped_hard_locked: string[]
+  skipped_frozen: string[]
+  skipped_workspace: string[]
 }
 
 /**

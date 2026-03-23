@@ -1,7 +1,7 @@
 # Mission Planning Tool - Development Commands
 # Usage: make <target>
 
-.PHONY: help install dev test lint format clean build
+.PHONY: help install dev test lint format clean build release-gate
 
 # Default target
 help:
@@ -15,6 +15,7 @@ help:
 	@echo "  make typecheck   Run type checkers"
 	@echo "  make clean       Clean build artifacts"
 	@echo "  make build       Build for production"
+	@echo "  make release-gate Run the local release verification workflow"
 	@echo ""
 	@echo "Backend only:"
 	@echo "  make backend     Start backend server only"
@@ -60,6 +61,9 @@ clean:
 
 build: build-fe
 	@echo "✅ Build complete"
+
+release-gate:
+	@./scripts/release_gate.sh
 
 # ============================================
 # Backend (Python) Commands

@@ -8,6 +8,7 @@ conflict recomputation finds the full batch without requiring explicit bounds.
 
 from __future__ import annotations
 
+import os
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -16,7 +17,9 @@ from typing import Any, Dict
 import pytest
 import requests
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = os.getenv("MISSION_PLANNER_TEST_BASE_URL", "http://localhost:8000").rstrip(
+    "/"
+)
 API = f"{BASE_URL}/api/v1"
 
 pytestmark = pytest.mark.requires_server

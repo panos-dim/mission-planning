@@ -246,6 +246,7 @@ export default function ScheduledAcquisitionsList({
         const result = await bulkDeleteAcquisitions({
           acquisition_ids: Array.from(selectedIds),
           force,
+          workspace_id: workspaceId,
         })
         if (result.skipped_hard_locked.length > 0 && !force) {
           const retry = confirm(
@@ -255,6 +256,7 @@ export default function ScheduledAcquisitionsList({
             await bulkDeleteAcquisitions({
               acquisition_ids: result.skipped_hard_locked,
               force: true,
+              workspace_id: workspaceId,
             })
           }
         }

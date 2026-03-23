@@ -17,6 +17,7 @@ Requires: backend running on localhost:8000  (.venv/bin/python -m uvicorn backen
 Auto-skipped by conftest.py when server is not reachable.
 """
 
+import os
 import uuid
 import warnings
 from datetime import datetime, timedelta, timezone
@@ -25,7 +26,9 @@ from typing import Any, Dict, Generator, List, Optional, cast
 import pytest
 import requests
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = os.getenv("MISSION_PLANNER_TEST_BASE_URL", "http://localhost:8000").rstrip(
+    "/"
+)
 API = f"{BASE_URL}/api/v1"
 
 pytestmark = pytest.mark.requires_server
@@ -790,7 +793,7 @@ class TestConstellationLifecycle:
         print(f"Constellation conflicts: {result['detected']} detected")
 
     def test_06_bulk_delete_respects_locks(self, workspace: str) -> None:
-        """Bulk delete removes unlocked but preserves hard-locked."""
+        """Bulk delete removes only acquisitions not protected by current policy."""
         _plan_commit(workspace)
         state = _state(workspace)
         ids = _acq_ids(state)
@@ -808,9 +811,23 @@ class TestConstellationLifecycle:
         )
         remaining = _acq_ids(_state(workspace))
         assert locked_id in remaining, "Hard-locked was deleted without force!"
-        for uid in ids[1:]:
-            assert uid not in remaining
-        print(f"Bulk delete: {del_resp['deleted']} deleted, hard-lock preserved")
+        protected = set(del_resp.get("skipped_hard_locked", []))
+        protected.update(del_resp.get("skipped_frozen", []))
+        protected.update(del_resp.get("skipped_workspace", []))
+        for uid in ids:
+            if uid in protected:
+                assert uid in remaining
+            else:
+                assert uid not in remaining
+        assert del_resp["deleted"] + len(protected) + len(del_resp.get("failed", [])) == len(
+            ids
+        ), del_resp
+        print(
+            "Bulk delete: "
+            f"{del_resp['deleted']} deleted, "
+            f"{len(del_resp.get('skipped_hard_locked', []))} hard-locked skipped, "
+            f"{len(del_resp.get('skipped_frozen', []))} frozen skipped"
+        )
 
     def test_07_force_delete_hard_locked(self, workspace: str) -> None:
         """Force delete removes even hard-locked acquisitions."""

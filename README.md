@@ -69,6 +69,16 @@ visualizer.save_map("mission_map.png")
 planner.export_schedule(imaging_opportunities, "mission_schedule.json")
 ```
 
+## Local Release Gate
+
+Before shipping or deploying, run the repo-level verification workflow:
+
+```bash
+make release-gate
+```
+
+This will start the backend locally, verify `/health` and `/ready`, run the full backend suite, run frontend tests, build the frontend bundle, and fail if the post-run observability snapshot reports any `5xx`.
+
 ## Project Structure
 
 ```text

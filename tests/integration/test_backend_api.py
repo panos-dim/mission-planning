@@ -5,12 +5,15 @@ Tests backward compatibility and new sensor/spacecraft separation.
 """
 
 import json
+import os
 from datetime import UTC, datetime, timedelta
 
 import pytest
 import requests
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = os.getenv("MISSION_PLANNER_TEST_BASE_URL", "http://localhost:8000").rstrip(
+    "/"
+)
 
 pytestmark = pytest.mark.requires_server  # All tests in this module require server
 

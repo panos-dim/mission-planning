@@ -1351,6 +1351,8 @@ class BulkDeleteAcquisitionsResponse(BaseModel):
     deleted: int
     failed: List[str]
     skipped_hard_locked: List[str] = Field(default_factory=list)
+    skipped_frozen: List[str] = Field(default_factory=list)
+    skipped_workspace: List[str] = Field(default_factory=list)
 
 
 @router.delete(
@@ -1531,6 +1533,8 @@ async def bulk_delete_acquisitions(
         deleted=result["deleted"],
         failed=result["failed"],
         skipped_hard_locked=skipped_hard_locked,
+        skipped_frozen=skipped_frozen,
+        skipped_workspace=skipped_workspace,
     )
 
 

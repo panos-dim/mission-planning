@@ -9,13 +9,17 @@ Tests the backend with multiple targets in the UAE region to validate:
 4. API handles imaging_type parameter
 """
 
+import json
+import os
+from datetime import datetime
+from typing import Any, Dict
+
 import pytest
 import requests
-import json
-from datetime import datetime
-from typing import Dict, Any
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = os.getenv("MISSION_PLANNER_TEST_BASE_URL", "http://localhost:8000").rstrip(
+    "/"
+)
 API = f"{BASE_URL}/api/v1"
 
 pytestmark = pytest.mark.requires_server  # All tests in this module require server

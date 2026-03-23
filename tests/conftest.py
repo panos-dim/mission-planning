@@ -7,11 +7,13 @@ This file is automatically loaded by pytest and provides:
 - Collection hooks to skip problematic modules
 """
 
+import os
 import socket
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import pytest
 from _pytest.config import Config
@@ -24,6 +26,26 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 # =============================================================================
 # COLLECTION HOOKS - Prevent hanging on module-level code
 # =============================================================================
+
+
+def _get_server_url() -> str:
+    """Return the configured live-backend URL for server-backed tests."""
+    return os.getenv("MISSION_PLANNER_TEST_BASE_URL", "http://localhost:8000").rstrip(
+        "/"
+    )
+
+
+def _get_server_host_port() -> Tuple[str, int]:
+    """Parse the configured test server URL into host/port components."""
+    parsed = urlparse(_get_server_url())
+    host = parsed.hostname or "localhost"
+    if parsed.port is not None:
+        port = parsed.port
+    elif parsed.scheme == "https":
+        port = 443
+    else:
+        port = 80
+    return host, port
 
 
 def _is_server_running(host: str = "localhost", port: int = 8000) -> bool:
@@ -46,10 +68,11 @@ def pytest_collection_modifyitems(config: Config, items: List[Function]) -> None
     """Mark tests that require server and skip them when server is not running."""
     global _server_available
     if _server_available is None:
-        _server_available = _is_server_running()
+        host, port = _get_server_host_port()
+        _server_available = _is_server_running(host, port)
 
     skip_server = pytest.mark.skip(
-        reason="Backend server not running on localhost:8000"
+        reason=f"Backend server not running on {_get_server_url()}"
     )
 
     for item in items:
@@ -161,21 +184,22 @@ def scheduler_config() -> Any:
 @pytest.fixture
 def server_url() -> str:
     """Backend server URL."""
-    return "http://localhost:8000"
+    return _get_server_url()
 
 
 @pytest.fixture
 def skip_without_server(server_url: str) -> None:
     """Skip test if backend server is not running."""
     try:
+        host, port = _get_server_host_port()
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(1)
-        result = sock.connect_ex(("localhost", 8000))
+        result = sock.connect_ex((host, port))
         sock.close()
         if result != 0:
-            pytest.skip("Backend server not running on localhost:8000")
+            pytest.skip(f"Backend server not running on {server_url}")
     except Exception:
-        pytest.skip("Backend server not running on localhost:8000")
+        pytest.skip(f"Backend server not running on {server_url}")
 
 
 # =============================================================================

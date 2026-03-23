@@ -15,6 +15,7 @@ Exercises the full planning → commit → re-plan → conflict prediction pipel
 Requires: backend running on localhost:8000
 """
 
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Generator, Optional
@@ -22,7 +23,9 @@ from typing import Any, Dict, Generator, Optional
 import pytest
 import requests
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = os.getenv("MISSION_PLANNER_TEST_BASE_URL", "http://localhost:8000").rstrip(
+    "/"
+)
 API = f"{BASE_URL}/api/v1"
 
 pytestmark = pytest.mark.requires_server

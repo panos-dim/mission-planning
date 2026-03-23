@@ -692,6 +692,64 @@ class TestScheduleCommitConflictDetection:
         assert len(conflicts_after.json()["conflicts"]) == 0, conflicts_after.json()
         assert db.get_acquisition(second.id) is not None
 
+    def test_bulk_delete_reports_all_skip_reasons(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Bulk delete should surface freeze and workspace skips alongside deletions."""
+        client, db, workspace_id = isolated_schedule_api
+        other_workspace_id = get_workspace_db().create_workspace(
+            name="Other workspace",
+            mission_mode="OPTICAL",
+        )
+
+        now = datetime.now(timezone.utc)
+        frozen = db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="SKIP-FROZEN",
+            start_time=_iso(now + timedelta(minutes=30)),
+            end_time=_iso(now + timedelta(minutes=35)),
+            roll_angle_deg=0.0,
+            workspace_id=workspace_id,
+            state="committed",
+        )
+        safe = db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="SKIP-SAFE",
+            start_time=_iso(now + timedelta(hours=6)),
+            end_time=_iso(now + timedelta(hours=6, minutes=5)),
+            roll_angle_deg=0.0,
+            workspace_id=workspace_id,
+            state="committed",
+        )
+        cross_workspace = db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="SKIP-CROSS",
+            start_time=_iso(now + timedelta(hours=8)),
+            end_time=_iso(now + timedelta(hours=8, minutes=5)),
+            roll_angle_deg=0.0,
+            workspace_id=other_workspace_id,
+            state="committed",
+        )
+
+        deleted = client.post(
+            "/api/v1/schedule/acquisitions/bulk-delete",
+            json={
+                "acquisition_ids": [frozen.id, safe.id, cross_workspace.id],
+                "workspace_id": workspace_id,
+            },
+        )
+
+        assert deleted.status_code == 200, deleted.json()
+        payload = deleted.json()
+        assert payload["deleted"] == 1, payload
+        assert payload["failed"] == [], payload
+        assert payload["skipped_frozen"] == [frozen.id], payload
+        assert payload["skipped_workspace"] == [cross_workspace.id], payload
+        assert payload["skipped_hard_locked"] == [], payload
+        assert db.get_acquisition(safe.id) is None
+        assert db.get_acquisition(frozen.id) is not None
+        assert db.get_acquisition(cross_workspace.id) is not None
+
     def test_rollback_refreshes_conflicts_after_mutation(
         self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
     ) -> None:
