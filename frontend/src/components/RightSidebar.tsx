@@ -69,10 +69,9 @@ const RightSidebar: React.FC = () => {
     setRightSidebarOpen(isPanelOpen)
   }, [isPanelOpen, setRightSidebarOpen])
 
-  // Enable ground stations and mission-specific layers when mission data is loaded
+  // Enable mission-specific layers when mission data is loaded
   useEffect(() => {
     if (state.missionData) {
-      // Enable ground stations
       setLayerVisibility('targets', true)
 
       // For imaging missions, enable appropriate layers
@@ -164,32 +163,6 @@ const RightSidebar: React.FC = () => {
                         toggleEntityVisibility('target', e.target.checked)
                       }}
                       className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-green-500 focus:ring-green-500 focus:ring-offset-0"
-                    />
-                  </label>
-                  <label className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-700/50 cursor-pointer transition-colors">
-                    <div
-                      className={`w-8 h-8 rounded-lg flex items-center justify-center ${activeLayers.labels ? 'bg-yellow-500/20' : 'bg-gray-700/50'}`}
-                    >
-                      <div
-                        className={`w-2.5 h-2.5 ${activeLayers.labels ? 'text-yellow-400' : 'text-gray-500'}`}
-                      >
-                        <svg viewBox="0 0 24 24" fill="currentColor">
-                          <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" />
-                        </svg>
-                      </div>
-                    </div>
-                    <div className="flex-1">
-                      <p className="text-xs font-medium text-gray-200">Ground Stations</p>
-                      <p className="text-[10px] text-gray-500">Communication sites</p>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={activeLayers.labels}
-                      onChange={async (e) => {
-                        setLayerVisibility('labels', e.target.checked)
-                        await toggleEntityVisibility('ground_station', e.target.checked)
-                      }}
-                      className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-yellow-500 focus:ring-yellow-500 focus:ring-offset-0"
                     />
                   </label>
                 </div>

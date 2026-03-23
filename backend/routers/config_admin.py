@@ -406,7 +406,6 @@ async def create_snapshot(request: CreateSnapshotRequest) -> Dict[str, Any]:
             "satellites.yaml",
             "sar_modes.yaml",
             "mission_settings.yaml",
-            "ground_stations.yaml",
         ]
         copied_files = []
         for filename in config_files:
@@ -457,7 +456,6 @@ async def restore_snapshot(snapshot_id: str) -> Dict[str, Any]:
             "satellites.yaml",
             "sar_modes.yaml",
             "mission_settings.yaml",
-            "ground_stations.yaml",
         ]
 
         # Backup current
@@ -535,7 +533,6 @@ async def restore_defaults() -> Dict[str, Any]:
             "satellites.yaml",
             "sar_modes.yaml",
             "mission_settings.yaml",
-            "ground_stations.yaml",
         ]
 
         # Backup current

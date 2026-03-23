@@ -1,7 +1,7 @@
 """
 Config Resolver - Single source of truth for mission configuration.
 
-Loads satellites.yaml, sar_modes.yaml, ground_stations.yaml, mission_settings.yaml
+Loads satellites.yaml, sar_modes.yaml, and mission_settings.yaml
 and produces a ResolvedConfig for each mission run.
 
 Enforces parameter governance rules:
@@ -277,7 +277,6 @@ class ConfigResolver:
     def __init__(self) -> None:
         self._satellites_config: Dict[str, Any] = {}
         self._sar_modes_config: Dict[str, Any] = {}
-        self._ground_stations_config: Dict[str, Any] = {}
         self._mission_settings_config: Dict[str, Any] = {}
         self._config_hash: str = ""
         self._loaded = False
@@ -299,12 +298,6 @@ class ConfigResolver:
             if sar_modes_path.exists():
                 with open(sar_modes_path, "r") as f:
                     self._sar_modes_config = yaml.safe_load(f) or {}
-
-            # Load ground_stations.yaml
-            gs_path = CONFIG_DIR / "ground_stations.yaml"
-            if gs_path.exists():
-                with open(gs_path, "r") as f:
-                    self._ground_stations_config = yaml.safe_load(f) or {}
 
             # Load mission_settings.yaml
             ms_path = CONFIG_DIR / "mission_settings.yaml"
@@ -328,7 +321,6 @@ class ConfigResolver:
         for filename in [
             "satellites.yaml",
             "sar_modes.yaml",
-            "ground_stations.yaml",
             "mission_settings.yaml",
         ]:
             filepath = CONFIG_DIR / filename
@@ -350,7 +342,6 @@ class ConfigResolver:
             "satellites": self._satellites_config.get("satellites", []),
             "satellite_settings": self._satellites_config.get("satellite_settings", {}),
             "sar_modes": self._sar_modes_config.get("modes", {}),
-            "ground_stations": self._ground_stations_config.get("ground_stations", []),
         }
 
     def resolve(

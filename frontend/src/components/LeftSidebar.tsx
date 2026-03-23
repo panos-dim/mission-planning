@@ -454,14 +454,10 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
               // Handle map/timeline sync based on node type
               if (
                 nodeType === 'satellite' ||
-                nodeType === 'target' ||
-                nodeType === 'ground_station'
+                nodeType === 'target'
               ) {
                 // These objects can be focused on the map
-                const objectId = nodeId
-                  .replace('satellite_', '')
-                  .replace('target_', '')
-                  .replace('ground_station_', '')
+                const objectId = nodeId.replace('satellite_', '').replace('target_', '')
                 console.log('[ObjectExplorer] Focus on map:', objectId, nodeType)
               }
 

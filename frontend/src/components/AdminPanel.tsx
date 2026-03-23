@@ -6,61 +6,15 @@ import {
   Trash2,
   Save,
   RefreshCw,
-  Download,
   Satellite,
-  Globe,
   Settings,
-  Upload,
   Radio,
   History,
   FlaskConical,
 } from 'lucide-react'
-import * as yaml from 'js-yaml'
 import debug from '../utils/debug'
 import { ValidationTab, SnapshotsTab, SarModesTab, SettingsTab } from './admin'
 import { useSatelliteSelectionStore } from '../store/satelliteSelectionStore'
-
-interface GroundStation {
-  name: string
-  latitude: number
-  longitude: number
-  altitude_km: number
-  elevation_mask: number
-  active: boolean
-  description: string
-  capabilities: string[]
-}
-
-// Form state allows string values for numeric fields during editing
-interface EditableGroundStation {
-  name: string
-  latitude: number | string
-  longitude: number | string
-  altitude_km: number | string
-  elevation_mask: number | string
-  active: boolean
-  description: string
-  capabilities: string[]
-}
-
-interface MissionSettings {
-  default_elevation_mask: number
-  min_duration_seconds: number
-}
-
-interface Config {
-  ground_stations: GroundStation[]
-  defaults: {
-    elevation_mask: number
-    altitude_km: number
-    active: boolean
-    capabilities: string[]
-  }
-  mission_settings: {
-    imaging?: MissionSettings
-    communication?: MissionSettings
-  }
-}
 
 interface TLESource {
   id: string
@@ -101,19 +55,12 @@ interface AdminPanelProps {
 
 const AdminPanel: React.FC<AdminPanelProps> = ({ isOpen, onClose, onConfigUpdate }) => {
   const [activeTab, setActiveTab] = useState<
-    'ground-stations' | 'satellites' | 'sar-modes' | 'settings' | 'snapshots' | 'validation'
-  >('ground-stations')
-  const [config, setConfig] = useState<Config | null>(null)
-  const [editingStation, setEditingStation] = useState<EditableGroundStation | null>(null)
-  const [isAddingStation, setIsAddingStation] = useState(false)
+    'satellites' | 'sar-modes' | 'settings' | 'snapshots' | 'validation'
+  >('satellites')
   const [selectedSource, setSelectedSource] = useState<string>('')
   const [searchTerm, setSearchTerm] = useState('')
   const [searchResults, setSearchResults] = useState<TLESearchResult[]>([])
   const [isSearching, setIsSearching] = useState(false)
-  const [deleteConfirmation, setDeleteConfirmation] = useState<{
-    station: GroundStation | null
-    isOpen: boolean
-  }>({ station: null, isOpen: false })
   const [tleSources, setTleSources] = useState<TLESource[]>([])
   const [satellites, setSatellites] = useState<SatelliteConfig[]>([])
   const [editingSatellite, setEditingSatellite] = useState<SatelliteConfig | null>(null)
@@ -129,24 +76,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ isOpen, onClose, onConfigUpdate
 
   useEffect(() => {
     if (isOpen) {
-      fetchConfig()
       fetchTleSources()
       fetchSatellites()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen])
-
-  const fetchConfig = async () => {
-    try {
-      const response = await fetch('/api/v1/config/full')
-      const data = await response.json()
-      if (data.success) {
-        setConfig(data.config)
-      }
-    } catch (error) {
-      console.error('Error fetching config:', error)
-    }
-  }
 
   const fetchTleSources = async () => {
     try {
@@ -193,157 +127,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ isOpen, onClose, onConfigUpdate
     } catch (error) {
       console.error('Error fetching satellites:', error)
     }
-  }
-
-  const saveGroundStation = async (station: EditableGroundStation, isNew: boolean = false) => {
-    try {
-      // Convert form values to proper numeric types for API
-      const latValue = station.latitude === '' ? 0 : Number(station.latitude)
-      const lonValue = station.longitude === '' ? 0 : Number(station.longitude)
-      const altValue = station.altitude_km === '' ? 0 : Number(station.altitude_km)
-      const elevValue = station.elevation_mask === '' ? 10 : Number(station.elevation_mask)
-
-      const stationData: GroundStation = {
-        name: station.name,
-        latitude: isNaN(latValue) ? 0 : latValue,
-        longitude: isNaN(lonValue) ? 0 : lonValue,
-        altitude_km: isNaN(altValue) ? 0 : altValue,
-        elevation_mask: isNaN(elevValue) ? 10 : elevValue,
-        active: station.active,
-        description: station.description,
-        capabilities: station.capabilities,
-      }
-
-      const url = isNew
-        ? '/api/v1/config/ground-stations'
-        : `/api/v1/config/ground-stations/${encodeURIComponent(station.name)}`
-
-      const response = await fetch(url, {
-        method: isNew ? 'POST' : 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(stationData),
-      })
-
-      if (response.ok) {
-        await fetchConfig()
-        setEditingStation(null)
-        setIsAddingStation(false)
-        if (onConfigUpdate) onConfigUpdate()
-      }
-    } catch (error) {
-      console.error('Error saving ground station:', error)
-    }
-  }
-
-  const handleDeleteStation = (station: GroundStation) => {
-    setDeleteConfirmation({ station, isOpen: true })
-  }
-
-  const confirmDelete = async () => {
-    if (!deleteConfirmation.station) return
-
-    try {
-      const response = await fetch(
-        `/api/v1/config/ground-stations/${encodeURIComponent(deleteConfirmation.station.name)}`,
-        { method: 'DELETE' },
-      )
-
-      if (response.ok) {
-        debug.info(`Deleted ground station: ${deleteConfirmation.station?.name}`)
-        await fetchConfig()
-        if (onConfigUpdate) onConfigUpdate()
-      }
-    } catch (error) {
-      console.error('Error deleting ground station:', error)
-    }
-
-    setDeleteConfirmation({ station: null, isOpen: false })
-  }
-
-  const cancelDelete = () => {
-    setDeleteConfirmation({ station: null, isOpen: false })
-  }
-
-  const reloadConfig = async () => {
-    try {
-      const response = await fetch('/api/v1/config/reload', { method: 'POST' })
-      if (response.ok) {
-        await fetchConfig()
-        if (onConfigUpdate) onConfigUpdate()
-      }
-    } catch (error) {
-      console.error('Error reloading config:', error)
-    }
-  }
-
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-
-    const formData = new FormData()
-    formData.append('file', file)
-
-    try {
-      const response = await fetch('/api/v1/config/upload', {
-        method: 'POST',
-        body: formData,
-      })
-
-      if (response.ok) {
-        await fetchConfig()
-        if (onConfigUpdate) onConfigUpdate()
-      } else {
-        const error = await response.json()
-        alert(`Upload failed: ${error.detail}`)
-      }
-    } catch (error) {
-      console.error('Error uploading config:', error)
-      alert('Failed to upload configuration file')
-    }
-  }
-
-  const downloadConfig = () => {
-    if (!config) return
-
-    const dataStr = JSON.stringify(config, null, 2)
-    const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr)
-
-    const exportFileDefaultName = 'ground_stations_config.json'
-
-    const linkElement = document.createElement('a')
-    linkElement.setAttribute('href', dataUri)
-    linkElement.setAttribute('download', exportFileDefaultName)
-    linkElement.click()
-  }
-
-  const downloadYaml = () => {
-    const yamlConfig = {
-      ground_stations: config?.ground_stations || [],
-      defaults: {
-        elevation_mask: 10,
-        altitude_km: 0,
-        active: true,
-        capabilities: ['communication'],
-      },
-      mission_settings: {
-        imaging: {
-          default_elevation_mask: 45,
-          min_duration_seconds: 30,
-        },
-        communication: {
-          default_elevation_mask: 10,
-          min_duration_seconds: 60,
-        },
-      },
-    }
-    const yamlContent = yaml.dump(yamlConfig)
-    const blob = new Blob([yamlContent], { type: 'text/yaml;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'ground_stations.yaml'
-    a.click()
-    URL.revokeObjectURL(url)
   }
 
   const searchSatellites = async () => {
@@ -535,27 +318,13 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ isOpen, onClose, onConfigUpdate
     }
   }
 
-  const handleAddStation = () => {
-    setIsAddingStation(true)
-    setEditingStation({
-      name: '',
-      latitude: '',
-      longitude: '',
-      altitude_km: '',
-      elevation_mask: '',
-      description: '',
-      active: true,
-      capabilities: ['communication'],
-    })
-  }
-
   if (!isOpen) return null
 
   return (
     <div
       className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
       onClick={(e) => {
-        // Prevent closing on background click during delete
+        // Keep modal interactions contained
         e.stopPropagation()
       }}
     >
@@ -576,17 +345,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ isOpen, onClose, onConfigUpdate
 
         {/* Tabs */}
         <div className="flex space-x-1 p-2 bg-gray-800 border-b border-gray-700">
-          <button
-            className={`px-4 py-2 rounded flex items-center space-x-2 ${
-              activeTab === 'ground-stations'
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-            }`}
-            onClick={() => setActiveTab('ground-stations')}
-          >
-            <Globe className="w-4 h-4" />
-            <span>Ground Stations</span>
-          </button>
           <button
             className={`px-4 py-2 rounded flex items-center space-x-2 ${
               activeTab === 'satellites'
@@ -646,338 +404,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ isOpen, onClose, onConfigUpdate
 
         {/* Content */}
         <div className="flex-1 overflow-auto p-4">
-          {activeTab === 'ground-stations' && (
-            <div className="space-y-4">
-              {/* Actions Bar */}
-              <div className="flex justify-between items-center">
-                <div className="flex space-x-2">
-                  <button
-                    onClick={handleAddStation}
-                    className="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center space-x-2"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>Add Station</span>
-                  </button>
-
-                  <button
-                    onClick={reloadConfig}
-                    className="px-3 py-2 bg-gray-700 text-white rounded hover:bg-gray-600 flex items-center space-x-2"
-                  >
-                    <RefreshCw className="w-4 h-4" />
-                    <span>Reload</span>
-                  </button>
-
-                  <label className="px-3 py-2 bg-gray-700 text-white rounded hover:bg-gray-600 flex items-center space-x-2 cursor-pointer">
-                    <Upload className="w-4 h-4" />
-                    <span>Upload Config</span>
-                    <input
-                      type="file"
-                      accept=".yaml,.yml,.json"
-                      onChange={handleFileUpload}
-                      className="hidden"
-                    />
-                  </label>
-
-                  <button
-                    onClick={downloadConfig}
-                    className="px-3 py-2 bg-gray-700 text-white rounded hover:bg-gray-600 flex items-center space-x-2"
-                  >
-                    <Download className="w-4 h-4" />
-                    <span>Download JSON</span>
-                  </button>
-                  <button
-                    onClick={downloadYaml}
-                    className="px-3 py-2 bg-gray-700 text-white rounded hover:bg-gray-600 flex items-center space-x-2"
-                  >
-                    <Download className="w-4 h-4" />
-                    <span>Download YAML</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Ground Stations List */}
-              <div className="space-y-2">
-                {config?.ground_stations.map((station) => (
-                  <div key={station.name} className="bg-gray-800 p-4 rounded-lg">
-                    {editingStation?.name === station.name && !isAddingStation ? (
-                      <div className="space-y-3">
-                        <input
-                          type="text"
-                          value={editingStation.name || ''}
-                          onChange={(e) =>
-                            setEditingStation({
-                              ...editingStation,
-                              name: e.target.value,
-                            })
-                          }
-                          className="w-full bg-gray-700 text-white px-3 py-2 rounded"
-                          placeholder="Station Name"
-                        />
-                        <div className="grid grid-cols-2 gap-3">
-                          <input
-                            type="number"
-                            value={
-                              editingStation.latitude === 0 || editingStation.latitude === ''
-                                ? ''
-                                : editingStation.latitude
-                            }
-                            onChange={(e) =>
-                              setEditingStation({
-                                ...editingStation,
-                                latitude: e.target.value,
-                              })
-                            }
-                            className="bg-gray-700 text-white px-3 py-2 rounded"
-                            placeholder="Latitude"
-                            step="0.0001"
-                          />
-                          <input
-                            type="number"
-                            value={
-                              editingStation.longitude === 0 || editingStation.longitude === ''
-                                ? ''
-                                : editingStation.longitude
-                            }
-                            onChange={(e) =>
-                              setEditingStation({
-                                ...editingStation,
-                                longitude: e.target.value,
-                              })
-                            }
-                            className="bg-gray-700 text-white px-3 py-2 rounded"
-                            placeholder="Longitude"
-                            step="0.0001"
-                          />
-                        </div>
-                        <div className="grid grid-cols-2 gap-3">
-                          <input
-                            type="number"
-                            value={
-                              editingStation.elevation_mask === 10 ||
-                              editingStation.elevation_mask === ''
-                                ? ''
-                                : editingStation.elevation_mask
-                            }
-                            onChange={(e) =>
-                              setEditingStation({
-                                ...editingStation,
-                                elevation_mask: e.target.value,
-                              })
-                            }
-                            className="bg-gray-700 text-white px-3 py-2 rounded"
-                            placeholder="Elevation Mask (degrees)"
-                            min="0"
-                            max="90"
-                          />
-                          <input
-                            type="number"
-                            value={
-                              editingStation.altitude_km === 0 || editingStation.altitude_km === ''
-                                ? ''
-                                : editingStation.altitude_km
-                            }
-                            onChange={(e) =>
-                              setEditingStation({
-                                ...editingStation,
-                                altitude_km: e.target.value,
-                              })
-                            }
-                            className="bg-gray-700 text-white px-3 py-2 rounded"
-                            placeholder="Altitude (km)"
-                            step="0.001"
-                          />
-                        </div>
-                        <textarea
-                          value={editingStation.description}
-                          onChange={(e) =>
-                            setEditingStation({
-                              ...editingStation,
-                              description: e.target.value,
-                            })
-                          }
-                          className="w-full bg-gray-700 text-white px-3 py-2 rounded"
-                          placeholder="Description"
-                          rows={2}
-                        />
-                        <div className="flex space-x-2">
-                          <button
-                            onClick={() => saveGroundStation(editingStation)}
-                            className="px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700"
-                          >
-                            <Save className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => setEditingStation(null)}
-                            className="px-3 py-2 bg-gray-600 text-white rounded hover:bg-gray-700"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <h3 className="text-white font-semibold">{station.name}</h3>
-                          <p className="text-gray-400 text-sm">{station.description}</p>
-                          <p className="text-gray-500 text-xs mt-1">
-                            {station.latitude.toFixed(2)}°, {station.longitude.toFixed(2)}° |
-                            Elevation Mask: {station.elevation_mask}° | Alt: {station.altitude_km}km
-                          </p>
-                          <div className="flex space-x-2 mt-2">
-                            {station.capabilities.map((cap) => (
-                              <span
-                                key={cap}
-                                className="px-2 py-1 bg-blue-600/20 text-blue-400 text-xs rounded"
-                              >
-                                {cap}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                        <div className="flex space-x-2">
-                          <button
-                            onClick={() => setEditingStation(station)}
-                            className="p-2 text-gray-400 hover:text-white"
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteStation(station)}
-                            className="p-2 text-gray-400 hover:text-red-400"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-
-                {/* Add New Station Form */}
-                {isAddingStation && editingStation && (
-                  <div className="bg-gray-800 p-4 rounded-lg space-y-3">
-                    <input
-                      type="text"
-                      value={editingStation.name || ''}
-                      onChange={(e) =>
-                        setEditingStation({
-                          ...editingStation,
-                          name: e.target.value,
-                        })
-                      }
-                      className="w-full bg-gray-700 text-white px-3 py-2 rounded"
-                      placeholder="Station Name"
-                    />
-                    <div className="grid grid-cols-2 gap-3">
-                      <input
-                        type="number"
-                        value={
-                          editingStation.latitude === 0 || editingStation.latitude === ''
-                            ? ''
-                            : editingStation.latitude
-                        }
-                        onChange={(e) =>
-                          setEditingStation({
-                            ...editingStation,
-                            latitude: e.target.value,
-                          })
-                        }
-                        className="bg-gray-700 text-white px-3 py-2 rounded"
-                        placeholder="Latitude"
-                        step="0.0001"
-                      />
-                      <input
-                        type="number"
-                        value={
-                          editingStation.longitude === 0 || editingStation.longitude === ''
-                            ? ''
-                            : editingStation.longitude
-                        }
-                        onChange={(e) =>
-                          setEditingStation({
-                            ...editingStation,
-                            longitude: e.target.value,
-                          })
-                        }
-                        className="bg-gray-700 text-white px-3 py-2 rounded"
-                        placeholder="Longitude"
-                        step="0.0001"
-                      />
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <input
-                        type="number"
-                        value={
-                          editingStation.elevation_mask === 10 ||
-                          editingStation.elevation_mask === ''
-                            ? ''
-                            : editingStation.elevation_mask
-                        }
-                        onChange={(e) =>
-                          setEditingStation({
-                            ...editingStation,
-                            elevation_mask: e.target.value,
-                          })
-                        }
-                        className="bg-gray-700 text-white px-3 py-2 rounded"
-                        placeholder="Elevation Mask (degrees)"
-                        min="0"
-                        max="90"
-                      />
-                      <input
-                        type="number"
-                        value={
-                          editingStation.altitude_km === 0 || editingStation.altitude_km === ''
-                            ? ''
-                            : editingStation.altitude_km
-                        }
-                        onChange={(e) =>
-                          setEditingStation({
-                            ...editingStation,
-                            altitude_km: e.target.value,
-                          })
-                        }
-                        className="bg-gray-700 text-white px-3 py-2 rounded"
-                        placeholder="Altitude (km)"
-                        step="0.001"
-                      />
-                    </div>
-                    <textarea
-                      value={editingStation.description}
-                      onChange={(e) =>
-                        setEditingStation({
-                          ...editingStation,
-                          description: e.target.value,
-                        })
-                      }
-                      className="w-full bg-gray-700 text-white px-3 py-2 rounded"
-                      placeholder="Description"
-                      rows={2}
-                    />
-                    <div className="flex space-x-2">
-                      <button
-                        onClick={() => saveGroundStation(editingStation, true)}
-                        className="px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700 flex items-center space-x-2"
-                      >
-                        <Save className="w-4 h-4" />
-                        <span>Save</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          setIsAddingStation(false)
-                          setEditingStation(null)
-                        }}
-                        className="px-3 py-2 bg-gray-600 text-white rounded hover:bg-gray-700"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
           {activeTab === 'satellites' && (
             <div className="space-y-4">
               {/* Managed Satellites List */}
@@ -1326,33 +752,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ isOpen, onClose, onConfigUpdate
           {activeTab === 'validation' && <ValidationTab />}
         </div>
       </div>
-
-      {/* Delete Confirmation Dialog */}
-      {deleteConfirmation.isOpen && (
-        <div className="fixed inset-0 bg-black/70 z-[60] flex items-center justify-center p-4">
-          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full">
-            <h3 className="text-lg font-semibold text-white mb-4">Confirm Deletion</h3>
-            <p className="text-gray-300 mb-6">
-              Are you sure you want to delete the ground station &quot;
-              {deleteConfirmation.station?.name}&quot;? This action cannot be undone.
-            </p>
-            <div className="flex justify-end space-x-3">
-              <button
-                onClick={cancelDelete}
-                className="px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-600 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={confirmDelete}
-                className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

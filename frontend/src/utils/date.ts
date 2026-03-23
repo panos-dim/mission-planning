@@ -3,12 +3,48 @@
  * Standard format: DD-MM-YYYY HH:MM:SS UTC
  */
 
+const TZ_SUFFIX_WITH_Z_RE = /[+-]\d{2}:\d{2}Z$/
+const NAIVE_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/
+
+export function normalizeTimestamp(iso: string | null | undefined): string | null {
+  if (!iso) return null
+
+  let normalized = iso.trim()
+  if (!normalized) return null
+
+  if (TZ_SUFFIX_WITH_Z_RE.test(normalized)) {
+    normalized = normalized.slice(0, -1)
+  } else if (NAIVE_TIMESTAMP_RE.test(normalized)) {
+    normalized = normalized.replace(' ', 'T') + 'Z'
+  }
+
+  const date = new Date(normalized)
+  if (Number.isNaN(date.getTime())) return null
+
+  return date.toISOString()
+}
+
+export function formatShortLocalDateTime(
+  iso: string | null | undefined,
+  fallback = 'Unknown',
+): string {
+  const normalized = normalizeTimestamp(iso)
+  if (!normalized) return fallback
+
+  return new Date(normalized).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 /**
  * Format an ISO date string to DD-MM-YYYY.
  * Parses in UTC to avoid timezone shifts.
  */
 export function formatDateDDMMYYYY(iso: string): string {
-  const d = new Date(iso.replace('+00:00', 'Z'))
+  const d = new Date(normalizeTimestamp(iso) ?? iso.replace('+00:00', 'Z'))
   const day = String(d.getUTCDate()).padStart(2, '0')
   const month = String(d.getUTCMonth() + 1).padStart(2, '0')
   const year = d.getUTCFullYear()
@@ -19,7 +55,7 @@ export function formatDateDDMMYYYY(iso: string): string {
  * Format an ISO date string to "DD-MM-YYYY HH:MM:SS UTC".
  */
 export function formatDateTimeDDMMYYYY(iso: string): string {
-  const d = new Date(iso.replace('+00:00', 'Z'))
+  const d = new Date(normalizeTimestamp(iso) ?? iso.replace('+00:00', 'Z'))
   const day = String(d.getUTCDate()).padStart(2, '0')
   const month = String(d.getUTCMonth() + 1).padStart(2, '0')
   const year = d.getUTCFullYear()
@@ -89,7 +125,7 @@ export function parseEndTimeOffset(raw: string, startIso: string): string | null
  * Format an ISO date string to "DD-MM-YYYY HH:MM UTC" (no seconds).
  */
 export function formatDateTimeShort(iso: string): string {
-  const d = new Date(iso.replace('+00:00', 'Z'))
+  const d = new Date(normalizeTimestamp(iso) ?? iso.replace('+00:00', 'Z'))
   const day = String(d.getUTCDate()).padStart(2, '0')
   const month = String(d.getUTCMonth() + 1).padStart(2, '0')
   const year = d.getUTCFullYear()

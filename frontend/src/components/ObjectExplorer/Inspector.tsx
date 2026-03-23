@@ -56,7 +56,6 @@ import {
   type RepairItemReason,
 } from '../../adapters/repairReasons'
 import { useMission } from '../../context/MissionContext'
-import { useGroundStations } from '../../hooks/queries'
 import { useScheduleStore } from '../../store/scheduleStore'
 import { formatDateTimeDDMMYYYY } from '../../utils/date'
 import { fmt1 } from '../../utils/format'
@@ -278,7 +277,6 @@ const AssetsInspector: React.FC<{ metadata?: Record<string, unknown> }> = ({ met
   <>
     <InspectorSection title="Contents" icon="Layers">
       <Field label="Satellites" value={metadata?.satellitesCount as number} />
-      <Field label="Ground Stations" value={metadata?.groundStationsCount as number} />
     </InspectorSection>
   </>
 )
@@ -375,29 +373,6 @@ const SatellitesContainerInspector: React.FC<{
     <InspectorSection title="Summary" icon="Satellite">
       <Field label="Count" value={metadata?.count as number} />
       <Field label="Primary" value={metadata?.primarySatellite as string} />
-    </InspectorSection>
-  </>
-)
-
-// Ground stations container inspector
-const GroundStationsContainerInspector: React.FC<{
-  metadata?: Record<string, unknown>
-}> = ({ metadata }) => (
-  <>
-    <InspectorSection title="Summary" icon="Radio">
-      <Field label="Count" value={metadata?.count as number} />
-    </InspectorSection>
-  </>
-)
-
-// Individual ground station inspector
-const GroundStationInspector: React.FC<{
-  metadata?: Record<string, unknown>
-}> = ({ metadata }) => (
-  <>
-    <InspectorSection title="Details" icon="Radio">
-      <Field label="Type" value={metadata?.type as string} />
-      <Field label="Status" value={metadata?.status as string} />
     </InspectorSection>
   </>
 )
@@ -1330,10 +1305,6 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
   const orders = useOrdersStore((s) => s.orders)
   const { removeOrder } = useOrdersStore()
 
-  // Ground stations count for Inspector metadata
-  const { data: groundStationsData } = useGroundStations()
-  const groundStationsCount = groundStationsData?.ground_stations?.length ?? 0
-
   // Schedule items for fallback target metadata resolution
   const scheduleItems = useScheduleStore((s) => s.items)
 
@@ -1560,7 +1531,6 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
       state,
       planningResults,
       orders,
-      groundStationsCount,
     )
   }, [
     selectedNodeId,
@@ -1568,7 +1538,6 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
     state,
     planningResults,
     orders,
-    groundStationsCount,
     unifiedSelectedType,
     selectedTargetId,
     selectedOpportunityId,
@@ -1954,8 +1923,6 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
       assets: Layers,
       satellites: Satellite,
       satellite: Satellite,
-      ground_stations: Radio,
-      ground_station: Radio,
       targets: Target,
       target: MapPin,
       constraints: Settings,
@@ -1990,7 +1957,6 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
       'scenario',
       'assets',
       'satellites',
-      'ground_stations',
       'targets',
       'constraints',
       'runs',
@@ -2005,7 +1971,6 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
     // For individual items, show the type as context
     const labelMap: Partial<Record<TreeNodeType, string>> = {
       satellite: 'Satellite',
-      ground_station: 'Ground Station',
       target: 'Target',
       opportunity: 'Opportunity',
       plan: 'Plan',
@@ -2135,7 +2100,6 @@ function findNodeMetadata(
   state: ReturnType<typeof useMission>['state'],
   planningResults?: Record<string, import('../../types').AlgorithmResult> | null,
   orders?: import('../../types').AcceptedOrder[],
-  groundStationsCount: number = 0,
 ): Record<string, unknown> | undefined {
   if (!nodeType) return undefined
 
@@ -2165,9 +2129,8 @@ function findNodeMetadata(
       const satCount = satellites.length || (missionData?.satellite_name ? 1 : 0)
       return {
         name: 'Assets',
-        description: 'Satellites and ground stations',
+        description: 'Satellites available for the mission',
         satellitesCount: satCount,
-        groundStationsCount: 0,
       }
     }
 
@@ -2372,7 +2335,7 @@ function findNodeMetadata(
       break
     }
 
-    // Container nodes for satellites and ground stations
+    // Container nodes for mission assets
     case 'satellites': {
       const satellites = missionData?.satellites || []
       const satCount = satellites.length || (missionData?.satellite_name ? 1 : 0)
@@ -2381,24 +2344,6 @@ function findNodeMetadata(
         description: 'Orbital assets for the mission',
         count: satCount,
         primarySatellite: missionData?.satellite_name,
-      }
-    }
-
-    case 'ground_stations': {
-      return {
-        name: 'Ground Stations',
-        description: 'Ground-based communication stations',
-        count: groundStationsCount,
-      }
-    }
-
-    case 'ground_station': {
-      // Extract station name from nodeId
-      const stationName = nodeId.replace(/^ground_station_/, '')
-      return {
-        name: stationName,
-        type: 'Ground Station',
-        status: 'Active',
       }
     }
 
@@ -2637,10 +2582,6 @@ function renderInspectorContent(
       return <SatellitesContainerInspector metadata={metadata} />
     case 'satellite':
       return <SatelliteInspector metadata={metadata} onAction={onAction} />
-    case 'ground_stations':
-      return <GroundStationsContainerInspector metadata={metadata} />
-    case 'ground_station':
-      return <GroundStationInspector metadata={metadata} />
 
     // Targets children
     case 'target':

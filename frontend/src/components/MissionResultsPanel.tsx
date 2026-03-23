@@ -82,6 +82,14 @@ const MissionResultsPanel: React.FC = () => {
   // Non-empty set = show ONLY the selected targets.
   const [selectedTargets, setSelectedTargets] = useState<Set<string>>(new Set())
 
+  // A fresh feasibility run should start from an unfiltered view.
+  // Keeping a stale target filter across analyses can make the panel
+  // appear empty even when new passes were returned successfully.
+  useEffect(() => {
+    setSelectedTargets(new Set())
+    setTimelineTooltip(null)
+  }, [state.missionData])
+
   const handleTargetClick = useCallback((targetName: string) => {
     setSelectedTargets((prev) => {
       const next = new Set(prev)

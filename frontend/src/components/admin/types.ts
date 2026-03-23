@@ -43,35 +43,12 @@ export interface ConfigSnapshot {
   files: string[];
 }
 
-export interface GroundStation {
-  name: string;
-  latitude: number;
-  longitude: number;
-  altitude_km: number;
-  elevation_mask: number;
-  active: boolean;
-  description: string;
-  capabilities: string[];
-}
-
-export interface EditableGroundStation {
-  name: string;
-  latitude: number | string;
-  longitude: number | string;
-  altitude_km: number | string;
-  elevation_mask: number | string;
-  active: boolean;
-  description: string;
-  capabilities: string[];
-}
-
 export interface MissionSettings {
   default_elevation_mask: number;
   min_duration_seconds: number;
 }
 
 export interface Config {
-  ground_stations: GroundStation[];
   defaults: {
     elevation_mask: number;
     altitude_km: number;
@@ -123,7 +100,6 @@ export interface MissionSettingsConfig {
 }
 
 export type AdminTabId =
-  | "ground-stations"
   | "satellites"
   | "sar-modes"
   | "settings"

@@ -13,6 +13,8 @@ import json
 import logging
 import re
 import tempfile
+import csv
+import io
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
@@ -165,6 +167,24 @@ class CoordinateParser:
 
 class FileParser:
     """Parse coordinate files in various formats."""
+
+    @staticmethod
+    def _parse_priority(value: Any) -> Optional[int]:
+        """Parse a priority value, accepting only the supported 1-5 range."""
+        if value in (None, ""):
+            return None
+        try:
+            priority = int(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+        if 1 <= priority <= 5:
+            return priority
+        return None
+
+    @staticmethod
+    def _normalize_field_name(value: str) -> str:
+        """Normalize a CSV/JSON field name for loose matching."""
+        return re.sub(r"[^a-z0-9]+", "", value.strip().lower())
 
     @staticmethod
     def parse_file(
@@ -387,6 +407,10 @@ class FileParser:
                                         "description": properties.get(
                                             "description", ""
                                         ),
+                                        "priority": FileParser._parse_priority(
+                                            properties.get("priority")
+                                        )
+                                        or 5,
                                     }
                                 )
                 elif "targets" in data:
@@ -416,6 +440,7 @@ class FileParser:
         lon = None
         name = None
         description = ""
+        priority = None
 
         # Common field names for latitude
         for lat_field in ["latitude", "lat", "y", "Latitude", "LAT"]:
@@ -447,6 +472,12 @@ class FileParser:
                 description = str(obj[desc_field])
                 break
 
+        # Look for priority
+        for priority_field in ["priority", "Priority", "PRIORITY", "prio", "Prio"]:
+            if priority_field in obj:
+                priority = FileParser._parse_priority(obj[priority_field])
+                break
+
         # Check for coordinate string
         if lat is None or lon is None:
             for coord_field in ["coordinates", "coords", "location", "position"]:
@@ -464,6 +495,7 @@ class FileParser:
                     "latitude": lat,
                     "longitude": lon,
                     "description": description,
+                    "priority": priority if priority is not None else 5,
                 }
 
         return None
@@ -474,15 +506,37 @@ class FileParser:
         targets = []
 
         try:
-            lines = text_content.decode("utf-8").strip().split("\n")
+            raw_lines = text_content.decode("utf-8").strip().splitlines()
+            lines = [line.strip() for line in raw_lines if line.strip() and not line.strip().startswith("#")]
+
+            if not lines:
+                return []
+
+            first_parts = [part.strip() for part in next(csv.reader([lines[0]]))]
+            normalized_headers = {
+                FileParser._normalize_field_name(part) for part in first_parts if part.strip()
+            }
+            has_header = bool(
+                normalized_headers
+                & {"latitude", "lat", "y"}
+            ) and bool(normalized_headers & {"longitude", "lon", "lng", "x"})
+
+            if has_header:
+                reader = csv.DictReader(io.StringIO("\n".join(lines)))
+                for row in reader:
+                    if not row:
+                        continue
+                    target = FileParser._extract_target_from_json(
+                        {str(k): v for k, v in row.items() if k is not None}
+                    )
+                    if target:
+                        targets.append(target)
+
+                logger.info(f"Parsed {len(targets)} targets from text file")
+                return targets
 
             for i, line in enumerate(lines):
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-
-                # Try to parse as CSV
-                parts = [p.strip() for p in line.split(",")]
+                parts = [p.strip() for p in next(csv.reader([line]))]
 
                 if len(parts) >= 2:
                     # Try different formats
@@ -490,6 +544,7 @@ class FileParser:
                     lat = None
                     lon = None
                     description = ""
+                    priority = None
 
                     # Check if first part is a name (not a number)
                     try:
@@ -503,7 +558,15 @@ class FileParser:
                         if len(parts) > 2:
                             name = parts[2]
                         if len(parts) > 3:
-                            description = parts[3]
+                            if len(parts) > 4:
+                                description = parts[3]
+                                priority = FileParser._parse_priority(parts[4])
+                            else:
+                                parsed_priority = FileParser._parse_priority(parts[3])
+                                if parsed_priority is not None:
+                                    priority = parsed_priority
+                                else:
+                                    description = parts[3]
                     except ValueError:
                         # First part is not a number, assume name,lat,lon format
                         name = parts[0]
@@ -514,17 +577,26 @@ class FileParser:
                             if coords:
                                 lat, lon = coords
                         if len(parts) > 3:
-                            description = parts[3]
+                            if len(parts) > 4:
+                                description = parts[3]
+                                priority = FileParser._parse_priority(parts[4])
+                            else:
+                                parsed_priority = FileParser._parse_priority(parts[3])
+                                if parsed_priority is not None:
+                                    priority = parsed_priority
+                                else:
+                                    description = parts[3]
 
                     if lat is not None and lon is not None:
-                        targets.append(
-                            {
-                                "name": name,
-                                "latitude": lat,
-                                "longitude": lon,
-                                "description": description,
-                            }
-                        )
+                        target: Dict[str, Any] = {
+                            "name": name,
+                            "latitude": lat,
+                            "longitude": lon,
+                            "description": description,
+                        }
+                        if priority is not None:
+                            target["priority"] = priority
+                        targets.append(target)
 
             logger.info(f"Parsed {len(targets)} targets from text file")
             return targets

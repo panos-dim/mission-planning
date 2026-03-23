@@ -24,7 +24,7 @@ class PassDurationSettings:
 
 @dataclass
 class ElevationConstraints:
-    """Elevation mask constraints for ground station visibility"""
+    """Elevation mask constraints for visibility analysis"""
 
     default_mask_deg: int
     optimal_min_deg: int

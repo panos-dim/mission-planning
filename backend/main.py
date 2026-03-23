@@ -97,6 +97,7 @@ from backend.routers.workspaces import router as workspaces_router
 from backend.security import require_admin_access, require_dev_access
 from backend.satellite_manager import SatelliteManager
 from backend.schedule_persistence import get_schedule_db
+from backend.workspace_persistence import get_workspace_db
 from backend.validation.mission_input_validator import (
     reload_validation_config,
     validate_mission_input,
@@ -791,14 +792,189 @@ def get_route_latency_snapshot(
 # =============================================================================
 
 
-def get_cached_opportunities() -> List[Dict[str, Any]]:
+def _workspace_cache_key(workspace_id: Optional[str]) -> str:
+    """Return the normalized cache key for workspace-scoped app state."""
+    return workspace_id or "__default__"
+
+
+def get_current_mission_data(workspace_id: Optional[str] = None) -> Dict[str, Any]:
+    """Get the latest mission analysis snapshot, preferring workspace scope when provided."""
+    current = getattr(app.state, "current_mission_data", {})
+    by_workspace = getattr(app.state, "current_mission_data_by_workspace", {})
+    if workspace_id is not None:
+        return by_workspace.get(_workspace_cache_key(workspace_id), {})
+    return current
+
+
+def set_current_mission_data(
+    mission_snapshot: Dict[str, Any],
+    workspace_id: Optional[str] = None,
+) -> None:
+    """Store the latest mission analysis snapshot globally and for the active workspace."""
+    app.state.current_mission_data = mission_snapshot
+    by_workspace = dict(getattr(app.state, "current_mission_data_by_workspace", {}))
+    by_workspace[_workspace_cache_key(workspace_id)] = mission_snapshot
+    app.state.current_mission_data_by_workspace = by_workspace
+
+
+def get_cached_opportunities(workspace_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Get cached opportunities from the last mission analysis."""
-    return getattr(app.state, "opportunities_cache", [])
+    current = getattr(app.state, "opportunities_cache", [])
+    by_workspace = getattr(app.state, "opportunities_cache_by_workspace", {})
+    if workspace_id is not None:
+        return list(by_workspace.get(_workspace_cache_key(workspace_id), []))
+    return list(current)
 
 
-def set_cached_opportunities(opportunities: List[Dict[str, Any]]) -> None:
+def set_cached_opportunities(
+    opportunities: List[Dict[str, Any]],
+    workspace_id: Optional[str] = None,
+) -> None:
     """Set cached opportunities from mission analysis."""
-    app.state.opportunities_cache = opportunities
+    cached = list(opportunities)
+    app.state.opportunities_cache = cached
+    by_workspace = dict(getattr(app.state, "opportunities_cache_by_workspace", {}))
+    by_workspace[_workspace_cache_key(workspace_id)] = cached
+    app.state.opportunities_cache_by_workspace = by_workspace
+
+
+def clear_cached_opportunities(workspace_id: Optional[str] = None) -> None:
+    """Clear cached opportunities for the active workspace after mission inputs change."""
+    if workspace_id is None:
+        app.state.opportunities_cache = []
+        app.state.opportunities_cache_by_workspace = {}
+        return
+
+    by_workspace = dict(getattr(app.state, "opportunities_cache_by_workspace", {}))
+    by_workspace[_workspace_cache_key(workspace_id)] = []
+    app.state.opportunities_cache_by_workspace = by_workspace
+
+    if _workspace_cache_key(workspace_id) == _workspace_cache_key(None):
+        app.state.opportunities_cache = []
+
+
+def _load_workspace_planning_baseline_target_ids(
+    workspace_id: Optional[str],
+) -> set[str]:
+    """Load the last planned target set for incremental scheduling decisions."""
+    if not workspace_id:
+        return set()
+
+    try:
+        ws_db = get_workspace_db()
+        workspace = ws_db.get_workspace(workspace_id, include_czml=False)
+        if not workspace:
+            return set()
+
+        planning_state = workspace.planning_state or {}
+        stored_target_ids = planning_state.get("current_target_ids", [])
+        if isinstance(stored_target_ids, list):
+            return {str(target_id) for target_id in stored_target_ids if target_id}
+    except Exception as exc:
+        logger.warning(
+            "[Planning] Failed to load workspace planning baseline for %s: %s",
+            workspace_id,
+            exc,
+        )
+
+    return set()
+
+
+def _serialize_workspace_target(target: Any) -> Dict[str, Any]:
+    """Normalize target objects/dicts for workspace persistence."""
+    if isinstance(target, dict):
+        return {
+            "name": target.get("name"),
+            "latitude": target.get("latitude"),
+            "longitude": target.get("longitude"),
+            "priority": target.get("priority", 5),
+            "color": target.get("color"),
+        }
+    return {
+        "name": getattr(target, "name", None),
+        "latitude": getattr(target, "latitude", None),
+        "longitude": getattr(target, "longitude", None),
+        "priority": getattr(target, "priority", 5),
+        "color": getattr(target, "color", None),
+    }
+
+
+def _persist_workspace_analysis_snapshot(
+    workspace_id: str,
+    *,
+    mission_data: Dict[str, Any],
+    targets: List[Any],
+    passes: List[Any],
+    czml_data: List[Dict[str, Any]],
+) -> None:
+    """Persist the latest analyzed scenario into workspace storage."""
+    ws_db = get_workspace_db()
+    ws_db.ensure_workspace(workspace_id)
+
+    serialized_targets = [
+        target_summary
+        for target_summary in (_serialize_workspace_target(target) for target in targets)
+        if target_summary.get("name")
+    ]
+
+    satellites = mission_data.get("satellites", [])
+    if not satellites and mission_data.get("satellite_name"):
+        satellites = [{"name": mission_data.get("satellite_name"), "id": "sat_0"}]
+
+    scenario_config = {
+        "satellites": satellites,
+        "targets": serialized_targets,
+        "constraints": {
+            "elevation_mask_deg": mission_data.get("elevation_mask", 10),
+            "max_spacecraft_roll_deg": mission_data.get(
+                "max_spacecraft_roll_deg", 45
+            ),
+            "sensor_fov_half_angle_deg": mission_data.get("sensor_fov_half_angle_deg"),
+        },
+    }
+
+    serialized_passes = [
+        pass_detail.to_dict() if hasattr(pass_detail, "to_dict") else pass_detail
+        for pass_detail in passes
+    ]
+    analysis_state = {
+        "run_timestamp": mission_data.get("analysis_timestamp"),
+        "passes": serialized_passes,
+        "statistics": {
+            "total_passes": len(serialized_passes),
+        },
+        "mission_data": {
+            "satellite_name": mission_data.get("satellite_name"),
+            "satellites": mission_data.get("satellites", []),
+            "is_constellation": mission_data.get("is_constellation", False),
+            "mission_type": mission_data.get("mission_type", "imaging"),
+            "start_time": mission_data.get("start_time"),
+            "end_time": mission_data.get("end_time"),
+            "elevation_mask": mission_data.get("elevation_mask", 10),
+            "sensor_fov_half_angle_deg": mission_data.get(
+                "sensor_fov_half_angle_deg"
+            ),
+            "max_spacecraft_roll_deg": mission_data.get(
+                "max_spacecraft_roll_deg", 45
+            ),
+            "total_passes": len(serialized_passes),
+            "targets": serialized_targets,
+            "passes": serialized_passes,
+            "coverage_percentage": mission_data.get("coverage_percentage"),
+            "pass_statistics": mission_data.get("pass_statistics"),
+        },
+    }
+
+    mission_mode = str(mission_data.get("mission_type", "imaging")).upper()
+    ws_db.update_workspace(
+        workspace_id=workspace_id,
+        scenario_config=scenario_config,
+        analysis_state=analysis_state,
+        czml_data=czml_data,
+        mission_mode=mission_mode,
+        time_window_start=mission_data.get("start_time"),
+        time_window_end=mission_data.get("end_time"),
+    )
 
 
 # =============================================================================
@@ -812,14 +988,14 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     """Manage startup/shutdown lifecycle."""
     # --- Startup ---
     config_manager.load_config()
-    logger.info(
-        f"Loaded {len(config_manager.ground_stations)} ground stations from configuration"
-    )
+    logger.info("Ground station support is deprecated and disabled")
     logger.info(
         f"Loaded {len(satellite_manager.get_satellites())} satellites from configuration"
     )
     app.state.opportunities_cache = []
+    app.state.opportunities_cache_by_workspace = {}
     app.state.current_mission_data = {}
+    app.state.current_mission_data_by_workspace = {}
 
     yield
 
@@ -1215,10 +1391,9 @@ def _build_readiness_payload() -> Dict[str, Any]:
         checks["schedule_db"] = {"ready": False, "error": str(exc)}
 
     try:
-        ground_stations = config_manager.get_ground_stations_list()
         checks["config"] = {
             "ready": True,
-            "ground_station_count": len(ground_stations),
+            "ground_station_support": "deprecated",
         }
     except Exception as exc:
         checks["config"] = {"ready": False, "error": str(exc)}
@@ -1306,6 +1481,9 @@ async def validate_tle(tle_data: TLEData) -> Dict[str, Any]:
 async def analyze_mission(request: MissionRequest) -> MissionResponse:
     """Analyze mission and return visibility windows, CZML data, and schedules"""
     try:
+        if request.workspace_id:
+            update_log_context(workspace_id=request.workspace_id)
+
         # Get normalized satellite list (works for both legacy and constellation)
         satellite_list = request.get_satellite_list()
         is_constellation = request.is_constellation()
@@ -1423,11 +1601,6 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
             if request.elevation_mask is not None:
                 # Use explicit elevation mask from request
                 elevation_mask = request.elevation_mask
-            elif request.ground_station_name:
-                # Use ground station specific elevation mask
-                elevation_mask = config_manager.get_elevation_mask(
-                    request.ground_station_name, request.mission_type
-                )
             else:
                 # Use mission-type defaults from config
                 if request.mission_type in config_manager.mission_settings:
@@ -1868,14 +2041,32 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
         )
 
         # Store in app state (for development - use proper storage in production)
-        app.state.current_mission_data = {
-            "mission_data": mission_data,
-            "czml_data": czml_data,
-            "satellite": satellite,
-            "satellites_dict": satellites_dict,  # All satellites for constellation scheduling
-            "targets": targets,
-            "passes": all_passes,
-        }
+        set_current_mission_data(
+            {
+                "mission_data": mission_data,
+                "czml_data": czml_data,
+                "satellite": satellite,
+                "satellites_dict": satellites_dict,  # All satellites for constellation scheduling
+                "targets": targets,
+                "passes": all_passes,
+            },
+            request.workspace_id,
+        )
+        clear_cached_opportunities(request.workspace_id)
+
+        if request.workspace_id:
+            try:
+                _persist_workspace_analysis_snapshot(
+                    request.workspace_id,
+                    mission_data=mission_data,
+                    targets=targets,
+                    passes=all_passes,
+                    czml_data=czml_data,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[Mission Analysis] Failed to persist workspace analysis snapshot: {e}"
+                )
 
         # Note: temp files are cleaned up in create_satellites_from_request()
 
@@ -1918,9 +2109,9 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
 
 
 @app.get("/api/v1/mission/czml")
-async def get_mission_czml() -> List[Dict[str, Any]]:
+async def get_mission_czml(workspace_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Get CZML data for current mission"""
-    _cmd = getattr(app.state, "current_mission_data", {})
+    _cmd = get_current_mission_data(workspace_id)
     if not _cmd:
         raise HTTPException(status_code=404, detail="No mission data available")
 
@@ -1929,9 +2120,9 @@ async def get_mission_czml() -> List[Dict[str, Any]]:
 
 
 @app.get("/api/v1/mission/schedule")
-async def get_mission_schedule() -> Dict[str, Any]:
+async def get_mission_schedule(workspace_id: Optional[str] = None) -> Dict[str, Any]:
     """Get mission schedule data"""
-    _cmd = getattr(app.state, "current_mission_data", {})
+    _cmd = get_current_mission_data(workspace_id)
     if not _cmd:
         raise HTTPException(status_code=404, detail="No mission data available")
 
@@ -2458,6 +2649,7 @@ async def upload_targets_file(file: UploadFile = File(...)) -> Dict[str, Any]:
                 "latitude": round(t["latitude"], 6),
                 "longitude": round(t["longitude"], 6),
                 "description": t.get("description", ""),
+                "priority": t.get("priority", 5),
                 "source": "file",
             }
             for t in validated_targets
@@ -2533,27 +2725,23 @@ async def validate_targets(targets: List[TargetData]) -> Dict[str, Any]:
 # Configuration Management Endpoints
 @app.get("/api/v1/config/ground-stations", dependencies=[Depends(require_admin_access)])
 async def get_ground_stations() -> Dict[str, Any]:
-    """Get all configured ground stations"""
-    try:
-        stations = config_manager.get_ground_stations_list()
-        return {"success": True, "ground_stations": stations, "count": len(stations)}
-    except Exception as e:
-        logger.error(f"Error getting ground stations: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    """Ground stations are deprecated and intentionally unavailable."""
+    return {
+        "success": True,
+        "deprecated": True,
+        "ground_stations": [],
+        "count": 0,
+        "message": "Ground station support is deprecated and disabled.",
+    }
 
 
 @app.post("/api/v1/config/ground-stations", dependencies=[Depends(require_admin_access)])
 async def add_ground_station(station: Dict[str, Any]) -> Dict[str, Any]:
-    """Add a new ground station"""
-    try:
-        success = config_manager.add_ground_station(station)
-        if success:
-            return {"success": True, "message": "Ground station added successfully"}
-        else:
-            raise HTTPException(status_code=400, detail="Failed to add ground station")
-    except Exception as e:
-        logger.error(f"Error adding ground station: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    """Ground stations are deprecated and cannot be modified."""
+    raise HTTPException(
+        status_code=410,
+        detail="Ground station support is deprecated and disabled.",
+    )
 
 
 @app.put(
@@ -2561,16 +2749,11 @@ async def add_ground_station(station: Dict[str, Any]) -> Dict[str, Any]:
     dependencies=[Depends(require_admin_access)],
 )
 async def update_ground_station(name: str, station: Dict[str, Any]) -> Dict[str, Any]:
-    """Update an existing ground station"""
-    try:
-        success = config_manager.update_ground_station(name, station)
-        if success:
-            return {"success": True, "message": "Ground station updated successfully"}
-        else:
-            raise HTTPException(status_code=404, detail="Ground station not found")
-    except Exception as e:
-        logger.error(f"Error updating ground station: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    """Ground stations are deprecated and cannot be modified."""
+    raise HTTPException(
+        status_code=410,
+        detail="Ground station support is deprecated and disabled.",
+    )
 
 
 @app.delete(
@@ -2578,16 +2761,11 @@ async def update_ground_station(name: str, station: Dict[str, Any]) -> Dict[str,
     dependencies=[Depends(require_admin_access)],
 )
 async def delete_ground_station(name: str) -> Dict[str, Any]:
-    """Delete a ground station"""
-    try:
-        success = config_manager.delete_ground_station(name)
-        if success:
-            return {"success": True, "message": "Ground station deleted successfully"}
-        else:
-            raise HTTPException(status_code=404, detail="Ground station not found")
-    except Exception as e:
-        logger.error(f"Error deleting ground station: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    """Ground stations are deprecated and cannot be modified."""
+    raise HTTPException(
+        status_code=410,
+        detail="Ground station support is deprecated and disabled.",
+    )
 
 
 @app.get("/api/v1/config/full", dependencies=[Depends(require_admin_access)])
@@ -2610,7 +2788,7 @@ async def reload_configuration() -> Dict[str, Any]:
             return {
                 "success": True,
                 "message": "Configuration reloaded successfully",
-                "ground_stations_count": len(config_manager.ground_stations),
+                "ground_station_support": "deprecated",
             }
         else:
             raise HTTPException(
@@ -2650,7 +2828,7 @@ async def upload_config(file: UploadFile = File(...)) -> Dict[str, Any]:
             return {
                 "success": True,
                 "message": f"Configuration loaded from {file.filename}",
-                "ground_stations_count": len(config_manager.ground_stations),
+                "ground_station_support": "deprecated",
             }
         else:
             raise HTTPException(status_code=400, detail="Failed to load configuration")
@@ -3087,7 +3265,7 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
 
     t0 = _time.perf_counter()
     try:
-        _cmd = getattr(app.state, "current_mission_data", {})
+        _cmd = get_current_mission_data(request.workspace_id)
 
         if not _cmd or "passes" not in _cmd:
             raise HTTPException(
@@ -3487,7 +3665,7 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
                 "priority": getattr(opp, "priority", 1),
             }
             opp_dicts.append(opp_dict)
-        set_cached_opportunities(opp_dicts)
+        set_cached_opportunities(opp_dicts, request.workspace_id)
         logger.debug(
             "Cached %d opportunities for /plan and /repair endpoints",
             len(opp_dicts),
@@ -3506,9 +3684,13 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
         # committed acquisitions (blocked intervals per satellite)
         # =====================================================================
         blocked_intervals_by_satellite: Dict[str, List[tuple]] = {}
+        existing_target_ids: set[str] = set()
 
         if request.mode == "incremental":
             logger.info(f"[INCREMENTAL MODE] Loading committed acquisitions...")
+            existing_target_ids = _load_workspace_planning_baseline_target_ids(
+                request.workspace_id
+            )
 
             # Get time window from mission data
             mission_start = mission_data.get("start_time")
@@ -3530,11 +3712,32 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
                         blocked_intervals_by_satellite[sat_name] = [
                             (acq.start_time, acq.end_time) for acq in committed
                         ]
+                        existing_target_ids.update(
+                            acq.target_id for acq in committed if acq.target_id
+                        )
                         logger.debug(
                             "[INCREMENTAL MODE] Satellite %s: %d committed acquisitions",
                             sat_name,
                             len(committed),
                         )
+
+                current_target_ids = {
+                    target.name for target in targets if getattr(target, "name", "")
+                }
+                new_target_ids = current_target_ids - existing_target_ids
+                if new_target_ids:
+                    original_target_count = len(opportunities)
+                    opportunities = [
+                        opp for opp in opportunities if opp.target_id in new_target_ids
+                    ]
+                    logger.info(
+                        "[INCREMENTAL MODE] Restricted opportunities to %d newly added target(s): %s "
+                        "(kept %d of %d candidate opportunities)",
+                        len(new_target_ids),
+                        ", ".join(sorted(list(new_target_ids))[:5]),
+                        len(opportunities),
+                        original_target_count,
+                    )
 
                 # Filter opportunities that overlap with blocked intervals
                 original_count = len(opportunities)
@@ -3546,19 +3749,39 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
 
                     # Check if this opportunity overlaps any blocked interval
                     opp_start = (
-                        opp.start_time.isoformat()
-                        if hasattr(opp.start_time, "isoformat")
-                        else str(opp.start_time)
+                        opp.start_time
+                        if isinstance(opp.start_time, datetime)
+                        else datetime.fromisoformat(
+                            str(opp.start_time).replace("Z", "+00:00")
+                        )
                     )
                     opp_end = (
-                        opp.end_time.isoformat()
-                        if hasattr(opp.end_time, "isoformat")
-                        else str(opp.end_time)
+                        opp.end_time
+                        if isinstance(opp.end_time, datetime)
+                        else datetime.fromisoformat(
+                            str(opp.end_time).replace("Z", "+00:00")
+                        )
                     )
 
                     for block_start, block_end in blocked:
-                        # Overlap check: opp_start < block_end AND opp_end > block_start
-                        if opp_start < block_end and opp_end > block_start:
+                        block_start_dt = (
+                            block_start
+                            if isinstance(block_start, datetime)
+                            else datetime.fromisoformat(
+                                str(block_start).replace("Z", "+00:00")
+                            )
+                        )
+                        block_end_dt = (
+                            block_end
+                            if isinstance(block_end, datetime)
+                            else datetime.fromisoformat(
+                                str(block_end).replace("Z", "+00:00")
+                            )
+                        )
+
+                        # Inclusive overlap check: exact point opportunities should be
+                        # considered blocked when they match an existing committed slot.
+                        if opp_start <= block_end_dt and opp_end >= block_start_dt:
                             is_blocked = True
                             break
 
@@ -3918,6 +4141,37 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
         # Add audit metadata to results
         results["audit"] = audit_metadata  # type: ignore[assignment]
 
+        if request.workspace_id:
+            try:
+                ws_db = get_workspace_db()
+                ws_db.ensure_workspace(request.workspace_id)
+                workspace = ws_db.get_workspace(request.workspace_id, include_czml=False)
+                if workspace:
+                    planning_state = dict(workspace.planning_state or {})
+                    planning_state.update(
+                        {
+                            "current_target_ids": [
+                                target_summary["name"]
+                                for target_summary in (
+                                    _serialize_workspace_target(target)
+                                    for target in targets
+                                )
+                                if target_summary.get("name")
+                            ],
+                            "last_planning_mode": request.mode,
+                            "last_plan_id": candidate_plan_id,
+                            "last_plan_input_hash": plan_input_hash,
+                        }
+                    )
+                    ws_db.update_workspace(
+                        workspace_id=request.workspace_id,
+                        planning_state=planning_state,
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"[Planning] Failed to persist workspace planning baseline: {e}"
+                )
+
         logger.info(
             f"[AUDIT] run_id={run_id}, input_hash={plan_input_hash}, opps={len(opportunities_considered)}"
         )
@@ -3941,10 +4195,10 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
 
 
 @app.get("/api/v1/planning/opportunities")
-async def get_opportunities() -> Dict[str, Any]:
+async def get_opportunities(workspace_id: Optional[str] = None) -> Dict[str, Any]:
     """Get opportunities from last mission analysis."""
     try:
-        _cmd = getattr(app.state, "current_mission_data", {})
+        _cmd = get_current_mission_data(workspace_id)
 
         if not _cmd or "passes" not in _cmd:
             raise HTTPException(status_code=404, detail="No mission analysis available")

@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
+from src.mission_planner.quality_scoring import MultiCriteriaWeights
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -90,6 +92,10 @@ def select_planning_mode(
     existing_acquisition_count: int,
     existing_target_ids: Optional[Set[str]],
     current_target_ids: Optional[Set[str]],
+    target_priorities: Optional[Dict[str, int]] = None,
+    weight_priority: float = 40.0,
+    weight_geometry: float = 40.0,
+    weight_timing: float = 20.0,
     conflict_count: int = 0,
     previous_plan_count: int = 0,
     request_payload_hash: str = "",
@@ -114,6 +120,7 @@ def select_planning_mode(
     existing_targets = existing_target_ids or set()
     current_targets = current_target_ids or set()
     new_targets = current_targets - existing_targets
+    priorities = target_priorities or {}
 
     result = ModeSelectionResult(
         mode="from_scratch",
@@ -145,10 +152,54 @@ def select_planning_mode(
         _log_mode_selection(result)
         return result
 
+    existing_target_priorities = [
+        priorities[target_id]
+        for target_id in existing_targets
+        if target_id in priorities and isinstance(priorities[target_id], int)
+    ]
+    new_target_priorities = [
+        priorities[target_id]
+        for target_id in new_targets
+        if target_id in priorities and isinstance(priorities[target_id], int)
+    ]
+    best_existing_priority = (
+        min(existing_target_priorities) if existing_target_priorities else None
+    )
+    best_new_priority = min(new_target_priorities) if new_target_priorities else None
+    weights = MultiCriteriaWeights(
+        priority=weight_priority,
+        geometry=weight_geometry,
+        timing=weight_timing,
+    )
+    priority_gap = (
+        (best_existing_priority - best_new_priority)
+        if best_existing_priority is not None and best_new_priority is not None
+        else 0
+    )
+    priority_uplift = weights.norm_priority * max(priority_gap, 0) / 4.0
+
     # Rule 2: New targets added to existing schedule → INCREMENTAL.
-    # Plan new targets around the existing committed/locked acquisitions
-    # without disturbing them.  This is the core "add on top" workflow.
+    # Escalate to REPAIR when the newly added work is higher priority than the
+    # existing scheduled target set *and* the active scoring weights place
+    # enough emphasis on priority to justify reshuffling.
     if len(new_targets) > 0:
+        if (
+            best_new_priority is not None
+            and best_existing_priority is not None
+            and best_new_priority < best_existing_priority
+            and priority_uplift >= 0.25
+        ):
+            result.mode = "repair"
+            result.reason = (
+                f"{len(new_targets)} new target(s) detected "
+                f"({', '.join(sorted(new_targets)[:5])}) and they include higher-priority work "
+                f"(best new P{best_new_priority} vs existing best P{best_existing_priority}, "
+                f"priority weight {weights.norm_priority:.0%}). "
+                f"Repairing the current schedule to allow weight-aware reshuffling."
+            )
+            _log_mode_selection(result)
+            return result
+
         result.mode = "incremental"
         result.reason = (
             f"{len(new_targets)} new target(s) detected "

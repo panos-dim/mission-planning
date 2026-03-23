@@ -185,7 +185,6 @@ export const useExplorerStore = create<ExplorerStore>()(
               "assets",
               "satellites",
               "targets",
-              "ground_stations",
               "constraints",
               "runs",
               "results",

@@ -48,21 +48,38 @@ def _normalize_workspace_id(workspace_id: Optional[str]) -> str:
     return workspace_id or DEFAULT_WORKSPACE_ID
 
 
+def _workspace_placeholder_name(workspace_id: str) -> str:
+    """Generate a stable placeholder name for schedule-created workspaces."""
+    if workspace_id == DEFAULT_WORKSPACE_ID:
+        return "Default Workspace"
+    return f"Workspace {workspace_id[:8]}"
+
+
 def _ensure_workspace_exists(
     cursor: sqlite3.Cursor,
     workspace_id: str,
 ) -> None:
-    """Ensure the implicit default workspace exists for FK-backed schedule writes."""
-    if workspace_id != DEFAULT_WORKSPACE_ID:
-        return
-
+    """Ensure a workspace row exists before any FK-backed schedule write."""
     try:
+        now = _utc_now_z()
         cursor.execute(
             """
-            INSERT OR IGNORE INTO workspaces (id, name)
+            INSERT OR IGNORE INTO workspaces (id, name, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+        """,
+            (
+                workspace_id,
+                _workspace_placeholder_name(workspace_id),
+                now,
+                now,
+            ),
+        )
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO workspace_blobs (workspace_id, created_at)
             VALUES (?, ?)
         """,
-            (DEFAULT_WORKSPACE_ID, "Default Workspace"),
+            (workspace_id, now),
         )
     except sqlite3.OperationalError as exc:
         if "no such table" not in str(exc):
@@ -1386,12 +1403,17 @@ class ScheduleDB:
         """
         order_id = f"ord_{uuid.uuid4().hex[:12]}"
         now = _utc_now_z()
+        effective_workspace_id = (
+            _normalize_workspace_id(workspace_id) if workspace_id else None
+        )
 
         constraints_json = json.dumps(constraints) if constraints else None
         tags_json = json.dumps(tags) if tags else None
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            if effective_workspace_id:
+                _ensure_workspace_exists(cursor, effective_workspace_id)
             cursor.execute(
                 """
                 INSERT INTO orders (
@@ -1415,7 +1437,7 @@ class ScheduleDB:
                     source,
                     notes,
                     external_ref,
-                    workspace_id,
+                    effective_workspace_id,
                     order_type,
                     due_time,
                     earliest_start,
@@ -1442,7 +1464,7 @@ class ScheduleDB:
             source=source,
             notes=notes,
             external_ref=external_ref,
-            workspace_id=workspace_id,
+            workspace_id=effective_workspace_id,
             order_type=order_type,
             due_time=due_time,
             earliest_start=earliest_start,
@@ -1781,6 +1803,7 @@ class ScheduleDB:
         end_time: Optional[str] = None,
         state: Optional[str] = None,
         include_tentative: bool = True,
+        include_failed: bool = False,
         limit: int = 500,
         offset: int = 0,
     ) -> List[Acquisition]:
@@ -1793,6 +1816,7 @@ class ScheduleDB:
             end_time: Filter acquisitions ending before this time
             state: Filter by state
             include_tentative: Include tentative acquisitions
+            include_failed: Include superseded failed acquisitions
             limit: Max results
             offset: Pagination offset
 
@@ -1823,6 +1847,8 @@ class ScheduleDB:
                 params.append(state)
             if not include_tentative:
                 query += " AND state != 'tentative'"
+            if not include_failed:
+                query += " AND state != 'failed'"
 
             query += " ORDER BY start_time ASC LIMIT ? OFFSET ?"
             params.extend([limit, offset])
@@ -1969,6 +1995,7 @@ class ScheduleDB:
         workspace_id: Optional[str] = None,
         satellite_id: Optional[str] = None,
         include_tentative: bool = True,
+        include_failed: bool = False,
     ) -> List[Acquisition]:
         """Get acquisitions within a time horizon.
 
@@ -1981,6 +2008,7 @@ class ScheduleDB:
             workspace_id: Filter by workspace
             satellite_id: Filter by satellite
             include_tentative: Include tentative acquisitions
+            include_failed: Include superseded failed acquisitions
 
         Returns:
             List of overlapping Acquisition objects
@@ -2005,6 +2033,8 @@ class ScheduleDB:
                 params.append(satellite_id)
             if not include_tentative:
                 query += " AND state != 'tentative'"
+            if not include_failed:
+                query += " AND state != 'failed'"
 
             query += " ORDER BY start_time ASC"
 
@@ -2016,6 +2046,7 @@ class ScheduleDB:
         workspace_id: Optional[str] = None,
         satellite_id: Optional[str] = None,
         include_tentative: bool = True,
+        include_failed: bool = False,
     ) -> tuple[Optional[str], Optional[str]]:
         """Get the earliest start and latest end across matching acquisitions.
 
@@ -2023,6 +2054,7 @@ class ScheduleDB:
             workspace_id: Optional workspace filter
             satellite_id: Optional satellite filter
             include_tentative: Include tentative acquisitions in the bounds
+            include_failed: Include superseded failed acquisitions in the bounds
 
         Returns:
             Tuple of (earliest_start_time, latest_end_time). Each element is
@@ -2048,6 +2080,8 @@ class ScheduleDB:
                 params.append(satellite_id)
             if not include_tentative:
                 query += " AND state != 'tentative'"
+            if not include_failed:
+                query += " AND state != 'failed'"
 
             cursor.execute(query, params)
             row = cursor.fetchone()
@@ -2082,8 +2116,8 @@ class ScheduleDB:
             query = """
                 SELECT * FROM acquisitions
                 WHERE satellite_id = ?
-                  AND start_time < ?
-                  AND end_time > ?
+                  AND start_time <= ?
+                  AND end_time >= ?
                   AND (state IN ('committed', 'locked', 'executing')
                        OR lock_level = 'hard')
             """
@@ -3498,9 +3532,14 @@ class ScheduleDB:
         audit_id = f"audit_{uuid.uuid4().hex[:12]}"
         now = _utc_now_z()
         repair_diff_json = json.dumps(repair_diff) if repair_diff else None
+        effective_workspace_id = (
+            _normalize_workspace_id(workspace_id) if workspace_id else None
+        )
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            if effective_workspace_id:
+                _ensure_workspace_exists(cursor, effective_workspace_id)
             cursor.execute(
                 """
                 INSERT INTO commit_audit_logs (
@@ -3514,7 +3553,7 @@ class ScheduleDB:
                     audit_id,
                     now,
                     plan_id,
-                    workspace_id,
+                    effective_workspace_id,
                     committed_by,
                     commit_type,
                     config_hash,
@@ -3539,7 +3578,7 @@ class ScheduleDB:
             id=audit_id,
             created_at=now,
             plan_id=plan_id,
-            workspace_id=workspace_id,
+            workspace_id=effective_workspace_id,
             committed_by=committed_by,
             commit_type=commit_type,
             config_hash=config_hash,
@@ -3656,11 +3695,11 @@ class ScheduleDB:
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            _ensure_workspace_exists(cursor, effective_workspace_id)
 
             try:
                 # Start transaction (implicit with BEGIN)
                 cursor.execute("BEGIN IMMEDIATE")
+                _ensure_workspace_exists(cursor, effective_workspace_id)
 
                 # Optimistic concurrency check: reject if revision has changed
                 if expected_revision is not None:
@@ -3864,9 +3903,11 @@ class ScheduleDB:
         """
         batch_id = f"batch_{uuid.uuid4().hex[:12]}"
         now = _utc_now_z()
+        effective_workspace_id = _normalize_workspace_id(workspace_id)
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            _ensure_workspace_exists(cursor, effective_workspace_id)
             cursor.execute(
                 """
                 INSERT INTO order_batches (
@@ -3874,12 +3915,12 @@ class ScheduleDB:
                     horizon_from, horizon_to, status, notes
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-                (
-                    batch_id,
-                    workspace_id,
-                    now,
-                    now,
-                    policy_id,
+                    (
+                        batch_id,
+                        effective_workspace_id,
+                        now,
+                        now,
+                        policy_id,
                     horizon_from,
                     horizon_to,
                     "draft",
@@ -3892,7 +3933,7 @@ class ScheduleDB:
 
         return OrderBatch(
             id=batch_id,
-            workspace_id=workspace_id,
+            workspace_id=effective_workspace_id,
             created_at=now,
             updated_at=now,
             policy_id=policy_id,
@@ -4284,9 +4325,11 @@ class ScheduleDB:
         """
         created_orders: List[Order] = []
         now = _utc_now_z()
+        effective_workspace_id = _normalize_workspace_id(workspace_id)
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            _ensure_workspace_exists(cursor, effective_workspace_id)
 
             for data in orders_data:
                 order_id = f"ord_{uuid.uuid4().hex[:12]}"
@@ -4320,7 +4363,7 @@ class ScheduleDB:
                         source,
                         data.get("notes"),
                         data.get("external_ref"),
-                        workspace_id,
+                        effective_workspace_id,
                         data.get("order_type", "IMAGING"),
                         data.get("due_time"),
                         data.get("earliest_start"),
@@ -4345,7 +4388,7 @@ class ScheduleDB:
                         source=source,
                         notes=data.get("notes"),
                         external_ref=data.get("external_ref"),
-                        workspace_id=workspace_id,
+                        workspace_id=effective_workspace_id,
                         order_type=data.get("order_type", "IMAGING"),
                         due_time=data.get("due_time"),
                         earliest_start=data.get("earliest_start"),

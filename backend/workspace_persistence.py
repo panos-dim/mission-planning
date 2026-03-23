@@ -11,6 +11,7 @@ Provides SQLite-based persistence for workspace state, enabling:
 import json
 import logging
 import os
+import re
 import sqlite3
 import uuid
 import zlib
@@ -27,6 +28,45 @@ SCHEMA_VERSION = "1.0"
 
 # Default database path
 DEFAULT_DB_PATH = Path(__file__).parent.parent / "data" / "workspaces.db"
+_TZ_SUFFIX_WITH_Z_RE = re.compile(r"[+-]\d{2}:\d{2}Z$")
+
+
+def _isoformat_z(value: datetime) -> str:
+    """Return a canonical UTC timestamp using a trailing Z suffix."""
+    if value.tzinfo is None:
+        return value.isoformat() + "Z"
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _normalize_timestamp(value: Optional[str]) -> Optional[str]:
+    """Normalize legacy timestamp strings to a single ISO-8601 UTC format."""
+    if value is None:
+        return None
+
+    normalized = value.strip()
+    if not normalized:
+        return normalized
+
+    if _TZ_SUFFIX_WITH_Z_RE.search(normalized):
+        normalized = normalized[:-1]
+    elif normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    elif " " in normalized and "T" not in normalized:
+        normalized = normalized.replace(" ", "T", 1)
+
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return value
+
+    return _isoformat_z(parsed)
+
+
+def _placeholder_workspace_name(workspace_id: str) -> str:
+    """Generate a stable placeholder name for implicit workspace rows."""
+    if workspace_id == "default":
+        return "Default Workspace"
+    return f"Workspace {workspace_id[:8]}"
 
 
 @dataclass
@@ -51,8 +91,8 @@ class WorkspaceSummary:
         return {
             "id": self.id,
             "name": self.name,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
+            "created_at": _normalize_timestamp(self.created_at),
+            "updated_at": _normalize_timestamp(self.updated_at),
             "mission_mode": self.mission_mode,
             "time_window_start": self.time_window_start,
             "time_window_end": self.time_window_end,
@@ -97,8 +137,8 @@ class WorkspaceData:
         result = {
             "id": self.id,
             "name": self.name,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
+            "created_at": _normalize_timestamp(self.created_at),
+            "updated_at": _normalize_timestamp(self.updated_at),
             "schema_version": self.schema_version,
             "app_version": self.app_version,
             "mission_mode": self.mission_mode,
@@ -107,7 +147,7 @@ class WorkspaceData:
             "satellites_count": self.satellites_count,
             "targets_count": self.targets_count,
             "last_run_status": self.last_run_status,
-            "last_run_timestamp": self.last_run_timestamp,
+            "last_run_timestamp": _normalize_timestamp(self.last_run_timestamp),
             "scenario_config": self.scenario_config,
             "analysis_state": self.analysis_state,
             "planning_state": self.planning_state,
@@ -262,7 +302,7 @@ class WorkspaceDB:
             Workspace ID
         """
         workspace_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _isoformat_z(datetime.now(timezone.utc))
 
         # Extract counts from scenario config
         satellites_count = 0
@@ -340,6 +380,36 @@ class WorkspaceDB:
             logger.info(f"Created workspace '{name}' with ID: {workspace_id}")
             return workspace_id
 
+    def ensure_workspace(self, workspace_id: str, name: Optional[str] = None) -> None:
+        """Ensure a workspace row and blob row exist for a known ID."""
+        now = _isoformat_z(datetime.now(timezone.utc))
+        resolved_name = name or _placeholder_workspace_name(workspace_id)
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO workspaces (
+                    id, name, created_at, updated_at, schema_version
+                ) VALUES (?, ?, ?, ?, ?)
+            """,
+                (
+                    workspace_id,
+                    resolved_name,
+                    now,
+                    now,
+                    SCHEMA_VERSION,
+                ),
+            )
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO workspace_blobs (workspace_id, created_at)
+                VALUES (?, ?)
+            """,
+                (workspace_id, now),
+            )
+            conn.commit()
+
     def update_workspace(
         self,
         workspace_id: str,
@@ -372,7 +442,7 @@ class WorkspaceDB:
         Returns:
             True if update succeeded
         """
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _isoformat_z(datetime.now(timezone.utc))
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -441,6 +511,13 @@ class WorkspaceDB:
                 blob_params.append(czml_blob)
 
             if blob_updates:
+                cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO workspace_blobs (workspace_id, created_at)
+                    VALUES (?, ?)
+                """,
+                    (workspace_id, now),
+                )
                 blob_params.append(workspace_id)
                 cursor.execute(
                     f"UPDATE workspace_blobs SET {', '.join(blob_updates)} WHERE workspace_id = ?",
@@ -619,7 +696,7 @@ class WorkspaceDB:
             return None
 
         export_data = workspace.to_dict(include_czml=True)
-        export_data["export_timestamp"] = datetime.now(timezone.utc).isoformat() + "Z"
+        export_data["export_timestamp"] = _isoformat_z(datetime.now(timezone.utc))
         export_data["export_version"] = SCHEMA_VERSION
 
         return export_data

@@ -130,12 +130,14 @@ export async function getScheduleHorizon(params?: {
   to?: string
   workspace_id?: string
   include_tentative?: boolean
+  include_failed?: boolean
 }): Promise<ScheduleHorizonResponse> {
   const qs = buildQuery({
     from: params?.from,
     to: params?.to,
     workspace_id: params?.workspace_id,
     include_tentative: params?.include_tentative,
+    include_failed: params?.include_failed,
   })
   return apiClient.get<ScheduleHorizonResponse>(`${API_ENDPOINTS.SCHEDULE_HORIZON}${qs}`)
 }
@@ -143,8 +145,11 @@ export async function getScheduleHorizon(params?: {
 /**
  * Get current schedule state (acquisitions, orders, conflicts).
  */
-export async function getScheduleState(workspace_id?: string): Promise<ScheduleStateResponse> {
-  const qs = buildQuery({ workspace_id })
+export async function getScheduleState(
+  workspace_id?: string,
+  options?: { include_failed?: boolean },
+): Promise<ScheduleStateResponse> {
+  const qs = buildQuery({ workspace_id, include_failed: options?.include_failed })
   return apiClient.get<ScheduleStateResponse>(`${API_ENDPOINTS.SCHEDULE_STATE}${qs}`)
 }
 
@@ -490,6 +495,19 @@ export interface IncrementalPlanResponse {
   schedule_context: Record<string, unknown>
 }
 
+export interface PlanningModeSelectionResponse {
+  success: boolean
+  planning_mode: PlanningMode
+  reason: string
+  workspace_id: string
+  existing_acquisition_count: number
+  new_target_count: number
+  conflict_count: number
+  current_target_ids: string[]
+  existing_target_ids: string[]
+  request_payload_hash: string
+}
+
 /**
  * Create an incremental plan.
  * In incremental mode, plans around existing committed acquisitions.
@@ -537,6 +555,21 @@ export async function getScheduleContext(params: {
       end: horizonResponse.horizon.end || '',
     },
   }
+}
+
+/**
+ * Ask the backend which planning mode it would choose for the current workspace state.
+ */
+export async function getPlanningModeSelection(params: {
+  workspace_id?: string
+  planning_mode?: PlanningMode
+  horizon_from?: string
+  horizon_to?: string
+  weight_priority?: number
+  weight_geometry?: number
+  weight_timing?: number
+}): Promise<PlanningModeSelectionResponse> {
+  return apiClient.post<PlanningModeSelectionResponse>(API_ENDPOINTS.SCHEDULE_MODE_SELECTION, params)
 }
 
 // =============================================================================

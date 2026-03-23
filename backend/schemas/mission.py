@@ -70,6 +70,10 @@ class MissionRequest(BaseModel):
     satellites: Optional[List[TLEData]] = Field(
         default=None, description="List of satellite TLEs for constellation mission"
     )
+    workspace_id: Optional[str] = Field(
+        default=None,
+        description="Optional workspace scope for mission analysis state",
+    )
 
     targets: List[TargetData]
     start_time: str  # ISO format
@@ -108,7 +112,8 @@ class MissionRequest(BaseModel):
         description="Sensor FOV half-angle in degrees (camera field of view)",
     )
     ground_station_name: Optional[str] = Field(
-        default=None, description="Use specific ground station configuration"
+        default=None,
+        description="Deprecated and ignored; ground stations are not used by mission analysis",
     )
     use_parallel: Optional[bool] = Field(
         default=None,

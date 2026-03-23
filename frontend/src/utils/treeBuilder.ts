@@ -25,8 +25,6 @@ export const NODE_ICONS: Record<TreeNodeType, string> = {
   assets: "Box",
   satellites: "Satellite",
   satellite: "Satellite",
-  ground_stations: "Radio",
-  ground_station: "Radio",
   targets: "Target",
   target: "MapPin",
   constraints: "Settings",
@@ -110,7 +108,7 @@ export function buildObjectTree(input: TreeBuilderInput): TreeNode {
   const scenarioNode = buildScenarioNode(workspaceData, missionData);
   workspaceNode.children!.push(scenarioNode);
 
-  // Assets node (Satellites, Ground Stations)
+  // Assets node
   const assetsNode = buildAssetsNode(missionData, sceneObjects);
   workspaceNode.children!.push(assetsNode);
 
@@ -179,9 +177,6 @@ function buildAssetsNode(
   sceneObjects: SceneObject[],
 ): TreeNode {
   const satellites = sceneObjects.filter((obj) => obj.type === "satellite");
-  const groundStations = sceneObjects.filter(
-    (obj) => obj.type === "ground_station",
-  );
 
   // Also check missionData for satellites
   const missionSatellites = missionData?.satellites || [];
@@ -228,18 +223,6 @@ function buildAssetsNode(
     }
   });
 
-  const groundStationNodes: TreeNode[] = groundStations.map((gs) => ({
-    id: `ground_station_${gs.id}`,
-    type: "ground_station" as TreeNodeType,
-    name: gs.name,
-    icon: NODE_ICONS.ground_station,
-    isLeaf: true,
-    metadata: {
-      position: gs.position,
-      color: gs.color,
-    },
-  }));
-
   return {
     id: "assets",
     type: "assets",
@@ -255,15 +238,6 @@ function buildAssetsNode(
         isExpandable: satelliteNodes.length > 0,
         badge: createBadge(satelliteNodes.length, "blue"),
         children: satelliteNodes,
-      },
-      {
-        id: "ground_stations",
-        type: "ground_stations",
-        name: "Ground Stations",
-        icon: NODE_ICONS.ground_stations,
-        isExpandable: groundStationNodes.length > 0,
-        badge: createBadge(groundStationNodes.length, "gray"),
-        children: groundStationNodes,
       },
     ],
   };

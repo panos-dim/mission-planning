@@ -146,6 +146,7 @@ def _seed(
     tle: Dict[str, str],
     targets: List[Dict],
     days: int = 3,
+    workspace_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Seed mission analysis with single satellite. Returns response."""
     now = datetime.now(timezone.utc)
@@ -156,6 +157,8 @@ def _seed(
         "end_time": (now + timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "imaging_type": "optical",
     }
+    if workspace_id:
+        payload["workspace_id"] = workspace_id
     return _post("/mission/analyze", payload, timeout=120)
 
 
@@ -163,6 +166,7 @@ def _seed_constellation(
     satellites: List[Dict],
     targets: List[Dict],
     days: int = 3,
+    workspace_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Seed mission analysis with constellation."""
     now = datetime.now(timezone.utc)
@@ -173,6 +177,8 @@ def _seed_constellation(
         "end_time": (now + timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "imaging_type": "optical",
     }
+    if workspace_id:
+        payload["workspace_id"] = workspace_id
     return _post("/mission/analyze", payload, timeout=120)
 
 
@@ -279,9 +285,12 @@ def _commit(plan_id: str, workspace_id: str, **kwargs: Any) -> Dict[str, Any]:
     return _post("/schedule/commit", payload)
 
 
-def _state(workspace_id: str) -> Dict[str, Any]:
+def _state(workspace_id: str, include_failed: bool = False) -> Dict[str, Any]:
     """Get schedule state for workspace. Returns the 'state' dict."""
-    resp = _get("/schedule/state", {"workspace_id": workspace_id})
+    resp = _get(
+        "/schedule/state",
+        {"workspace_id": workspace_id, "include_failed": include_failed},
+    )
     state = resp.get("state", {})
     assert isinstance(state, dict), f"Schedule state is not an object: {resp}"
     return cast(Dict[str, Any], state)
@@ -1468,7 +1477,7 @@ class TestScaleSingleSatellite:
         ws = _create_workspace(f"scale1_{uuid.uuid4().hex[:6]}")
         try:
             # Seed with 20 targets
-            seed = _seed(TLE_SAT1, SCALE_TARGETS_BATCH_1, days=3)
+            seed = _seed(TLE_SAT1, SCALE_TARGETS_BATCH_1, days=3, workspace_id=ws)
             assert seed["success"], f"Seed failed: {seed.get('message')}"
             passes = seed.get("data", {}).get("mission_data", {}).get("passes", [])
             print(f"Batch 1 seed: {len(passes)} passes for 20 targets")
@@ -1501,7 +1510,7 @@ class TestScaleSingleSatellite:
 
             # --- Add 15 more targets (batch 2) → INCREMENTAL ---
             all_targets_35 = SCALE_TARGETS_BATCH_1 + SCALE_TARGETS_BATCH_2
-            seed2 = _seed(TLE_SAT1, all_targets_35, days=3)
+            seed2 = _seed(TLE_SAT1, all_targets_35, days=3, workspace_id=ws)
             assert seed2["success"]
             passes2 = seed2.get("data", {}).get("mission_data", {}).get("passes", [])
             print(f"Batch 1+2 seed: {len(passes2)} passes for 35 targets")
@@ -1532,7 +1541,7 @@ class TestScaleSingleSatellite:
 
             # --- Add 15 more targets (batch 3) → total 50 → INCREMENTAL ---
             all_targets_50 = all_targets_35 + SCALE_TARGETS_BATCH_3
-            seed3 = _seed(TLE_SAT1, all_targets_50, days=3)
+            seed3 = _seed(TLE_SAT1, all_targets_50, days=3, workspace_id=ws)
             assert seed3["success"]
             passes3 = seed3.get("data", {}).get("mission_data", {}).get("passes", [])
             print(f"Batch 1+2+3 seed: {len(passes3)} passes for 50 targets")
@@ -1645,7 +1654,9 @@ class TestScaleConstellation:
             sats = [TLE_SAT1, TLE_SAT2, TLE_SAT3]
 
             # --- Batch 1: 20 targets, 3 satellites ---
-            seed1 = _seed_constellation(sats, SCALE_TARGETS_BATCH_1, days=3)
+            seed1 = _seed_constellation(
+                sats, SCALE_TARGETS_BATCH_1, days=3, workspace_id=ws
+            )
             assert seed1[
                 "success"
             ], f"Constellation seed failed: {seed1.get('message')}"
@@ -1690,7 +1701,7 @@ class TestScaleConstellation:
 
             # --- Batch 2: add 15 more targets → 35 total ---
             all_35 = SCALE_TARGETS_BATCH_1 + SCALE_TARGETS_BATCH_2
-            seed2 = _seed_constellation(sats, all_35, days=3)
+            seed2 = _seed_constellation(sats, all_35, days=3, workspace_id=ws)
             assert seed2["success"]
             passes2 = seed2.get("data", {}).get("mission_data", {}).get("passes", [])
             print(f"Const batch 2: {len(passes2)} passes for 35 targets")
@@ -1716,7 +1727,7 @@ class TestScaleConstellation:
 
             # --- Batch 3: add 15 more → 50 total ---
             all_50 = all_35 + SCALE_TARGETS_BATCH_3
-            seed3 = _seed_constellation(sats, all_50, days=3)
+            seed3 = _seed_constellation(sats, all_50, days=3, workspace_id=ws)
             assert seed3["success"]
             passes3 = seed3.get("data", {}).get("mission_data", {}).get("passes", [])
             print(f"Const batch 3: {len(passes3)} passes for 50 targets")
@@ -2478,13 +2489,16 @@ class TestAdvancedModeSelection:
 # =============================================================================
 
 
-def _horizon(workspace_id: str, days: int = 7) -> List[Dict[str, Any]]:
+def _horizon(
+    workspace_id: str, days: int = 7, include_failed: bool = False
+) -> List[Dict[str, Any]]:
     """Get ALL acquisitions via /schedule/horizon (no limit, unlike _state)."""
     now = datetime.now(timezone.utc)
     params = {
         "workspace_id": workspace_id,
         "from": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "to": (now + timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "include_failed": include_failed,
     }
     resp = _get("/schedule/horizon", params)
     acquisitions = resp.get("acquisitions", [])
@@ -3157,7 +3171,7 @@ class TestConflictResolution:
                 # Verify dropped acqs are marked as 'failed' (soft-delete)
                 # The system preserves history by setting state='failed'
                 # rather than hard-deleting the rows.
-                post_acqs = _horizon(ws)
+                post_acqs = _horizon(ws, include_failed=True)
                 post_by_id = {a["id"]: a for a in post_acqs}
                 for d in drops:
                     if d in post_by_id:
@@ -3720,7 +3734,7 @@ class TestRepairCommitProtections:
                 "success"
             ], f"Scoped repair commit failed: {repair_commit}"
 
-            post_by_id = {a["id"]: a for a in _horizon(ws)}
+            post_by_id = {a["id"]: a for a in _horizon(ws, include_failed=True)}
             assert conflict_sat1_id in post_by_id
             assert post_by_id[conflict_sat1_id].get("state") == "failed"
             assert fixed_sat2_id in post_by_id

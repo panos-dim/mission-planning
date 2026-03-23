@@ -21,7 +21,6 @@ export const API_ENDPOINTS = {
   TLE_CATALOG: (sourceId: string) => `/api/v1/tle/catalog/${sourceId}`,
 
   // Config endpoints
-  CONFIG_GROUND_STATIONS: '/api/v1/config/ground-stations',
   CONFIG_MISSION_SETTINGS: '/api/v1/config/mission-settings',
   CONFIG_SATELLITES: '/api/v1/config/satellites',
   CONFIG_SATELLITE_CONFIG_SUMMARY: '/api/v1/config/satellite-config-summary',
@@ -42,6 +41,7 @@ export const API_ENDPOINTS = {
   SCHEDULE_STATE: '/api/v1/schedule/state',
   SCHEDULE_CONFLICTS: '/api/v1/schedule/conflicts',
   SCHEDULE_CONFLICTS_RECOMPUTE: '/api/v1/schedule/conflicts/recompute',
+  SCHEDULE_MODE_SELECTION: '/api/v1/schedule/mode-selection',
   SCHEDULE_PLAN: '/api/v1/schedule/plan',
   SCHEDULE_REPAIR: '/api/v1/schedule/repair',
   SCHEDULE_REPAIR_COMMIT: '/api/v1/schedule/repair/commit',

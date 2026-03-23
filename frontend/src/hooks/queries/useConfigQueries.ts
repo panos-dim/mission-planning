@@ -6,18 +6,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { configApi } from '../../api'
 import { queryKeys } from '../../lib/queryClient'
-import type { GroundStationsResponse, MissionSettingsResponse, SatellitesResponse } from '../../api'
-
-/**
- * Hook to fetch ground stations configuration
- */
-export function useGroundStations() {
-  return useQuery<GroundStationsResponse>({
-    queryKey: queryKeys.config.groundStations(),
-    queryFn: () => configApi.getGroundStations(),
-    staleTime: 1000 * 60 * 10, // 10 minutes - config rarely changes
-  })
-}
+import type { MissionSettingsResponse, SatellitesResponse } from '../../api'
 
 /**
  * Hook to fetch mission settings

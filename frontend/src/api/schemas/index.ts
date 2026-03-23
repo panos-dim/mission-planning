@@ -152,24 +152,6 @@ export const TLESearchResponseSchema = z.object({
 });
 
 // ============================================
-// Ground Station Config
-// ============================================
-
-export const GroundStationSchema = z.object({
-  id: z.string().optional(),
-  name: z.string(),
-  latitude: z.number(),
-  longitude: z.number(),
-  type: z.string().optional(),
-  description: z.string().optional(),
-});
-
-export const GroundStationsResponseSchema = z.object({
-  success: z.boolean(),
-  ground_stations: z.array(GroundStationSchema),
-});
-
-// ============================================
 // Planning Types
 // ============================================
 
@@ -256,5 +238,4 @@ export type MissionAnalyzeResponseValidated = z.infer<
 export type ValidationResponseValidated = z.infer<
   typeof ValidationResponseSchema
 >;
-export type GroundStationValidated = z.infer<typeof GroundStationSchema>;
 export type AlgorithmResultValidated = z.infer<typeof AlgorithmResultSchema>;

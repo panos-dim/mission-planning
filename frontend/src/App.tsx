@@ -153,7 +153,7 @@ function AppContent(): JSX.Element {
             isOpen={adminPanelOpen}
             onClose={() => setAdminPanelOpen(false)}
             onConfigUpdate={() => {
-              // Trigger refresh of ground stations
+              // Trigger refresh for configuration-dependent views
               setRefreshKey((prev) => prev + 1)
             }}
           />

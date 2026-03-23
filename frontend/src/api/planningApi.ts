@@ -7,6 +7,17 @@ import { apiClient } from './client'
 import { API_ENDPOINTS } from './config'
 import type { Opportunity, PlanningRequest, PlanningResponse } from '../types'
 
+function buildQuery(params: Record<string, string | number | boolean | undefined>): string {
+  const searchParams = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== '') {
+      searchParams.set(key, String(value))
+    }
+  }
+  const queryString = searchParams.toString()
+  return queryString ? `?${queryString}` : ''
+}
+
 // Response types
 export interface OpportunitiesResponse {
   success: boolean
@@ -34,8 +45,14 @@ export const planningApi = {
   /**
    * Get opportunities from last mission analysis
    */
-  async getOpportunities(options?: { signal?: AbortSignal }): Promise<OpportunitiesResponse> {
-    return apiClient.get<OpportunitiesResponse>(API_ENDPOINTS.PLANNING_OPPORTUNITIES, {
+  async getOpportunities(
+    workspaceId?: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<OpportunitiesResponse> {
+    const endpoint = `${API_ENDPOINTS.PLANNING_OPPORTUNITIES}${buildQuery({
+      workspace_id: workspaceId,
+    })}`
+    return apiClient.get<OpportunitiesResponse>(endpoint, {
       signal: options?.signal,
     })
   },

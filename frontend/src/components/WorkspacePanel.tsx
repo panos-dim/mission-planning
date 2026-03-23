@@ -29,6 +29,7 @@ import * as workspacesApi from '../api/workspaces'
 import { usePlanningStore } from '../store/planningStore'
 import { useOrdersStore } from '../store/ordersStore'
 import { useMission } from '../context/MissionContext'
+import { formatShortLocalDateTime } from '../utils/date'
 
 interface WorkspacePanelProps {
   hasMissionData: boolean
@@ -191,21 +192,6 @@ export function WorkspacePanel({ hasMissionData, onWorkspaceLoad }: WorkspacePan
     }
   }
 
-  // Format date for display
-  const formatDate = (dateString: string) => {
-    try {
-      const date = new Date(dateString)
-      return date.toLocaleDateString(undefined, {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      })
-    } catch {
-      return dateString
-    }
-  }
-
   // Get mission mode badge color
   const getModeColor = (mode: string | null) => {
     switch (mode?.toUpperCase()) {
@@ -332,7 +318,7 @@ export function WorkspacePanel({ hasMissionData, onWorkspaceLoad }: WorkspacePan
                       <h4 className="text-sm font-medium text-white truncate">{ws.name}</h4>
                       <div className="flex items-center gap-2 mt-1 text-xs text-gray-400">
                         <Clock className="w-3 h-3" />
-                        <span>{formatDate(ws.updated_at)}</span>
+                        <span>{formatShortLocalDateTime(ws.updated_at)}</span>
                       </div>
                     </div>
                     {ws.mission_mode && (

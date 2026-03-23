@@ -125,6 +125,7 @@ export function usePlanningState() {
   // Computed values
   const hasOpportunities = opportunities.length > 0
   const isDisabled = !hasOpportunities
+  const workspaceId = missionState.activeWorkspace || 'default'
   const uniqueTargets = hasOpportunities
     ? new Set(opportunities.map((opp) => opp.target_id)).size
     : 0
@@ -134,7 +135,7 @@ export function usePlanningState() {
     if (missionState.missionData) {
       loadOpportunities()
     }
-  }, [missionState.missionData])
+  }, [missionState.missionData, loadOpportunities])
 
   // Update slew visualization
   useEffect(() => {
@@ -150,7 +151,9 @@ export function usePlanningState() {
     setError(null)
 
     try {
-      const response = await fetch('/api/v1/planning/opportunities')
+      const response = await fetch(
+        `/api/v1/planning/opportunities?workspace_id=${encodeURIComponent(workspaceId)}`,
+      )
 
       if (response.status === 404) {
         setOpportunities([])
@@ -175,7 +178,7 @@ export function usePlanningState() {
     } finally {
       setOpportunitiesLoading(false)
     }
-  }, [])
+  }, [workspaceId])
 
   const applyPreset = useCallback((presetName: string) => {
     const preset = WEIGHT_PRESETS[presetName]
@@ -229,6 +232,7 @@ export function usePlanningState() {
         // PR_UI_008: No tuning overrides — backend defaults apply
         const request: PlanningRequest = {
           algorithms,
+          workspace_id: workspaceId,
         }
 
         debug.section('MISSION PLANNING')
@@ -282,7 +286,7 @@ export function usePlanningState() {
         setIsPlanning(false)
       }
     },
-    [config, activeTab],
+    [workspaceId],
   )
 
   const handleRunSelected = useCallback(() => {

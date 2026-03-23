@@ -16,7 +16,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -76,6 +76,7 @@ class RepairReasonCode(str, Enum):
 
     HARD_LOCK_CONSTRAINT = "HARD_LOCK_CONSTRAINT"
     CONFLICT_RESOLUTION = "CONFLICT_RESOLUTION"
+    REMOVED_FROM_SCOPE = "REMOVED_FROM_SCOPE"
     PRIORITY_UPGRADE = "PRIORITY_UPGRADE"
     QUALITY_SCORE_UPGRADE = "QUALITY_SCORE_UPGRADE"
     SLEW_CHAIN_FEASIBILITY = "SLEW_CHAIN_FEASIBILITY"
@@ -1372,6 +1373,7 @@ def execute_repair_planning(
     objective: RepairObjective = RepairObjective.MAXIMIZE_SCORE,
     slew_config: Optional[SlewConfig] = None,
     target_priorities: Optional[Dict[str, int]] = None,
+    active_target_ids: Optional[Set[str]] = None,
 ) -> Tuple[List[Dict[str, Any]], RepairDiff, Dict[str, Any]]:
     """
     Execute repair planning: decide what to keep/drop/add/move.
@@ -1387,6 +1389,7 @@ def execute_repair_planning(
         objective: Optimization objective
         slew_config: Slew configuration for feasibility checks
         target_priorities: Optional map of target_name → priority (1=highest, 5=lowest)
+        active_target_ids: Optional set of targets still in the current mission scope
 
     Returns:
         Tuple of (proposed_schedule, repair_diff, metrics)
@@ -1406,6 +1409,15 @@ def execute_repair_planning(
     # All hard-locked items are kept by definition
     for interval in repair_context.fixed_set:
         kept_ids.append(interval.acquisition_id)
+        if (
+            active_target_ids is not None
+            and interval.target_id not in active_target_ids
+            and interval.lock_level == "hard"
+        ):
+            hard_lock_warnings.append(
+                f"Target {interval.target_id} was removed from the current mission scope, "
+                f"but acquisition {interval.acquisition_id} remains because it is hard-locked."
+            )
 
     # Stage B: Decide what to do with flex set
     changes_made = 0
@@ -1431,6 +1443,20 @@ def execute_repair_planning(
 
     # Check each flex item for conflicts with fixed set
     for flex in sorted_flex:
+        if active_target_ids is not None and flex.target_id not in active_target_ids:
+            flex.action = "drop"
+            flex_to_drop.append(flex)
+            dropped_ids.append(flex.acquisition_id)
+            drop_reasons.append(
+                {
+                    "id": flex.acquisition_id,
+                    "reason": (
+                        f"Target {flex.target_id} is no longer in the current mission scope"
+                    ),
+                }
+            )
+            continue
+
         # Check if this flex item conflicts with any fixed item
         is_blocked, blocking = fixed_blocked.is_time_blocked(
             flex.satellite_id,
@@ -2117,6 +2143,8 @@ def execute_repair_planning(
             return RepairReasonCode.PRIORITY_UPGRADE.value
         if "quality" in reason_lower or "score" in reason_lower:
             return RepairReasonCode.QUALITY_SCORE_UPGRADE.value
+        if "current mission scope" in reason_lower or "removed from scope" in reason_lower:
+            return RepairReasonCode.REMOVED_FROM_SCOPE.value
         if "coverage" in reason_lower or "uncovered" in reason_lower:
             return RepairReasonCode.CONFLICT_RESOLUTION.value
         if "slew" in reason_lower or "feasib" in reason_lower:

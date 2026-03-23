@@ -344,6 +344,197 @@ def _refresh_workspace_conflicts_after_mutation(
     return len(detected_conflicts), conflict_ids
 
 
+def _build_current_target_ids(
+    mission_data: Dict[str, Any],
+    raw_opportunities: List[Dict[str, Any]],
+) -> set[str]:
+    """Build current target IDs from mission data, falling back to opportunities."""
+    current_target_ids: set[str] = set()
+
+    for target in mission_data.get("targets", []):
+        if isinstance(target, dict):
+            target_name = target.get("name", "")
+        else:
+            target_name = getattr(target, "name", "")
+        if target_name:
+            current_target_ids.add(target_name)
+
+    if current_target_ids:
+        return current_target_ids
+
+    return {
+        opp["target_id"] if isinstance(opp, dict) else getattr(opp, "target_id", "")
+        for opp in raw_opportunities
+        if (
+            opp["target_id"] if isinstance(opp, dict) else getattr(opp, "target_id", "")
+        )
+    }
+
+
+def _build_target_priorities(mission_data: Dict[str, Any]) -> Dict[str, int]:
+    """Build target priorities from the active mission data."""
+    target_priorities: Dict[str, int] = {}
+
+    for target in mission_data.get("targets", []):
+        if isinstance(target, dict):
+            target_name = str(target.get("name", "")).strip()
+            priority_raw = target.get("priority", 5)
+        else:
+            target_name = str(getattr(target, "name", "")).strip()
+            priority_raw = getattr(target, "priority", 5)
+
+        if not target_name:
+            continue
+
+        try:
+            priority = int(priority_raw)
+        except (TypeError, ValueError):
+            priority = 5
+
+        target_priorities[target_name] = min(5, max(1, priority))
+
+    return target_priorities
+
+
+def _load_workspace_target_baseline(workspace_id: Optional[str]) -> set[str]:
+    """Load the backend baseline target set used for auto-mode comparisons."""
+    if not workspace_id:
+        return set()
+
+    previous_target_ids: set[str] = set()
+
+    try:
+        ws_db = get_workspace_db()
+        workspace = ws_db.get_workspace(workspace_id, include_czml=False)
+        if not workspace:
+            return previous_target_ids
+
+        planning_state = workspace.planning_state or {}
+        stored_target_ids = planning_state.get("current_target_ids", [])
+        if isinstance(stored_target_ids, list):
+            previous_target_ids = {
+                str(target_id) for target_id in stored_target_ids if target_id
+            }
+
+        if not previous_target_ids and workspace.scenario_config:
+            previous_target_ids = {
+                str(target.get("name", ""))
+                for target in workspace.scenario_config.get("targets", [])
+                if target.get("name")
+            }
+
+        if not previous_target_ids and workspace.analysis_state:
+            analysis_targets = workspace.analysis_state.get("mission_data", {}).get(
+                "targets", []
+            )
+            previous_target_ids = {
+                str(target.get("name", ""))
+                for target in analysis_targets
+                if isinstance(target, dict) and target.get("name")
+            }
+    except Exception as e:
+        logger.warning(f"[Auto Mode] Failed to load workspace target baseline: {e}")
+
+    return previous_target_ids
+
+
+def _to_utc_naive(value: datetime) -> datetime:
+    """Normalize a datetime to naive UTC for internal schedule comparisons."""
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _resolve_auto_mode_selection(
+    db: ScheduleDB,
+    *,
+    workspace_id: Optional[str],
+    planning_mode: str,
+    horizon_start: datetime,
+    horizon_end: datetime,
+    raw_opportunities: List[Dict[str, Any]],
+    mission_data: Dict[str, Any],
+    request_payload_hash: str,
+    weight_priority: float = 40.0,
+    weight_geometry: float = 40.0,
+    weight_timing: float = 20.0,
+) -> tuple[Any, Dict[str, Any]]:
+    """Resolve backend auto-mode selection and return planner-facing context."""
+    auto_workspace = workspace_id or "default"
+    normalized_horizon_start = _to_utc_naive(horizon_start)
+    normalized_horizon_end = _to_utc_naive(horizon_end)
+
+    try:
+        existing_acqs = db.get_acquisitions_by_lock_level(auto_workspace)
+    except Exception as e:
+        logger.warning(f"[Auto Mode] Failed to query existing acquisitions: {e}")
+        existing_acqs = []
+
+    active_existing = []
+    for acq in existing_acqs:
+        if acq.state in ("failed", "cancelled", "completed"):
+            continue
+        try:
+            acq_end = _to_utc_naive(
+                datetime.fromisoformat(acq.end_time.replace("Z", "+00:00"))
+            )
+            if acq_end <= normalized_horizon_start:
+                continue
+        except ValueError:
+            pass
+        active_existing.append(acq)
+
+    current_target_ids = _build_current_target_ids(mission_data, raw_opportunities)
+    target_priorities = _build_target_priorities(mission_data)
+    previous_target_ids = _load_workspace_target_baseline(workspace_id)
+    existing_target_ids = previous_target_ids or {
+        acquisition.target_id for acquisition in active_existing
+    }
+
+    conflict_count = 0
+    if active_existing:
+        try:
+            conflicts = db.get_conflicts_in_horizon(
+                start_time=_isoformat_z(normalized_horizon_start),
+                end_time=_isoformat_z(normalized_horizon_end),
+                workspace_id=auto_workspace,
+                include_resolved=False,
+            )
+            conflict_count = len(conflicts)
+        except Exception as e:
+            logger.warning(f"[Auto Mode] Failed to query conflicts: {e}")
+
+    force_mode = None
+    if planning_mode != "from_scratch":
+        force_mode = planning_mode
+
+    mode_result = select_planning_mode(
+        workspace_id=auto_workspace,
+        existing_acquisition_count=len(active_existing),
+        existing_target_ids=existing_target_ids,
+        current_target_ids=current_target_ids,
+        target_priorities=target_priorities,
+        weight_priority=weight_priority,
+        weight_geometry=weight_geometry,
+        weight_timing=weight_timing,
+        conflict_count=conflict_count,
+        previous_plan_count=0,
+        request_payload_hash=request_payload_hash,
+        force_mode=force_mode,
+    )
+
+    mode_context = {
+        "workspace_id": auto_workspace,
+        "existing_acquisition_count": len(active_existing),
+        "new_target_count": mode_result.new_target_count,
+        "conflict_count": conflict_count,
+        "current_target_ids": sorted(current_target_ids),
+        "existing_target_ids": sorted(existing_target_ids),
+        "active_existing": active_existing,
+    }
+    return mode_result, mode_context
+
+
 # =============================================================================
 # Endpoints
 # =============================================================================
@@ -352,6 +543,10 @@ def _refresh_workspace_conflicts_after_mutation(
 @router.get("/state", response_model=ScheduleStateResponse)
 async def get_schedule_state(
     workspace_id: Optional[str] = Query(None, description="Filter by workspace ID"),
+    include_failed: bool = Query(
+        False,
+        description="Include superseded failed acquisitions in the response",
+    ),
 ) -> ScheduleStateResponse:
     """
     Get current schedule state.
@@ -373,6 +568,7 @@ async def get_schedule_state(
     ancillary_limit = 100
     acquisitions = db.list_acquisitions(
         workspace_id=workspace_id,
+        include_failed=include_failed,
         limit=acquisition_limit,
     )
     orders_list = db.list_orders(workspace_id=workspace_id, limit=ancillary_limit)
@@ -455,6 +651,7 @@ async def get_schedule_state(
     logger.info(
         f"[Schedule State] Returning {len(acq_summaries)} acquisitions, "
         f"{len(order_summaries)} orders"
+        f"{' (including failed)' if include_failed else ''}"
     )
 
     return ScheduleStateResponse(
@@ -478,6 +675,10 @@ async def get_schedule_horizon(
         None, description="Filter by satellite group ID"
     ),
     include_tentative: bool = Query(True, description="Include tentative acquisitions"),
+    include_failed: bool = Query(
+        False,
+        description="Include superseded failed acquisitions",
+    ),
     include_conflicts: bool = Query(False, description="Include conflicts summary"),
 ) -> ScheduleHorizonResponse:
     """
@@ -529,7 +730,8 @@ async def get_schedule_horizon(
         f"[Schedule Horizon] from={horizon_start.isoformat()}, "
         f"to={horizon_end.isoformat()}, "
         f"workspace_id={workspace_id}, "
-        f"include_tentative={include_tentative}"
+        f"include_tentative={include_tentative}, "
+        f"include_failed={include_failed}"
     )
 
     # Query acquisitions from persistence layer
@@ -541,6 +743,7 @@ async def get_schedule_horizon(
         end_time=end_str,
         workspace_id=workspace_id,
         include_tentative=include_tentative,
+        include_failed=include_failed,
     )
 
     # Convert to summary models
@@ -2067,6 +2270,109 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
 
 
 # =============================================================================
+# Planning Mode Selection Endpoint
+# =============================================================================
+
+
+class PlanningModeSelectionRequest(BaseModel):
+    """Request to resolve backend auto-mode selection without creating a plan."""
+
+    planning_mode: str = Field(
+        default="from_scratch",
+        description="Optional override. Leave default to let backend auto-select.",
+    )
+    horizon_from: Optional[str] = Field(default=None, description="Horizon start (ISO)")
+    horizon_to: Optional[str] = Field(default=None, description="Horizon end (ISO)")
+    workspace_id: Optional[str] = Field(default=None, description="Workspace ID")
+    weight_priority: float = Field(default=40.0, ge=0.0)
+    weight_geometry: float = Field(default=40.0, ge=0.0)
+    weight_timing: float = Field(default=20.0, ge=0.0)
+
+
+class PlanningModeSelectionResponse(BaseModel):
+    """Resolved planning mode and the backend reasoning behind it."""
+
+    success: bool
+    planning_mode: str
+    reason: str
+    workspace_id: str
+    existing_acquisition_count: int = 0
+    new_target_count: int = 0
+    conflict_count: int = 0
+    current_target_ids: List[str] = Field(default_factory=list)
+    existing_target_ids: List[str] = Field(default_factory=list)
+    request_payload_hash: str = ""
+
+
+@router.post("/mode-selection", response_model=PlanningModeSelectionResponse)
+async def get_planning_mode_selection(
+    request: PlanningModeSelectionRequest,
+) -> PlanningModeSelectionResponse:
+    """Resolve planning mode using the same backend logic as the planning pipeline."""
+    db = get_schedule_db()
+    _bind_schedule_log_context(workspace_id=request.workspace_id)
+
+    now = datetime.now(timezone.utc)
+
+    if request.horizon_from:
+        try:
+            horizon_start = _to_utc_naive(
+                datetime.fromisoformat(request.horizon_from.replace("Z", "+00:00"))
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid horizon_from: {request.horizon_from}"
+            )
+    else:
+        horizon_start = now.replace(tzinfo=None)
+
+    if request.horizon_to:
+        try:
+            horizon_end = _to_utc_naive(
+                datetime.fromisoformat(request.horizon_to.replace("Z", "+00:00"))
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid horizon_to: {request.horizon_to}"
+            )
+    else:
+        horizon_end = (now + timedelta(days=7)).replace(tzinfo=None)
+
+    from backend.main import get_cached_opportunities, get_current_mission_data
+
+    mission_data = get_current_mission_data(request.workspace_id).get("mission_data", {})
+    raw_opportunities = get_cached_opportunities(request.workspace_id) or []
+
+    request_hash = compute_request_hash(request.model_dump())
+    mode_result, mode_context = _resolve_auto_mode_selection(
+        db,
+        workspace_id=request.workspace_id,
+        planning_mode=request.planning_mode,
+        horizon_start=horizon_start,
+        horizon_end=horizon_end,
+        raw_opportunities=raw_opportunities,
+        mission_data=mission_data,
+        request_payload_hash=request_hash,
+        weight_priority=request.weight_priority,
+        weight_geometry=request.weight_geometry,
+        weight_timing=request.weight_timing,
+    )
+
+    return PlanningModeSelectionResponse(
+        success=True,
+        planning_mode=mode_result.mode,
+        reason=mode_result.reason,
+        workspace_id=mode_context["workspace_id"],
+        existing_acquisition_count=mode_context["existing_acquisition_count"],
+        new_target_count=mode_context["new_target_count"],
+        conflict_count=mode_context["conflict_count"],
+        current_target_ids=mode_context["current_target_ids"],
+        existing_target_ids=mode_context["existing_target_ids"],
+        request_payload_hash=request_hash,
+    )
+
+
+# =============================================================================
 # Incremental Planning Endpoint
 # =============================================================================
 
@@ -2120,6 +2426,15 @@ class IncrementalPlanRequest(BaseModel):
     look_window_s: float = Field(default=600.0, description="Look-ahead window seconds")
     value_source: str = Field(
         default="target_priority", description="Value source for scoring"
+    )
+    weight_priority: float = Field(
+        default=40.0, ge=0.0, description="Weight for target priority"
+    )
+    weight_geometry: float = Field(
+        default=40.0, ge=0.0, description="Weight for imaging geometry quality"
+    )
+    weight_timing: float = Field(
+        default=20.0, ge=0.0, description="Weight for timing preference"
     )
 
 
@@ -2211,8 +2526,8 @@ async def create_incremental_plan(
 
     if request.horizon_from:
         try:
-            horizon_start = datetime.fromisoformat(
-                request.horizon_from.replace("Z", "+00:00")
+            horizon_start = _to_utc_naive(
+                datetime.fromisoformat(request.horizon_from.replace("Z", "+00:00"))
             )
         except ValueError:
             raise HTTPException(
@@ -2223,8 +2538,8 @@ async def create_incremental_plan(
 
     if request.horizon_to:
         try:
-            horizon_end = datetime.fromisoformat(
-                request.horizon_to.replace("Z", "+00:00")
+            horizon_end = _to_utc_naive(
+                datetime.fromisoformat(request.horizon_to.replace("Z", "+00:00"))
             )
         except ValueError:
             raise HTTPException(
@@ -2289,11 +2604,10 @@ async def create_incremental_plan(
     }
 
     # Get satellite agility from cached mission data (used for slew config)
-    from backend.main import app as main_app
+    from backend.main import get_current_mission_data
 
-    _mission_data = getattr(main_app.state, "current_mission_data", {}).get(
-        "mission_data", {}
-    )
+    _current_mission = get_current_mission_data(request.workspace_id)
+    _mission_data = _current_mission.get("mission_data", {})
     _sat_agility = _mission_data.get("satellite_agility", request.max_roll_rate_dps)
     _agility_source = (
         "config" if "satellite_agility" in _mission_data else "request default"
@@ -2310,7 +2624,7 @@ async def create_incremental_plan(
     try:
         from datetime import datetime as _dt
 
-        _cmd = getattr(main_app.state, "current_mission_data", {})
+        _cmd = _current_mission
         if _cmd and "passes" in _cmd:
             passes = _cmd["passes"]
             now_naive = now.replace(tzinfo=None)
@@ -2368,7 +2682,7 @@ async def create_incremental_plan(
         try:
             from backend.main import get_cached_opportunities
 
-            raw_opportunities = get_cached_opportunities() or []
+            raw_opportunities = get_cached_opportunities(request.workspace_id) or []
         except (ImportError, AttributeError):
             pass
 
@@ -2400,122 +2714,35 @@ async def create_incremental_plan(
     # inspects existing acquisitions vs. current targets to auto-pick
     # FROM_SCRATCH / INCREMENTAL / REPAIR.
     # =========================================================================
-    _auto_workspace = request.workspace_id or "default"
-    _existing_acqs_for_mode = []
-    try:
-        _existing_acqs_for_mode = db.get_acquisitions_by_lock_level(_auto_workspace)
-    except Exception as e:
-        logger.warning(f"[Auto Mode] Failed to query existing acquisitions: {e}")
-
-    _active_existing = []
-    for acq in _existing_acqs_for_mode:
-        if acq.state in ("failed", "cancelled", "completed"):
-            continue
-        try:
-            _acq_end = datetime.fromisoformat(acq.end_time.replace("Z", "+00:00"))
-            if _acq_end.tzinfo is not None:
-                _acq_end = _acq_end.replace(tzinfo=None)
-            if _acq_end <= horizon_start:
-                continue
-        except ValueError:
-            pass
-        _active_existing.append(acq)
-
-    _current_target_ids = set()
-    for target in _mission_data.get("targets", []):
-        if isinstance(target, dict):
-            target_name = target.get("name", "")
-        else:
-            target_name = getattr(target, "name", "")
-        if target_name:
-            _current_target_ids.add(target_name)
-    if not _current_target_ids:
-        _current_target_ids = {
-            opp["target_id"] if isinstance(opp, dict) else getattr(opp, "target_id", "")
-            for opp in raw_opportunities
-            if (
-                opp["target_id"]
-                if isinstance(opp, dict)
-                else getattr(opp, "target_id", "")
-            )
-        }
-
-    _previous_target_ids = set()
-    if request.workspace_id:
-        try:
-            ws_db = get_workspace_db()
-            workspace = ws_db.get_workspace(request.workspace_id, include_czml=False)
-            if workspace:
-                _planning_state = workspace.planning_state or {}
-                _stored_target_ids = _planning_state.get("current_target_ids", [])
-                if isinstance(_stored_target_ids, list):
-                    _previous_target_ids = {
-                        str(target_id) for target_id in _stored_target_ids if target_id
-                    }
-                if not _previous_target_ids and workspace.scenario_config:
-                    _previous_target_ids = {
-                        str(target.get("name", ""))
-                        for target in workspace.scenario_config.get("targets", [])
-                        if target.get("name")
-                    }
-                if not _previous_target_ids and workspace.analysis_state:
-                    _analysis_targets = workspace.analysis_state.get(
-                        "mission_data", {}
-                    ).get("targets", [])
-                    _previous_target_ids = {
-                        str(target.get("name", ""))
-                        for target in _analysis_targets
-                        if isinstance(target, dict) and target.get("name")
-                    }
-        except Exception as e:
-            logger.warning(f"[Auto Mode] Failed to load workspace target baseline: {e}")
-
-    _existing_target_ids = _previous_target_ids or {
-        a.target_id for a in _active_existing
-    }
-
-    # Query active conflict count for this workspace
-    _conflict_count = 0
-    if _active_existing:
-        try:
-            _conflicts = db.get_conflicts_in_horizon(
-                start_time=horizon_start.isoformat(),
-                end_time=horizon_end.isoformat(),
-                workspace_id=_auto_workspace,
-                include_resolved=False,
-            )
-            _conflict_count = len(_conflicts)
-        except Exception as e:
-            logger.warning(f"[Auto Mode] Failed to query conflicts: {e}")
-
-    # Use client mode as force_mode only when explicitly non-default
-    _force_mode = None
-    if request.planning_mode != "from_scratch":
-        _force_mode = request.planning_mode
-
-    mode_result = select_planning_mode(
-        workspace_id=_auto_workspace,
-        existing_acquisition_count=len(_active_existing),
-        existing_target_ids=_existing_target_ids,
-        current_target_ids=_current_target_ids,
-        conflict_count=_conflict_count,
-        previous_plan_count=0,  # TODO: count previous committed plans
+    mode_result, mode_context = _resolve_auto_mode_selection(
+        db,
+        workspace_id=request.workspace_id,
+        planning_mode=request.planning_mode,
+        horizon_start=horizon_start,
+        horizon_end=horizon_end,
+        raw_opportunities=raw_opportunities,
+        mission_data=_mission_data,
         request_payload_hash=_req_hash,
-        force_mode=_force_mode,
+        weight_priority=request.weight_priority,
+        weight_geometry=request.weight_geometry,
+        weight_timing=request.weight_timing,
     )
+    _auto_workspace = mode_context["workspace_id"]
+    _active_existing = mode_context["active_existing"]
+    _conflict_count = mode_context["conflict_count"]
 
     planning_mode = PlanningMode(mode_result.mode)
     _audit.add("mode_selection", **mode_result.to_log_dict())
     schedule_context["planning_mode"] = planning_mode.value
     schedule_context["mode_selection_reason"] = mode_result.reason
-    schedule_context["existing_acquisition_count"] = len(_active_existing)
-    schedule_context["new_target_count"] = mode_result.new_target_count
+    schedule_context["existing_acquisition_count"] = mode_context["existing_acquisition_count"]
+    schedule_context["new_target_count"] = mode_context["new_target_count"]
     schedule_context["conflict_count"] = _conflict_count
 
     logger.info(
         f"[Auto Mode] Selected: {planning_mode.value} | "
-        f"existing={len(_active_existing)}, "
-        f"new_targets={mode_result.new_target_count} | "
+        f"existing={mode_context['existing_acquisition_count']}, "
+        f"new_targets={mode_context['new_target_count']} | "
         f"reason={mode_result.reason[:100]}"
     )
 
@@ -2605,9 +2832,9 @@ async def create_incremental_plan(
                 opp_dicts.append(opp)
 
         # Get satellite agility from cached mission data
-        from backend.main import app as main_app
+        from backend.main import get_current_mission_data
 
-        _mission_data = getattr(main_app.state, "current_mission_data", {}).get(
+        _mission_data = get_current_mission_data(request.workspace_id).get(
             "mission_data", {}
         )
         _sat_agility = _mission_data.get("satellite_agility", request.max_roll_rate_dps)
@@ -2693,12 +2920,14 @@ async def create_incremental_plan(
                 planning_state = dict(workspace.planning_state or {})
                 planning_state.update(
                     {
-                        "current_target_ids": sorted(_current_target_ids),
+                        "current_target_ids": mode_context["current_target_ids"],
                         "last_planning_mode": planning_mode.value,
                         "last_plan_id": plan.id,
                         "last_schedule_context": {
-                            "existing_acquisition_count": len(_active_existing),
-                            "new_target_count": mode_result.new_target_count,
+                            "existing_acquisition_count": mode_context[
+                                "existing_acquisition_count"
+                            ],
+                            "new_target_count": mode_context["new_target_count"],
                             "conflict_count": _conflict_count,
                         },
                     }
@@ -3207,10 +3436,14 @@ async def create_repair_plan(
 
     # Get opportunities from cache
     raw_opportunities: List[Dict[str, Any]] = []
+    current_mission_snapshot: Dict[str, Any] = {}
+    current_target_ids: Optional[set[str]] = None
+    effective_target_priorities: Dict[str, int] = dict(request.target_priorities or {})
     try:
-        from backend.main import get_cached_opportunities
+        from backend.main import get_cached_opportunities, get_current_mission_data
 
-        raw_opportunities = get_cached_opportunities() or []
+        current_mission_snapshot = get_current_mission_data(request.workspace_id) or {}
+        raw_opportunities = get_cached_opportunities(request.workspace_id) or []
     except (ImportError, AttributeError):
         pass
 
@@ -3219,9 +3452,7 @@ async def create_repair_plan(
         try:
             from datetime import datetime as _dt
 
-            from backend.main import app as main_app
-
-            _cmd = getattr(main_app.state, "current_mission_data", {})
+            _cmd = current_mission_snapshot or {}
             if _cmd and "passes" in _cmd:
                 passes = _cmd["passes"]
                 for idx, p in enumerate(passes):
@@ -3272,8 +3503,25 @@ async def create_repair_plan(
             "[Repair Plan] No cached opportunities - repair will only adjust existing items"
         )
 
+    mission_scope = current_mission_snapshot.get("mission_data", current_mission_snapshot)
+    if not isinstance(mission_scope, dict):
+        mission_scope = {}
+
+    derived_target_ids = _build_current_target_ids(mission_scope, raw_opportunities)
+    if derived_target_ids or "targets" in mission_scope:
+        current_target_ids = derived_target_ids
+    elif request.target_subset:
+        current_target_ids = set(request.target_subset)
+
+    derived_priorities = _build_target_priorities(mission_scope)
+    if derived_priorities:
+        effective_target_priorities = {
+            **derived_priorities,
+            **effective_target_priorities,
+        }
+
     # Re-score opportunity values with current target priorities
-    if request.target_priorities and raw_opportunities:
+    if effective_target_priorities and raw_opportunities:
         from src.mission_planner.quality_scoring import (
             MultiCriteriaWeights,
             compute_composite_value,
@@ -3287,8 +3535,8 @@ async def create_repair_plan(
         rescored_count = 0
         for opp in raw_opportunities:
             tid = opp.get("target_id", "")
-            if tid in request.target_priorities:
-                new_priority = float(request.target_priorities[tid])
+            if tid in effective_target_priorities:
+                new_priority = float(effective_target_priorities[tid])
                 old_priority = float(opp.get("priority", 5))
                 quality = float(opp.get("quality_score") or 0.5)
                 # Timing score not cached — use 0.5 as neutral default
@@ -3323,7 +3571,8 @@ async def create_repair_plan(
         max_changes=request.max_changes,
         objective=objective,
         slew_config=slew_config,
-        target_priorities=request.target_priorities or None,
+        target_priorities=effective_target_priorities or None,
+        active_target_ids=current_target_ids,
     )
 
     # Create plan record
@@ -3355,6 +3604,35 @@ async def create_repair_plan(
         run_id=_run_id,
         plan_id=plan.id,
     )
+
+    # Persist newly created repair acquisitions as plan items so /repair/commit
+    # has concrete rows to apply atomically.
+    added_ids_set = set(repair_diff.added)
+    persisted_plan_items = 0
+    for item in proposed_schedule:
+        candidate_id = item.get("opportunity_id", item.get("acquisition_id", ""))
+        if item.get("action") != "added" and candidate_id not in added_ids_set:
+            continue
+
+        db.create_plan_item(
+            plan_id=plan.id,
+            opportunity_id=candidate_id,
+            satellite_id=item.get("satellite_id", ""),
+            target_id=item.get("target_id", ""),
+            start_time=item.get("start_time", ""),
+            end_time=item.get("end_time", ""),
+            roll_angle_deg=item.get("roll_angle_deg", 0.0),
+            pitch_angle_deg=item.get("pitch_angle_deg", 0.0),
+            value=item.get("value", 1.0),
+            quality_score=item.get("quality_score"),
+        )
+        persisted_plan_items += 1
+
+    if persisted_plan_items:
+        logger.info(
+            "[Repair Plan] Persisted %d repair plan item(s) for commit",
+            persisted_plan_items,
+        )
 
     # Build plan items for response
     new_items: List[PlanItemPreviewResponse] = []

@@ -12,6 +12,7 @@ import type {
   WorkspaceData,
   UIStateSnapshot,
 } from "../types";
+import { normalizeTimestamp } from "../utils/date";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
@@ -24,6 +25,22 @@ interface ApiResponse<T> {
   workspace_id?: string;
   total?: number;
   export?: WorkspaceData;
+}
+
+function normalizeWorkspaceSummary(workspace: WorkspaceSummary): WorkspaceSummary {
+  return {
+    ...workspace,
+    created_at: normalizeTimestamp(workspace.created_at) ?? workspace.created_at,
+    updated_at: normalizeTimestamp(workspace.updated_at) ?? workspace.updated_at,
+  };
+}
+
+function normalizeWorkspaceData(workspace: WorkspaceData): WorkspaceData {
+  return {
+    ...workspace,
+    created_at: normalizeTimestamp(workspace.created_at) ?? workspace.created_at,
+    updated_at: normalizeTimestamp(workspace.updated_at) ?? workspace.updated_at,
+  };
 }
 
 /**
@@ -48,7 +65,7 @@ export async function listWorkspaces(
   }
 
   return {
-    workspaces: data.workspaces || [],
+    workspaces: (data.workspaces || []).map(normalizeWorkspaceSummary),
     total: data.total || 0,
   };
 }
@@ -77,7 +94,7 @@ export async function getWorkspace(
     throw new Error(data.message || "Failed to get workspace");
   }
 
-  return data.workspace;
+  return normalizeWorkspaceData(data.workspace);
 }
 
 /**
@@ -113,7 +130,7 @@ export async function createWorkspace(params: {
 
   return {
     workspaceId: data.workspace_id,
-    workspace: data.workspace,
+    workspace: normalizeWorkspaceSummary(data.workspace),
   };
 }
 
@@ -223,7 +240,7 @@ export async function saveCurrentMission(
 
   return {
     workspaceId: data.workspace_id,
-    workspace: data.workspace,
+    workspace: normalizeWorkspaceSummary(data.workspace),
   };
 }
 

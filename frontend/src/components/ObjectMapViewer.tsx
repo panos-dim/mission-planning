@@ -4,7 +4,6 @@ import { SceneObject, WorkspaceSummary } from '../types'
 import {
   Satellite,
   Target,
-  Radio,
   MapPin,
   Radar,
   Box,
@@ -26,13 +25,14 @@ import {
   AlertCircle,
 } from 'lucide-react'
 import * as workspacesApi from '../api/workspaces'
+import { formatShortLocalDateTime } from '../utils/date'
 
 const ObjectMapViewer: React.FC = () => {
   const { state, selectObject, updateObject, removeObject, flyToObject } = useMission()
 
   const [searchTerm, setSearchTerm] = useState('')
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
-    new Set(['satellite', 'target', 'ground_station']),
+    new Set(['satellite', 'target']),
   )
   const [showWorkspaceDialog, setShowWorkspaceDialog] = useState<'save' | 'load' | null>(null)
   const [workspaceName, setWorkspaceName] = useState('')
@@ -91,8 +91,6 @@ const ObjectMapViewer: React.FC = () => {
         return Satellite
       case 'target':
         return Target
-      case 'ground_station':
-        return Radio
       case 'area':
         return MapPin
       case 'sensor':
@@ -212,19 +210,6 @@ const ObjectMapViewer: React.FC = () => {
       await workspacesApi.downloadWorkspaceExport(workspaceId)
     } catch (err) {
       setWorkspaceError(err instanceof Error ? err.message : 'Failed to export workspace')
-    }
-  }
-
-  const formatDate = (dateString: string) => {
-    try {
-      return new Date(dateString).toLocaleDateString(undefined, {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      })
-    } catch {
-      return dateString
     }
   }
 
@@ -570,7 +555,7 @@ const ObjectMapViewer: React.FC = () => {
                             </div>
                             <div className="flex items-center gap-2 text-xs text-gray-500">
                               <Clock className="w-3 h-3" />
-                              <span>{formatDate(ws.updated_at)}</span>
+                              <span>{formatShortLocalDateTime(ws.updated_at)}</span>
                             </div>
                           </div>
                           {ws.mission_mode && (

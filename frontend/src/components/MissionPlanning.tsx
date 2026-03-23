@@ -13,7 +13,7 @@ import debug from '../utils/debug'
 import { ApiError, NetworkError, TimeoutError } from '../api/errors'
 import {
   createRepairPlan,
-  getScheduleContext,
+  getPlanningModeSelection,
   type PlanningMode,
   type RepairPlanResponse,
 } from '../api/scheduleApi'
@@ -51,7 +51,8 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
 
   // Opportunities from last mission analysis (React Query)
   const hasMissionData = !!state.missionData
-  const { data: opportunitiesData } = useOpportunities(hasMissionData)
+  const workspaceId = state.activeWorkspace || 'default'
+  const { data: opportunitiesData } = useOpportunities(workspaceId, hasMissionData)
   const opportunities = opportunitiesData?.opportunities ?? []
 
   // Planning mode is auto-detected (no user toggle)
@@ -60,7 +61,7 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
   // State for repair mode
   const [repairResult, setRepairResult] = useState<RepairPlanResponse | null>(null)
 
-  // Scheduling reasoning — explains to the planner why from_scratch or repair was chosen
+  // Scheduling reasoning — explains to the planner why backend auto-selection chose this mode
   const [schedulingReasoning, setSchedulingReasoning] = useState<{
     mode: PlanningMode
     reason: string
@@ -188,12 +189,12 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
     const now = new Date()
     const horizonEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
     return {
-      workspace_id: state.activeWorkspace || 'default',
+      workspace_id: workspaceId,
       from: now.toISOString(),
       to: horizonEnd.toISOString(),
       include_tentative: includeTentative,
     }
-  }, [state.activeWorkspace, includeTentative])
+  }, [workspaceId, includeTentative])
 
   const {
     data: scheduleContextData,
@@ -214,7 +215,7 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
     [scheduleContextData, scheduleContextLoading, scheduleContextError],
   )
 
-  // Auto-detect mode: from_scratch (full algorithm) or repair (around locked items)
+  // Auto-detect mode via backend: from_scratch, incremental, or repair
   const handleRunPlanning = async () => {
     // Guard: prevent double-invocation (ref-based — survives React batched updates)
     if (planningGuardRef.current || isPlanning) return
@@ -224,57 +225,28 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
     setSchedulingReasoning(null)
 
     try {
-      const workspaceId = state.activeWorkspace || 'default'
-
-      // Refetch schedule context from DB to guarantee fresh data
-      // (cache may be stale after commit/delete operations)
+      // Refetch schedule queries from DB to guarantee fresh mode selection
       await queryClient.invalidateQueries({ queryKey: queryKeys.schedule.all })
-      const freshContext = await queryClient.fetchQuery({
-        queryKey: queryKeys.schedule.context({
-          workspace_id: workspaceId,
-          include_tentative: includeTentative,
-        }),
-        queryFn: () =>
-          getScheduleContext({
-            workspace_id: workspaceId,
-            from: scheduleContextParams.from,
-            to: scheduleContextParams.to,
-            include_tentative: includeTentative,
-          }),
-        staleTime: 0,
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.planning.opportunities(workspaceId),
       })
 
-      // Auto-detect planning mode based on existing schedule
-      const existingCount = freshContext?.count ?? 0
-      const scheduledTargetIds = new Set(freshContext?.target_ids ?? [])
-      const currentTargetNames = (state.missionData?.targets ?? []).map((t) => t.name)
-      const newTargets = currentTargetNames.filter((name) => !scheduledTargetIds.has(name))
-      const hasNewTargets = newTargets.length > 0
+      const modeSelection = await getPlanningModeSelection({
+        workspace_id: workspaceId,
+        horizon_from: scheduleContextParams.from,
+        horizon_to: scheduleContextParams.to,
+        weight_priority: weightConfig.weight_priority,
+        weight_geometry: weightConfig.weight_geometry,
+        weight_timing: weightConfig.weight_timing,
+      })
+      const autoMode = modeSelection.planning_mode
+      const existingCount = modeSelection.existing_acquisition_count
 
-      // Force from_scratch when new targets exist — repair can only work with
-      // cached opportunities from the last analysis, which won't include new targets.
-      const autoMode: PlanningMode = existingCount > 0 && !hasNewTargets ? 'repair' : 'from_scratch'
-
-      if (autoMode === 'repair') {
-        setSchedulingReasoning({
-          mode: 'repair',
-          reason: `Found ${existingCount} existing acquisition${existingCount > 1 ? 's' : ''} in the schedule. Locked items are preserved, unlocked items may be adjusted to improve the schedule.`,
-          existingCount,
-        })
-      } else if (hasNewTargets && existingCount > 0) {
-        setSchedulingReasoning({
-          mode: 'from_scratch',
-          reason: `${newTargets.length} new target${newTargets.length > 1 ? 's' : ''} detected (${newTargets.join(', ')}). Running full analysis to include new targets alongside ${existingCount} existing acquisition${existingCount > 1 ? 's' : ''}.`,
-          existingCount,
-        })
-      } else {
-        setSchedulingReasoning({
-          mode: 'from_scratch',
-          reason:
-            'No existing schedule found. Building a new optimized schedule from all available opportunities.',
-          existingCount: 0,
-        })
-      }
+      setSchedulingReasoning({
+        mode: autoMode,
+        reason: modeSelection.reason,
+        existingCount,
+      })
 
       debug.section('SCHEDULING')
       let gotResults = false
@@ -406,12 +378,25 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
         }
       }
 
-      // ── From-scratch path (also used as fallback when repair produces 0 items) ──
-      if (autoMode === 'from_scratch' || (autoMode === 'repair' && !gotResults)) {
-        // ── From-scratch path: full roll_pitch_best_fit algorithm ──
+      // ── Full planner path: backend-selected from_scratch or incremental ──
+      // Also used as a fallback when repair produces no usable result.
+      if (autoMode !== 'repair' || !gotResults) {
+        const plannerMode: PlanningRequest['mode'] =
+          autoMode === 'repair' ? 'from_scratch' : autoMode
+
+        if (autoMode === 'repair' && !gotResults) {
+          setSchedulingReasoning({
+            mode: 'from_scratch',
+            reason:
+              'Repair mode produced no usable results. Building a new schedule from all available opportunities.',
+            existingCount,
+          })
+        }
+
         const request: PlanningRequest = {
           algorithms: ['roll_pitch_best_fit'],
-          mode: 'from_scratch',
+          mode: plannerMode,
+          workspace_id: workspaceId,
           ...weightConfig,
         }
 
@@ -847,7 +832,11 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
                     <Shield size={14} className="mt-0.5 shrink-0" />
                     <div>
                       <span className="font-semibold">
-                        {schedulingReasoning.mode === 'repair' ? 'Repair Mode' : 'New Schedule'}
+                        {schedulingReasoning.mode === 'repair'
+                          ? 'Repair Mode'
+                          : schedulingReasoning.mode === 'incremental'
+                            ? 'Incremental Mode'
+                            : 'New Schedule'}
                       </span>
                       <span className="text-gray-400"> — </span>
                       {schedulingReasoning.reason}

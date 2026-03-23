@@ -58,7 +58,6 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
       [
         "satellite",
         "target",
-        "ground_station",
         "opportunity",
         "plan_item",
       ].includes(nodeType)
@@ -515,7 +514,6 @@ const ObjectExplorerTree: React.FC<ObjectExplorerTreeProps> = ({
               [
                 "satellite",
                 "target",
-                "ground_station",
                 "opportunity",
                 "plan_item",
               ].includes(currentNode.type)

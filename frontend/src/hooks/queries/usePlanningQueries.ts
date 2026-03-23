@@ -15,10 +15,10 @@ import type { PlanningRequest, PlanningResponse } from '../../types'
  * Hook to fetch opportunities from last mission analysis.
  * Only enabled when mission data exists (analysis has been run).
  */
-export function useOpportunities(enabled = true) {
+export function useOpportunities(workspaceId?: string, enabled = true) {
   return useQuery<OpportunitiesResponse>({
-    queryKey: queryKeys.planning.opportunities(),
-    queryFn: () => planningApi.getOpportunities(),
+    queryKey: queryKeys.planning.opportunities(workspaceId),
+    queryFn: () => planningApi.getOpportunities(workspaceId),
     enabled,
     staleTime: 1000 * 60 * 2, // 2 minutes — opportunities don't change unless re-analyzed
     retry: false, // Don't retry — 404 means analysis hasn't been run

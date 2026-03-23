@@ -67,7 +67,11 @@ def _migrate_orders_state_to_v2(
     schedule_db = get_schedule_db()
 
     # Check if we've already migrated this workspace
-    existing = schedule_db.list_acquisitions(workspace_id=workspace_id, limit=1)
+    existing = schedule_db.list_acquisitions(
+        workspace_id=workspace_id,
+        include_failed=True,
+        limit=1,
+    )
     if existing:
         logger.info(
             f"[Migration] Workspace {workspace_id} already has v2 acquisitions, skipping migration"

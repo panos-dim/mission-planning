@@ -1,6 +1,7 @@
 """
-Configuration Manager for Ground Stations and Mission Settings
-Handles loading, parsing, and managing configuration from YAML files
+Configuration manager for legacy defaults and mission settings.
+
+Ground station support is deprecated and intentionally ignored.
 """
 
 import json
@@ -60,7 +61,7 @@ class MissionSettings:
 
 
 class ConfigManager:
-    """Manages ground station and mission configuration"""
+    """Manages legacy defaults and mission configuration."""
 
     def __init__(self, config_path: Optional[str] = None):
         self.config_path = config_path or self._get_default_config_path()
@@ -99,12 +100,12 @@ class ConfigManager:
             with open(self.config_path, "r") as f:
                 self._raw_config = yaml.safe_load(f)
 
-            # Parse ground stations
+            # Ground station support is deprecated. Keep an empty list so
+            # compatibility endpoints can return a stable shape without
+            # affecting planning behavior.
             self.ground_stations = []
-            for gs_data in self._raw_config.get("ground_stations", []):
-                gs = GroundStation(**gs_data)
-                if gs.active:
-                    self.ground_stations.append(gs)
+            if self._raw_config.get("ground_stations"):
+                logger.info("Ground station configuration is deprecated and ignored")
 
             # Parse defaults
             self.defaults = self._raw_config.get("defaults", {})
@@ -136,9 +137,7 @@ class ConfigManager:
                     **filtered_settings
                 )
 
-            logger.info(
-                f"Loaded {len(self.ground_stations)} active ground stations from {self.config_path}"
-            )
+            logger.info("Loaded mission defaults from %s", self.config_path)
             return True
 
         except Exception as e:
@@ -148,18 +147,6 @@ class ConfigManager:
     def _create_default_config(self) -> None:
         """Create default configuration if file doesn't exist"""
         default_config = {
-            "ground_stations": [
-                {
-                    "name": "Default Ground Station",
-                    "latitude": 24.44,
-                    "longitude": 54.83,
-                    "altitude_km": 0.05,
-                    "elevation_mask": 10,
-                    "active": True,
-                    "description": "Default ground station",
-                    "capabilities": ["communication", "tracking"],
-                }
-            ],
             "defaults": {
                 "elevation_mask": 10,
                 "altitude_km": 0,
@@ -216,45 +203,33 @@ class ConfigManager:
         return None
 
     def get_ground_stations_list(self) -> List[Dict]:
-        """Get list of ground stations as dictionaries"""
-        return [gs.to_dict() for gs in self.ground_stations]
+        """Ground stations are deprecated and intentionally unavailable."""
+        return []
 
     def add_ground_station(self, gs_data: Dict) -> bool:
-        """Add a new ground station"""
-        try:
-            gs = GroundStation(**gs_data)
-            self.ground_stations.append(gs)
-            self._update_raw_config()
-            return self.save_config()
-        except Exception as e:
-            logger.error(f"Error adding ground station: {str(e)}")
-            return False
+        """Ground stations are deprecated and cannot be added."""
+        logger.warning("Ignoring deprecated add_ground_station request: %s", gs_data)
+        return False
 
     def update_ground_station(self, name: str, gs_data: Dict) -> bool:
-        """Update an existing ground station"""
-        for i, gs in enumerate(self.ground_stations):
-            if gs.name == name:
-                self.ground_stations[i] = GroundStation(**gs_data)
-                self._update_raw_config()
-                return self.save_config()
+        """Ground stations are deprecated and cannot be updated."""
+        logger.warning(
+            "Ignoring deprecated update_ground_station request for %s: %s",
+            name,
+            gs_data,
+        )
         return False
 
     def delete_ground_station(self, name: str) -> bool:
-        """Delete a ground station"""
-        self.ground_stations = [gs for gs in self.ground_stations if gs.name != name]
-        self._update_raw_config()
-        return self.save_config()
+        """Ground stations are deprecated and cannot be deleted."""
+        logger.warning("Ignoring deprecated delete_ground_station request for %s", name)
+        return False
 
     def get_elevation_mask(
         self, gs_name: str, mission_type: Optional[str] = None
     ) -> int:
-        """Get elevation mask for a ground station and mission type"""
-        # Get ground station specific elevation mask
-        gs = self.get_ground_station(gs_name)
-        if gs:
-            gs_elevation = gs.elevation_mask
-        else:
-            gs_elevation = self.defaults.get("elevation_mask", 10)
+        """Get effective elevation mask. Ground station input is ignored."""
+        gs_elevation = self.defaults.get("elevation_mask", 10)
 
         # Check if mission type has a specific elevation mask (for communication/tracking)
         if mission_type and mission_type in self.mission_settings:
@@ -275,9 +250,7 @@ class ConfigManager:
 
     def _update_raw_config(self) -> None:
         """Update raw configuration dictionary from current state"""
-        self._raw_config["ground_stations"] = [
-            gs.to_dict() for gs in self.ground_stations
-        ]
+        self._raw_config.pop("ground_stations", None)
         if hasattr(self, "defaults"):
             self._raw_config["defaults"] = self.defaults
         if hasattr(self, "mission_settings"):
@@ -289,7 +262,6 @@ class ConfigManager:
     def to_dict(self) -> Dict:
         """Convert configuration to dictionary"""
         return {
-            "ground_stations": [gs.to_dict() for gs in self.ground_stations],
             "defaults": self.defaults,
             "mission_settings": {
                 name: settings.to_dict()

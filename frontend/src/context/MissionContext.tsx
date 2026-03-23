@@ -8,12 +8,6 @@ import React, {
   useCallback,
 } from 'react'
 import {
-  Color,
-  Cartesian3,
-  HeightReference,
-  LabelStyle,
-  VerticalOrigin,
-  Cartesian2,
   JulianDate,
   HeadingPitchRange,
   Viewer,
@@ -34,8 +28,7 @@ import { useSceneObjectStore } from '../store/sceneObjectStore'
 import { useWorkspaceStore } from '../store/workspaceStore'
 import { useSessionStore } from '../store/sessionStore'
 import debug from '../utils/debug'
-import { missionApi, tleApi, configApi, getErrorMessage } from '../api'
-import type { GroundStation } from '../api'
+import { missionApi, tleApi, getErrorMessage } from '../api'
 
 // Core mission state (scene objects & workspaces now in Zustand stores)
 const initialState: MissionState = {
@@ -143,35 +136,43 @@ export function MissionProvider({ children }: MissionProviderProps): JSX.Element
 
   // Session persistence: save missionData + czmlData to localStorage on change
   const saveMissionSession = useSessionStore((s) => s.saveMissionSession)
-  const sessionRestoreRef = useRef(false)
+  const sessionRestoreWorkspaceRef = useRef<string | null>(null)
+  const currentWorkspaceId = activeWorkspace || 'default'
 
   useEffect(() => {
     if (reducerState.missionData && reducerState.czmlData.length > 0) {
-      saveMissionSession(reducerState.missionData, reducerState.czmlData)
+      saveMissionSession(reducerState.missionData, reducerState.czmlData, currentWorkspaceId)
     } else if (!reducerState.missionData) {
       // When mission is cleared (CLEAR_MISSION), ensure session store is also cleared.
       // This prevents stale data from being restored on next page refresh.
       useSessionStore.getState().clearSession()
     }
-  }, [reducerState.missionData, reducerState.czmlData, saveMissionSession])
+  }, [reducerState.missionData, reducerState.czmlData, saveMissionSession, currentWorkspaceId])
 
-  // Session persistence: restore from localStorage on mount (one-time)
+  // Restore only the session that belongs to the currently active workspace.
   useEffect(() => {
-    if (sessionRestoreRef.current) return
-    sessionRestoreRef.current = true
+    if (sessionRestoreWorkspaceRef.current === currentWorkspaceId) return
+    sessionRestoreWorkspaceRef.current = currentWorkspaceId
 
-    // Skip if mission data already exists (e.g. workspace load beat us)
     if (reducerState.missionData) return
 
-    const { lastMissionData, lastCzmlData } = useSessionStore.getState()
-    if (lastMissionData && lastCzmlData && lastCzmlData.length > 0) {
+    const { lastMissionData, lastCzmlData, workspaceId } = useSessionStore.getState()
+    const matchesWorkspace = workspaceId === currentWorkspaceId
+    const canRestoreLegacyDefaultSession = !workspaceId && currentWorkspaceId === 'default'
+
+    if (
+      (matchesWorkspace || canRestoreLegacyDefaultSession) &&
+      lastMissionData &&
+      lastCzmlData &&
+      lastCzmlData.length > 0
+    ) {
       console.log('[SessionRestore] Restoring mission data from last session')
       dispatch({
         type: 'SET_MISSION_DATA',
         payload: { missionData: lastMissionData, czmlData: lastCzmlData },
       })
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentWorkspaceId, reducerState.missionData])
 
   // AbortController refs for cancellable requests
   const analyzeAbortRef = useRef<AbortController | null>(null)
@@ -245,6 +246,7 @@ export function MissionProvider({ children }: MissionProviderProps): JSX.Element
       const missionRequest = {
         // NEW: Constellation support - use satellites array if available
         ...(hasSatellitesArray ? { satellites: formData.satellites } : { tle: formData.tle }),
+        workspace_id: activeWorkspace || 'default',
         targets: formData.targets,
         start_time: startTimeUTC,
         end_time: endTimeUTC,
@@ -254,7 +256,6 @@ export function MissionProvider({ children }: MissionProviderProps): JSX.Element
           elevation_mask: formData.elevationMask,
         }),
         max_spacecraft_roll_deg: formData.pointingAngle > 0 ? formData.pointingAngle : undefined,
-        ground_station_name: formData.groundStationName,
         imaging_type: formData.imagingType,
         // Map frontend SAR mode names to backend API names
         // Frontend: spot, strip, scan, dwell → Backend: spotlight, stripmap, scan
@@ -370,11 +371,6 @@ export function MissionProvider({ children }: MissionProviderProps): JSX.Element
         newObjects.forEach((obj) => {
           soStore.addSceneObject(obj)
         })
-
-        // Load ground stations with visibility enabled
-        setTimeout(async () => {
-          await loadGroundStations(true) // Pass true to force visibility
-        }, 600) // Small delay to ensure CZML data is loaded
       } else {
         dispatch({
           type: 'SET_ERROR',
@@ -398,7 +394,7 @@ export function MissionProvider({ children }: MissionProviderProps): JSX.Element
     } finally {
       dispatch({ type: 'SET_LOADING', payload: false })
     }
-  }, [])
+  }, [activeWorkspace])
 
   const clearMission = useCallback(() => {
     // Cancel any pending requests
@@ -593,7 +589,7 @@ export function MissionProvider({ children }: MissionProviderProps): JSX.Element
       let distance = 500000 // Default 500km for satellites
 
       // Adjust distance based on entity type or ID patterns
-      if (objectId.includes('ground_station') || objectId.includes('target')) {
+      if (objectId.includes('target')) {
         distance = 300000 // 300km for ground targets
       } else if (objectId.includes('coverage')) {
         distance = 5000000 // 5000km for coverage circles
@@ -708,159 +704,7 @@ export function MissionProvider({ children }: MissionProviderProps): JSX.Element
       }
     }
 
-    // Handle ground stations specially - they need to be loaded from config
-    if (entityType === 'ground_station') {
-      const entities = viewer.entities.values
-      const groundStations = entities.filter(
-        (e: Entity) => e.id && e.id.toString().includes('ground_station'),
-      )
-
-      if (isVisible) {
-        // If toggling on and no ground stations exist, load them
-        if (groundStations.length === 0) {
-          await loadGroundStations()
-        } else {
-          // If they exist, just show them
-          groundStations.forEach((entity: Entity) => {
-            entity.show = true
-          })
-        }
-      } else {
-        // Hide existing ground stations
-        groundStations.forEach((entity: Entity) => {
-          entity.show = false
-        })
-      }
-    }
   }
-
-  const loadGroundStations = useCallback(
-    async (forceVisible: boolean = true) => {
-      if (!cesiumViewer || !cesiumViewer.cesiumElement) return
-
-      try {
-        const data = await configApi.getGroundStations()
-
-        if (data.success && data.ground_stations) {
-          const viewer = cesiumViewer.cesiumElement
-
-          console.log(`Loading ${data.ground_stations.length} ground stations...`)
-
-          // First, remove any existing ground stations to avoid duplicates
-          const existingStations = viewer.entities.values.filter(
-            (e: Entity) => e.id && e.id.toString().includes('ground_station'),
-          )
-          existingStations.forEach((entity: Entity) => {
-            viewer.entities.remove(entity)
-          })
-
-          // Create all ground station entities
-          data.ground_stations.forEach((station: GroundStation) => {
-            // Determine color based on station type
-            const stationColor = station.type === 'Primary' ? Color.GOLD : Color.ORANGE
-
-            viewer.entities.add({
-              id: `ground_station_${station.id || station.name.toLowerCase().replace(/\s+/g, '_')}`,
-              name: station.name,
-              show: forceVisible, // Use the forceVisible parameter
-              position: Cartesian3.fromDegrees(station.longitude, station.latitude, 0),
-              billboard: {
-                image:
-                  'data:image/svg+xml;base64,' +
-                  btoa(`
-                <svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
-                  <!-- Ground Station Dish Icon -->
-                  <circle cx="16" cy="26" r="5" fill="${
-                    station.type === 'Primary' ? '#FFD700' : '#FFA500'
-                  }" stroke="#000" stroke-width="1.5"/>
-                  <rect x="15" y="21" width="2" height="10" fill="#000"/>
-                  <path d="M 16 21 Q 8 16 8 8 Q 16 13 24 8 Q 24 16 16 21" fill="${
-                    station.type === 'Primary' ? '#FFD700' : '#FFA500'
-                  }" stroke="#000" stroke-width="1.5"/>
-                  <circle cx="16" cy="14" r="2" fill="#FFF"/>
-                </svg>
-              `),
-                width: 28,
-                height: 28,
-                heightReference: HeightReference.CLAMP_TO_GROUND,
-                verticalOrigin: VerticalOrigin.BOTTOM,
-              },
-              point: {
-                pixelSize: 10,
-                color: stationColor,
-                outlineColor: Color.BLACK,
-                outlineWidth: 2,
-                heightReference: HeightReference.CLAMP_TO_GROUND,
-                show: false, // Show billboard instead of point
-              },
-              label: {
-                text: station.name,
-                font: '14px sans-serif',
-                fillColor: Color.WHITE,
-                outlineColor: Color.BLACK,
-                outlineWidth: 3,
-                style: LabelStyle.FILL_AND_OUTLINE,
-                verticalOrigin: VerticalOrigin.BOTTOM,
-                pixelOffset: new Cartesian2(0, -35),
-                heightReference: HeightReference.CLAMP_TO_GROUND,
-                disableDepthTestDistance: Number.POSITIVE_INFINITY,
-              },
-              description: `
-              <div style="background: rgba(17, 24, 39, 0.9); padding: 10px; border-radius: 5px;">
-                <h3 style="color: #FFD700; margin: 0 0 10px 0;">${station.name}</h3>
-                <p style="color: #FFF; margin: 5px 0;"><strong>Type:</strong> ${
-                  station.type || 'Ground Station'
-                }</p>
-                <p style="color: #FFF; margin: 5px 0;"><strong>Location:</strong> ${station.latitude.toFixed(
-                  4,
-                )}°, ${station.longitude.toFixed(4)}°</p>
-                <p style="color: #FFF; margin: 5px 0;"><strong>Description:</strong> ${
-                  station.description || 'Communication ground station'
-                }</p>
-              </div>
-            `,
-            })
-          })
-
-          console.log(`${data.ground_stations.length} ground stations loaded successfully`)
-
-          // Force render and visibility update using multiple strategies
-          viewer.scene.requestRender()
-
-          // Strategy 1: Immediate visibility update
-          const groundStations = viewer.entities.values.filter(
-            (e: Entity) => e.id && e.id.toString().includes('ground_station'),
-          )
-          groundStations.forEach((entity: Entity) => {
-            entity.show = forceVisible
-          })
-
-          // Strategy 2: Force update via entity collection change
-          viewer.entities.suspendEvents()
-          viewer.entities.resumeEvents()
-
-          // Strategy 3: Multiple render requests with delays
-          viewer.scene.requestRender()
-          requestAnimationFrame(() => {
-            viewer.scene.requestRender()
-            setTimeout(() => {
-              groundStations.forEach((entity: Entity) => {
-                entity.show = forceVisible
-              })
-              viewer.scene.requestRender()
-            }, 100)
-          })
-        }
-      } catch (error) {
-        console.error('Failed to load ground stations:', {
-          message: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : undefined,
-          name: error instanceof Error ? error.name : typeof error,
-        })
-      }
-    },
-    [cesiumViewer],
-  )
 
   // Workspaces are now auto-loaded from localStorage via workspaceStore's persist middleware
 

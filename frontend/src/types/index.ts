@@ -85,6 +85,7 @@ export interface MissionRequest {
 
   // NEW: Constellation support - multiple satellites
   satellites?: TLEData[]
+  workspace_id?: string
 
   targets: TargetData[]
   start_time: string
@@ -294,7 +295,7 @@ export interface ValidationResponse {
 export interface SceneObject {
   id: string
   name: string
-  type: 'satellite' | 'target' | 'ground_station' | 'area' | 'sensor' | 'custom'
+  type: 'satellite' | 'target' | 'area' | 'sensor' | 'custom'
   entityId?: string // Cesium entity ID
   position?: {
     latitude: number
@@ -447,7 +448,6 @@ export interface FormData {
   missionType: 'imaging' | 'communication'
   elevationMask: number
   pointingAngle: number
-  groundStationName?: string
   imagingType?: 'optical' | 'sar'
   sarMode?: 'stripmap' | 'spotlight' | 'scan'
   sar?: SARInputParams // SAR-specific mission input parameters

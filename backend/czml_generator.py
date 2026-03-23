@@ -1030,11 +1030,11 @@ class CZMLGenerator:
             },
             "label": {
                 "text": target.name,
-                "font": "14px sans-serif",  # Match ground station font
-                "style": "FILL_AND_OUTLINE",  # Match ground station text shadow
+                "font": "14px sans-serif",  # Match standard target label styling
+                "style": "FILL_AND_OUTLINE",  # Preserve readable label contrast
                 "fillColor": {"rgba": [255, 255, 255, 255]},
                 "outlineColor": {"rgba": [0, 0, 0, 255]},
-                "outlineWidth": 3,  # Match ground station outline
+                "outlineWidth": 3,  # Keep label outline legible against terrain
                 "pixelOffset": {
                     "cartesian2": [0, -30]
                 },  # Adjusted for smaller pin icon

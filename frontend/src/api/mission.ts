@@ -22,13 +22,13 @@ export interface MissionAnalyzeRequest {
   tle?: TLEData
   // NEW: Constellation support - array of satellites
   satellites?: TLEData[]
+  workspace_id?: string
   targets: TargetData[]
   start_time: string
   end_time: string
   mission_type: 'imaging' | 'communication'
   elevation_mask?: number
   max_spacecraft_roll_deg?: number
-  ground_station_name?: string
   imaging_type?: 'optical' | 'sar'
   sar_mode?: 'stripmap' | 'spotlight' | 'scan'
 }

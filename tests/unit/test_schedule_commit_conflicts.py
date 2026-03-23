@@ -15,7 +15,12 @@ from typing import Generator, Optional, Tuple
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.main import app
+from backend.main import (
+    app,
+    get_cached_opportunities,
+    set_cached_opportunities,
+    set_current_mission_data,
+)
 from backend.schedule_persistence import (
     DEFAULT_WORKSPACE_ID,
     ScheduleDB,
@@ -23,6 +28,7 @@ from backend.schedule_persistence import (
     reset_schedule_db,
 )
 from backend.workspace_persistence import get_workspace_db, reset_workspace_db
+from backend.schemas.target import TargetData
 
 
 @pytest.fixture
@@ -89,6 +95,50 @@ def _create_plan(
         quality_score=1.0,
     )
     return plan.id
+
+
+def _set_current_targets(target_names: list[str]) -> dict:
+    """Build a minimal mission-data payload for backend mode-selection tests."""
+    return {
+        "mission_data": {
+            "targets": [{"name": name} for name in target_names],
+        }
+    }
+
+
+def _sample_tle_payload() -> dict:
+    """Return a stable TLE payload for mission-analysis regression tests."""
+    return {
+        "name": "ICEYE-X53",
+        "line1": "1 64584U 25135BJ  26064.28789825  .00007988  00000+0  63127-3 0  9993",
+        "line2": "2 64584  97.7436 181.4786 0000928 206.1630 153.9547 15.00931401 38499",
+    }
+
+
+def _snapshot_analysis_state() -> dict:
+    """Capture mutable app-state caches so tests can restore them safely."""
+    return {
+        "current_mission_data": getattr(app.state, "current_mission_data", {}),
+        "current_mission_data_by_workspace": dict(
+            getattr(app.state, "current_mission_data_by_workspace", {})
+        ),
+        "opportunities_cache": list(getattr(app.state, "opportunities_cache", [])),
+        "opportunities_cache_by_workspace": dict(
+            getattr(app.state, "opportunities_cache_by_workspace", {})
+        ),
+    }
+
+
+def _restore_analysis_state(snapshot: dict) -> None:
+    """Restore mutable app-state caches after a test."""
+    app.state.current_mission_data = snapshot["current_mission_data"]
+    app.state.current_mission_data_by_workspace = snapshot[
+        "current_mission_data_by_workspace"
+    ]
+    app.state.opportunities_cache = snapshot["opportunities_cache"]
+    app.state.opportunities_cache_by_workspace = snapshot[
+        "opportunities_cache_by_workspace"
+    ]
 
 
 class TestScheduleCommitConflictDetection:
@@ -412,6 +462,49 @@ class TestScheduleCommitConflictDetection:
         assert other_state.status_code == 200, other_state.json()
         assert len(other_state.json()["state"]["acquisitions"]) == 1, other_state.json()
 
+    def test_direct_commit_materializes_missing_workspace_scope(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Direct commit should not 500 when the client sends a new workspace ID."""
+        client, _db, _workspace_id = isolated_schedule_api
+        requested_workspace_id = "workspace_ephemeral_e2e"
+
+        base_start = datetime.now(timezone.utc) + timedelta(days=19)
+        direct_commit = client.post(
+            "/api/v1/schedule/commit/direct",
+            json={
+                "algorithm": "regression_test",
+                "workspace_id": requested_workspace_id,
+                "lock_level": "none",
+                "items": [
+                    {
+                        "opportunity_id": "unknown-ws-direct-1",
+                        "satellite_id": "SAT-1",
+                        "target_id": "UNKNOWN-WS",
+                        "start_time": _iso(base_start),
+                        "end_time": _iso(base_start + timedelta(minutes=5)),
+                        "roll_angle_deg": 0.0,
+                        "pitch_angle_deg": 0.0,
+                    }
+                ],
+            },
+        )
+
+        assert direct_commit.status_code == 200, direct_commit.json()
+
+        state = client.get(
+            "/api/v1/schedule/state",
+            params={"workspace_id": requested_workspace_id},
+        )
+        assert state.status_code == 200, state.json()
+        assert len(state.json()["state"]["acquisitions"]) == 1, state.json()
+
+        placeholder_workspace = get_workspace_db().get_workspace(
+            requested_workspace_id, include_czml=False
+        )
+        assert placeholder_workspace is not None
+        assert placeholder_workspace.id == requested_workspace_id
+
     def test_schedule_plan_accepts_future_aware_opportunities(
         self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
     ) -> None:
@@ -419,8 +512,9 @@ class TestScheduleCommitConflictDetection:
         client, _, workspace_id = isolated_schedule_api
 
         future_start = datetime.now(timezone.utc) + timedelta(days=14)
-        original_state = getattr(app.state, "current_mission_data", {})
-        app.state.current_mission_data = {
+        original_state = _snapshot_analysis_state()
+        set_current_mission_data(
+            {
             "passes": [
                 {
                     "satellite_name": "SAT-FUTURE",
@@ -433,7 +527,9 @@ class TestScheduleCommitConflictDetection:
                 "targets": [{"name": "FutureTarget"}],
                 "satellite_agility": 1.0,
             },
-        }
+            },
+            workspace_id,
+        )
 
         try:
             plan = client.post(
@@ -444,7 +540,7 @@ class TestScheduleCommitConflictDetection:
                 },
             )
         finally:
-            app.state.current_mission_data = original_state
+            _restore_analysis_state(original_state)
 
         assert plan.status_code == 200, plan.text
         payload = plan.json()
@@ -854,3 +950,820 @@ class TestScheduleCommitConflictDetection:
         freeze_cutoff = state.json()["state"]["horizon"]["freeze_cutoff"]
         assert freeze_cutoff.endswith("Z")
         assert "+00:00Z" not in freeze_cutoff
+
+
+class TestPlanningModeSelection:
+    """Regression coverage for frontend/backend auto-mode alignment."""
+
+    def test_mission_analysis_clears_stale_workspace_opportunity_cache(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """A fresh feasibility run must invalidate stale planner opportunities."""
+        client, _db, workspace_id = isolated_schedule_api
+        original_state = _snapshot_analysis_state()
+        set_cached_opportunities(
+            [{"id": "stale-opp", "target_id": "STALE"}], workspace_id
+        )
+
+        start = datetime.now(timezone.utc) + timedelta(days=1)
+        end = start + timedelta(days=1)
+
+        try:
+            response = client.post(
+                "/api/v1/mission/analyze",
+                json={
+                    "workspace_id": workspace_id,
+                    "tle": _sample_tle_payload(),
+                    "targets": [
+                        {
+                            "name": "FreshTarget",
+                            "latitude": 25.0,
+                            "longitude": 55.0,
+                            "priority": 3,
+                        }
+                    ],
+                    "start_time": _iso(start),
+                    "end_time": _iso(end),
+                    "mission_type": "imaging",
+                    "imaging_type": "optical",
+                },
+            )
+            assert response.status_code == 200, response.text
+            assert get_cached_opportunities(workspace_id) == []
+        finally:
+            _restore_analysis_state(original_state)
+
+    def test_mode_selection_returns_from_scratch_without_existing_schedule(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """No active acquisitions should keep the planner in from-scratch mode."""
+        client, _db, workspace_id = isolated_schedule_api
+        original_state = _snapshot_analysis_state()
+        set_current_mission_data(_set_current_targets(["TGT-1"]), workspace_id)
+
+        try:
+            response = client.post(
+                "/api/v1/schedule/mode-selection",
+                json={"workspace_id": workspace_id},
+            )
+        finally:
+            _restore_analysis_state(original_state)
+
+        assert response.status_code == 200, response.json()
+        body = response.json()
+        assert body["success"] is True
+        assert body["planning_mode"] == "from_scratch"
+        assert body["existing_acquisition_count"] == 0
+
+    def test_mode_selection_returns_repair_for_same_target_set(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Existing schedule with the same targets should select repair."""
+        client, db, workspace_id = isolated_schedule_api
+        original_state = _snapshot_analysis_state()
+        set_current_mission_data(_set_current_targets(["TGT-1"]), workspace_id)
+
+        start = datetime.now(timezone.utc) + timedelta(days=1)
+        db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="TGT-1",
+            start_time=_iso(start),
+            end_time=_iso(start + timedelta(minutes=2)),
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="committed",
+            workspace_id=workspace_id,
+        )
+
+        try:
+            response = client.post(
+                "/api/v1/schedule/mode-selection",
+                json={"workspace_id": workspace_id},
+            )
+        finally:
+            _restore_analysis_state(original_state)
+
+        assert response.status_code == 200, response.json()
+        body = response.json()
+        assert body["success"] is True
+        assert body["planning_mode"] == "repair"
+        assert body["existing_acquisition_count"] == 1
+        assert body["new_target_count"] == 0
+
+    def test_mode_selection_returns_incremental_for_new_targets(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Adding new targets on top of an existing schedule should select incremental."""
+        client, db, workspace_id = isolated_schedule_api
+        original_state = _snapshot_analysis_state()
+        set_current_mission_data(_set_current_targets(["TGT-1", "TGT-2"]), workspace_id)
+
+        start = datetime.now(timezone.utc) + timedelta(days=1)
+        db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="TGT-1",
+            start_time=_iso(start),
+            end_time=_iso(start + timedelta(minutes=2)),
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="committed",
+            workspace_id=workspace_id,
+        )
+
+        try:
+            response = client.post(
+                "/api/v1/schedule/mode-selection",
+                json={"workspace_id": workspace_id},
+            )
+        finally:
+            _restore_analysis_state(original_state)
+
+        assert response.status_code == 200, response.json()
+        body = response.json()
+        assert body["success"] is True
+        assert body["planning_mode"] == "incremental"
+        assert body["existing_acquisition_count"] == 1
+        assert body["new_target_count"] == 1
+
+    def test_mode_selection_escalates_to_repair_for_higher_priority_new_targets(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """High-priority new work should trigger repair so the scheduler can reshuffle."""
+        client, db, workspace_id = isolated_schedule_api
+        original_state = _snapshot_analysis_state()
+        set_current_mission_data(
+            {
+                "mission_data": {
+                    "targets": [
+                        {"name": "TGT-1", "priority": 5},
+                        {"name": "TGT-2", "priority": 1},
+                    ]
+                }
+            },
+            workspace_id,
+        )
+
+        start = datetime.now(timezone.utc) + timedelta(days=1)
+        db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="TGT-1",
+            start_time=_iso(start),
+            end_time=_iso(start + timedelta(minutes=2)),
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="committed",
+            workspace_id=workspace_id,
+        )
+
+        try:
+            response = client.post(
+                "/api/v1/schedule/mode-selection",
+                json={"workspace_id": workspace_id},
+            )
+        finally:
+            _restore_analysis_state(original_state)
+
+        assert response.status_code == 200, response.json()
+        body = response.json()
+        assert body["success"] is True
+        assert body["planning_mode"] == "repair"
+        assert "higher-priority" in body["reason"]
+        assert body["new_target_count"] == 1
+
+    def test_mode_selection_keeps_incremental_when_priority_weight_is_zero(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Priority-only escalation should not fire when priority has no scoring weight."""
+        client, db, workspace_id = isolated_schedule_api
+        original_state = _snapshot_analysis_state()
+        set_current_mission_data(
+            {
+                "mission_data": {
+                    "targets": [
+                        {"name": "TGT-1", "priority": 5},
+                        {"name": "TGT-2", "priority": 1},
+                    ]
+                }
+            },
+            workspace_id,
+        )
+
+        start = datetime.now(timezone.utc) + timedelta(days=1)
+        db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="TGT-1",
+            start_time=_iso(start),
+            end_time=_iso(start + timedelta(minutes=2)),
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="committed",
+            workspace_id=workspace_id,
+        )
+
+        try:
+            response = client.post(
+                "/api/v1/schedule/mode-selection",
+                json={
+                    "workspace_id": workspace_id,
+                    "weight_priority": 0,
+                    "weight_geometry": 100,
+                    "weight_timing": 0,
+                },
+            )
+        finally:
+            _restore_analysis_state(original_state)
+
+        assert response.status_code == 200, response.json()
+        body = response.json()
+        assert body["success"] is True
+        assert body["planning_mode"] == "incremental"
+        assert "Planning incrementally" in body["reason"]
+        assert body["new_target_count"] == 1
+
+    def test_mode_selection_accepts_explicit_utc_horizon_with_existing_schedule(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Explicit Z-suffixed horizons should not crash auto-mode selection."""
+        client, db, workspace_id = isolated_schedule_api
+        original_state = _snapshot_analysis_state()
+        set_current_mission_data(_set_current_targets(["TGT-1", "TGT-2"]), workspace_id)
+
+        start = datetime.now(timezone.utc) + timedelta(days=1)
+        db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="TGT-1",
+            start_time=_iso(start),
+            end_time=_iso(start + timedelta(minutes=2)),
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="committed",
+            workspace_id=workspace_id,
+        )
+
+        try:
+            response = client.post(
+                "/api/v1/schedule/mode-selection",
+                json={
+                    "workspace_id": workspace_id,
+                    "horizon_from": _iso(start - timedelta(hours=1)),
+                    "horizon_to": _iso(start + timedelta(days=1)),
+                },
+            )
+        finally:
+            _restore_analysis_state(original_state)
+
+        assert response.status_code == 200, response.json()
+        body = response.json()
+        assert body["success"] is True
+        assert body["planning_mode"] == "incremental"
+        assert body["existing_acquisition_count"] == 1
+        assert body["new_target_count"] == 1
+
+    def test_mode_selection_uses_workspace_target_baseline_not_only_committed_targets(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Previously planned-but-unscheduled targets must not be miscounted as newly added."""
+        client, db, workspace_id = isolated_schedule_api
+        original_state = _snapshot_analysis_state()
+        set_current_mission_data(
+            _set_current_targets(["TGT-1", "TGT-2", "TGT-3", "TGT-4"]),
+            workspace_id,
+        )
+
+        get_workspace_db().update_workspace(
+            workspace_id=workspace_id,
+            planning_state={
+                "current_target_ids": ["TGT-1", "TGT-2", "TGT-3"],
+            },
+        )
+
+        start = datetime.now(timezone.utc) + timedelta(days=1)
+        db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="TGT-1",
+            start_time=_iso(start),
+            end_time=_iso(start + timedelta(minutes=2)),
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="committed",
+            workspace_id=workspace_id,
+        )
+
+        try:
+            response = client.post(
+                "/api/v1/schedule/mode-selection",
+                json={"workspace_id": workspace_id},
+            )
+        finally:
+            _restore_analysis_state(original_state)
+
+        assert response.status_code == 200, response.json()
+        body = response.json()
+        assert body["success"] is True
+        assert body["planning_mode"] == "incremental"
+        assert body["existing_target_ids"] == ["TGT-1", "TGT-2", "TGT-3"]
+        assert body["current_target_ids"] == ["TGT-1", "TGT-2", "TGT-3", "TGT-4"]
+        assert body["new_target_count"] == 1
+
+    def test_incremental_planning_only_returns_new_targets(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Incremental planning should not return alternate opportunities for already planned targets."""
+        client, db, workspace_id = isolated_schedule_api
+        original_state = _snapshot_analysis_state()
+
+        existing_start = datetime.now(timezone.utc) + timedelta(days=1)
+        alternate_existing_slot = _iso(existing_start + timedelta(minutes=20))
+        new_target_slot = _iso(existing_start + timedelta(minutes=30))
+
+        get_workspace_db().update_workspace(
+            workspace_id=workspace_id,
+            planning_state={"current_target_ids": ["TGT-1"]},
+        )
+
+        set_current_mission_data(
+            {
+                "passes": [
+                    {
+                        "satellite_name": "SAT-1",
+                        "target_name": "TGT-1",
+                        "start_time": alternate_existing_slot,
+                        "end_time": alternate_existing_slot,
+                        "max_elevation_time": alternate_existing_slot,
+                        "max_elevation": 42.0,
+                        "start_azimuth": 180.0,
+                    },
+                    {
+                        "satellite_name": "SAT-1",
+                        "target_name": "TGT-2",
+                        "start_time": new_target_slot,
+                        "end_time": new_target_slot,
+                        "max_elevation_time": new_target_slot,
+                        "max_elevation": 40.0,
+                        "start_azimuth": 182.0,
+                    },
+                ],
+                "targets": [
+                    TargetData(name="TGT-1", latitude=25.0, longitude=55.0, priority=5),
+                    TargetData(name="TGT-2", latitude=25.5, longitude=55.5, priority=1),
+                ],
+                "mission_data": {
+                    "start_time": _iso(existing_start),
+                    "end_time": _iso(existing_start + timedelta(hours=1)),
+                    "max_spacecraft_pitch_deg": 45.0,
+                },
+                "satellites_dict": {},
+            },
+            workspace_id,
+        )
+
+        db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="TGT-1",
+            start_time=_iso(existing_start),
+            end_time=_iso(existing_start),
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="committed",
+            workspace_id=workspace_id,
+        )
+
+        try:
+            response = client.post(
+                "/api/v1/planning/schedule",
+                json={
+                    "algorithms": ["roll_pitch_best_fit"],
+                    "mode": "incremental",
+                    "workspace_id": workspace_id,
+                },
+            )
+        finally:
+            _restore_analysis_state(original_state)
+
+        assert response.status_code == 200, response.json()
+        body = response.json()
+        assert body["success"] is True, body
+        schedule = body["results"]["roll_pitch_best_fit"]["schedule"]
+        assert [item["target_id"] for item in schedule] == ["TGT-2"], body
+
+    def test_schedule_state_excludes_failed_acquisitions_by_default(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Active schedule state should hide superseded failed acquisitions unless explicitly requested."""
+        client, db, workspace_id = isolated_schedule_api
+        base_start = datetime.now(timezone.utc) + timedelta(days=1)
+
+        active = db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="ACTIVE-1",
+            start_time=_iso(base_start),
+            end_time=_iso(base_start),
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="committed",
+            workspace_id=workspace_id,
+        )
+        failed = db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="FAILED-1",
+            start_time=_iso(base_start + timedelta(minutes=15)),
+            end_time=_iso(base_start + timedelta(minutes=15)),
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="failed",
+            workspace_id=workspace_id,
+        )
+
+        default_state = client.get(
+            "/api/v1/schedule/state",
+            params={"workspace_id": workspace_id},
+        )
+        assert default_state.status_code == 200, default_state.json()
+        default_ids = {
+            acq["id"] for acq in default_state.json()["state"]["acquisitions"]
+        }
+        assert active.id in default_ids, default_state.json()
+        assert failed.id not in default_ids, default_state.json()
+
+        historical_state = client.get(
+            "/api/v1/schedule/state",
+            params={"workspace_id": workspace_id, "include_failed": "true"},
+        )
+        assert historical_state.status_code == 200, historical_state.json()
+        historical_by_id = {
+            acq["id"]: acq for acq in historical_state.json()["state"]["acquisitions"]
+        }
+        assert failed.id in historical_by_id, historical_state.json()
+        assert historical_by_id[failed.id]["state"] == "failed"
+
+    def test_schedule_horizon_excludes_failed_acquisitions_by_default(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Horizon reads should treat failed acquisitions as history unless include_failed=true."""
+        client, db, workspace_id = isolated_schedule_api
+        base_start = datetime.now(timezone.utc) + timedelta(days=2)
+
+        active = db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="ACTIVE-H",
+            start_time=_iso(base_start),
+            end_time=_iso(base_start + timedelta(minutes=5)),
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="committed",
+            workspace_id=workspace_id,
+        )
+        failed = db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="FAILED-H",
+            start_time=_iso(base_start + timedelta(minutes=10)),
+            end_time=_iso(base_start + timedelta(minutes=15)),
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="failed",
+            workspace_id=workspace_id,
+        )
+
+        params = {
+            "workspace_id": workspace_id,
+            "from": _iso(base_start - timedelta(minutes=1)),
+            "to": _iso(base_start + timedelta(hours=1)),
+        }
+
+        default_horizon = client.get("/api/v1/schedule/horizon", params=params)
+        assert default_horizon.status_code == 200, default_horizon.json()
+        default_ids = {acq["id"] for acq in default_horizon.json()["acquisitions"]}
+        assert active.id in default_ids, default_horizon.json()
+        assert failed.id not in default_ids, default_horizon.json()
+
+        historical_horizon = client.get(
+            "/api/v1/schedule/horizon",
+            params={**params, "include_failed": "true"},
+        )
+        assert historical_horizon.status_code == 200, historical_horizon.json()
+        historical_by_id = {
+            acq["id"]: acq for acq in historical_horizon.json()["acquisitions"]
+        }
+        assert failed.id in historical_by_id, historical_horizon.json()
+        assert historical_by_id[failed.id]["state"] == "failed"
+
+    def test_repair_drops_acquisitions_for_targets_removed_from_current_scope(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Repair mode should remove flex acquisitions whose targets are no longer in the current mission."""
+        client, db, workspace_id = isolated_schedule_api
+        original_state = _snapshot_analysis_state()
+
+        base_start = datetime.now(timezone.utc) + timedelta(days=1)
+        keep_slot = _iso(base_start)
+        removed_slot = _iso(base_start + timedelta(minutes=20))
+
+        set_current_mission_data(
+            {
+                "passes": [
+                    {
+                        "satellite_name": "SAT-1",
+                        "target_name": "ACTIVE-TGT",
+                        "start_time": keep_slot,
+                        "end_time": keep_slot,
+                        "max_elevation_time": keep_slot,
+                        "max_elevation": 42.0,
+                        "start_azimuth": 180.0,
+                    }
+                ],
+                "targets": [
+                    TargetData(
+                        name="ACTIVE-TGT", latitude=25.0, longitude=55.0, priority=5
+                    ),
+                ],
+                "mission_data": {
+                    "targets": [
+                        {"name": "ACTIVE-TGT", "priority": 5},
+                    ],
+                    "start_time": keep_slot,
+                    "end_time": _iso(base_start + timedelta(hours=1)),
+                },
+            },
+            workspace_id,
+        )
+
+        active = db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="ACTIVE-TGT",
+            start_time=keep_slot,
+            end_time=keep_slot,
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="committed",
+            workspace_id=workspace_id,
+        )
+        removed = db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="REMOVED-TGT",
+            start_time=removed_slot,
+            end_time=removed_slot,
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="committed",
+            workspace_id=workspace_id,
+        )
+
+        try:
+            repair = client.post(
+                "/api/v1/schedule/repair",
+                json={
+                    "workspace_id": workspace_id,
+                    "planning_mode": "repair",
+                    "target_priorities": {"ACTIVE-TGT": 5},
+                },
+            )
+            assert repair.status_code == 200, repair.json()
+            repair_body = repair.json()
+            assert removed.id in repair_body["repair_diff"]["dropped"], repair_body
+
+            commit = client.post(
+                "/api/v1/schedule/repair/commit",
+                json={
+                    "workspace_id": workspace_id,
+                    "plan_id": repair_body["plan_id"],
+                    "drop_acquisition_ids": repair_body["repair_diff"]["dropped"],
+                    "force": True,
+                },
+            )
+        finally:
+            _restore_analysis_state(original_state)
+
+        assert commit.status_code == 200, commit.json()
+
+        active_state = client.get(
+            "/api/v1/schedule/state",
+            params={"workspace_id": workspace_id},
+        )
+        assert active_state.status_code == 200, active_state.json()
+        active_ids = {
+            acq["id"] for acq in active_state.json()["state"]["acquisitions"]
+        }
+        assert active.id in active_ids, active_state.json()
+        assert removed.id not in active_ids, active_state.json()
+
+        historical_state = client.get(
+            "/api/v1/schedule/state",
+            params={"workspace_id": workspace_id, "include_failed": "true"},
+        )
+        assert historical_state.status_code == 200, historical_state.json()
+        historical_by_id = {
+            acq["id"]: acq for acq in historical_state.json()["state"]["acquisitions"]
+        }
+        assert removed.id in historical_by_id, historical_state.json()
+        assert historical_by_id[removed.id]["state"] == "failed"
+
+    def test_repair_commit_applies_persisted_added_plan_items(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Repair commits should create the newly added acquisitions produced by the repair plan."""
+        client, db, workspace_id = isolated_schedule_api
+        original_state = _snapshot_analysis_state()
+
+        existing_start = datetime.now(timezone.utc) + timedelta(days=1)
+        added_slot = _iso(existing_start + timedelta(minutes=30))
+        set_cached_opportunities([], workspace_id)
+        set_current_mission_data(
+            {
+                "passes": [
+                    {
+                        "satellite_name": "SAT-1",
+                        "target_name": "TGT-2",
+                        "start_time": added_slot,
+                        "end_time": added_slot,
+                        "max_elevation_time": added_slot,
+                        "max_elevation": 44.0,
+                        "start_azimuth": 180.0,
+                    }
+                ],
+                "targets": [
+                    TargetData(name="TGT-1", latitude=25.0, longitude=55.0, priority=5),
+                    TargetData(name="TGT-2", latitude=25.5, longitude=55.5, priority=1),
+                ],
+                "mission_data": {
+                    "start_time": _iso(existing_start),
+                    "end_time": _iso(existing_start + timedelta(hours=1)),
+                    "max_spacecraft_pitch_deg": 45.0,
+                },
+                "satellites_dict": {},
+            },
+            workspace_id,
+        )
+
+        db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="TGT-1",
+            start_time=_iso(existing_start),
+            end_time=_iso(existing_start),
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="committed",
+            workspace_id=workspace_id,
+        )
+
+        try:
+            repair = client.post(
+                "/api/v1/schedule/repair",
+                json={
+                    "workspace_id": workspace_id,
+                    "target_priorities": {"TGT-1": 5, "TGT-2": 1},
+                },
+            )
+            assert repair.status_code == 200, repair.json()
+            repair_body = repair.json()
+            assert repair_body["repair_diff"]["added"], repair_body
+
+            commit = client.post(
+                "/api/v1/schedule/repair/commit",
+                json={
+                    "plan_id": repair_body["plan_id"],
+                    "workspace_id": workspace_id,
+                    "drop_acquisition_ids": repair_body["repair_diff"]["dropped"],
+                    "force": True,
+                },
+            )
+        finally:
+            _restore_analysis_state(original_state)
+
+        assert commit.status_code == 200, commit.json()
+        commit_body = commit.json()
+        assert commit_body["committed"] == len(repair_body["repair_diff"]["added"])
+
+        state = client.get(
+            "/api/v1/schedule/state",
+            params={"workspace_id": workspace_id},
+        )
+        assert state.status_code == 200, state.json()
+        target_ids = {acq["target_id"] for acq in state.json()["state"]["acquisitions"]}
+        assert "TGT-2" in target_ids
+
+    def test_planning_opportunities_are_workspace_scoped(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Opportunity queries must not leak the last analyzed mission from another workspace."""
+        client, _db, workspace_id = isolated_schedule_api
+        other_workspace_id = get_workspace_db().create_workspace(name="Other Workspace")
+        original_state = _snapshot_analysis_state()
+
+        set_current_mission_data(
+            {
+                "passes": [
+                    {
+                        "satellite_name": "SAT-1",
+                        "target_name": "ScopedTarget",
+                        "start_time": _iso(datetime.now(timezone.utc) + timedelta(days=2)),
+                        "end_time": _iso(
+                            datetime.now(timezone.utc)
+                            + timedelta(days=2, minutes=5)
+                        ),
+                        "max_elevation": 42.0,
+                        "start_azimuth": 180.0,
+                    }
+                ],
+                "targets": [{"name": "ScopedTarget"}],
+                "mission_data": {
+                    "targets": [{"name": "ScopedTarget"}],
+                },
+            },
+            workspace_id,
+        )
+
+        try:
+            own_response = client.get(
+                "/api/v1/planning/opportunities",
+                params={"workspace_id": workspace_id},
+            )
+            other_response = client.get(
+                "/api/v1/planning/opportunities",
+                params={"workspace_id": other_workspace_id},
+            )
+        finally:
+            _restore_analysis_state(original_state)
+
+        assert own_response.status_code == 200, own_response.json()
+        own_body = own_response.json()
+        assert own_body["success"] is True
+        assert own_body["count"] == 1
+        assert own_body["opportunities"][0]["target_id"] == "ScopedTarget"
+
+        assert other_response.status_code == 404, other_response.text
+
+    def test_incremental_planning_blocks_exactly_matching_committed_opportunities(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Incremental planning must not re-propose an already committed point opportunity."""
+        client, db, workspace_id = isolated_schedule_api
+        original_state = _snapshot_analysis_state()
+
+        base_start = datetime.now(timezone.utc) + timedelta(days=1)
+        exact_slot = _iso(base_start)
+        later_slot = _iso(base_start + timedelta(minutes=10))
+
+        set_current_mission_data(
+            {
+                "passes": [
+                    {
+                        "satellite_name": "SAT-1",
+                        "target_name": "TGT-1",
+                        "start_time": exact_slot,
+                        "end_time": exact_slot,
+                        "max_elevation_time": exact_slot,
+                        "max_elevation": 42.0,
+                        "start_azimuth": 180.0,
+                    },
+                    {
+                        "satellite_name": "SAT-1",
+                        "target_name": "TGT-2",
+                        "start_time": later_slot,
+                        "end_time": later_slot,
+                        "max_elevation_time": later_slot,
+                        "max_elevation": 40.0,
+                        "start_azimuth": 182.0,
+                    },
+                ],
+                "targets": [
+                    TargetData(name="TGT-1", latitude=25.0, longitude=55.0, priority=5),
+                    TargetData(name="TGT-2", latitude=25.5, longitude=55.5, priority=1),
+                ],
+                "mission_data": {
+                    "start_time": exact_slot,
+                    "end_time": _iso(base_start + timedelta(hours=1)),
+                    "max_spacecraft_pitch_deg": 45.0,
+                },
+                "satellites_dict": {},
+            },
+            workspace_id,
+        )
+
+        db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="TGT-1",
+            start_time=exact_slot,
+            end_time=exact_slot,
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="committed",
+            workspace_id=workspace_id,
+        )
+
+        try:
+            response = client.post(
+                "/api/v1/planning/schedule",
+                json={
+                    "algorithms": ["roll_pitch_best_fit"],
+                    "mode": "incremental",
+                    "workspace_id": workspace_id,
+                },
+            )
+        finally:
+            _restore_analysis_state(original_state)
+
+        assert response.status_code == 200, response.json()
+        body = response.json()
+        assert body["success"] is True, body
+        schedule = body["results"]["roll_pitch_best_fit"]["schedule"]
+        assert [item["target_id"] for item in schedule] == ["TGT-2"], body

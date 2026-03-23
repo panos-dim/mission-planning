@@ -55,4 +55,5 @@ class ParsedTarget(BaseModel):
     latitude: float
     longitude: float
     description: str = ""
+    priority: int = 5
     source: str = "manual"  # manual, file, parsed

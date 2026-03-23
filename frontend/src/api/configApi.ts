@@ -1,25 +1,10 @@
 /**
  * Config API
- * Endpoints for application configuration (ground stations, satellites, settings)
+ * Endpoints for application configuration (satellites, SAR modes, settings)
  */
 
 import { apiClient } from './client'
 import { API_ENDPOINTS } from './config'
-
-// Ground station types
-export interface GroundStation {
-  id?: string
-  name: string
-  latitude: number
-  longitude: number
-  type?: 'Primary' | 'Backup' | string
-  description?: string
-}
-
-export interface GroundStationsResponse {
-  success: boolean
-  ground_stations: GroundStation[]
-}
 
 // Mission settings types
 export interface MissionSettings {
@@ -128,15 +113,6 @@ export interface SarModesResponse {
  * Config API functions
  */
 export const configApi = {
-  /**
-   * Get ground stations configuration
-   */
-  async getGroundStations(options?: { signal?: AbortSignal }): Promise<GroundStationsResponse> {
-    return apiClient.get<GroundStationsResponse>(API_ENDPOINTS.CONFIG_GROUND_STATIONS, {
-      signal: options?.signal,
-    })
-  },
-
   /**
    * Get mission settings
    */

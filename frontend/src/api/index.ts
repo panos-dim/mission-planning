@@ -46,8 +46,6 @@ export type {
   SatelliteSearchResult,
 } from './tle'
 export type {
-  GroundStation,
-  GroundStationsResponse,
   MissionSettings,
   MissionSettingsResponse,
   SatellitesResponse,

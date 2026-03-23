@@ -15,8 +15,6 @@ export type TreeNodeType =
   | "assets"
   | "satellites"
   | "satellite"
-  | "ground_stations"
-  | "ground_station"
   | "targets"
   | "target"
   | "constraints"
@@ -133,7 +131,6 @@ export interface WorkspaceTreeData {
   // Asset counts
   counts: {
     satellites: number;
-    groundStations: number;
     targets: number;
     opportunities: number;
     plans: number;

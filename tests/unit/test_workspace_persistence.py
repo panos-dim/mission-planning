@@ -149,6 +149,20 @@ class TestWorkspaceCreation:
         assert workspace.analysis_state is not None
         assert len(workspace.analysis_state["passes"]) == 1
 
+    def test_create_workspace_uses_canonical_utc_timestamps(
+        self, temp_db: WorkspaceDB
+    ) -> None:
+        """Created workspaces should use a single valid UTC timestamp format."""
+        workspace_id = temp_db.create_workspace(name="Timestamp Test")
+
+        workspace = temp_db.get_workspace(workspace_id)
+        assert workspace is not None
+
+        assert workspace.created_at.endswith("Z")
+        assert workspace.updated_at.endswith("Z")
+        assert "+00:00Z" not in workspace.created_at
+        assert "+00:00Z" not in workspace.updated_at
+
 
 class TestWorkspaceRetrieval:
     """Tests for workspace retrieval."""
@@ -198,6 +212,37 @@ class TestWorkspaceRetrieval:
         # Get last 1
         page3 = temp_db.list_workspaces(limit=2, offset=4)
         assert len(page3) == 1
+
+    def test_to_dict_normalizes_legacy_workspace_timestamps(
+        self, temp_db: WorkspaceDB
+    ) -> None:
+        """Legacy malformed timestamps should be normalized in API payloads."""
+        workspace_id = temp_db.create_workspace(name="Legacy Timestamp")
+
+        with temp_db._get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE workspaces
+                SET created_at = ?, updated_at = ?, last_run_timestamp = ?
+                WHERE id = ?
+                """,
+                (
+                    "2026-03-11T05:35:14.955683+00:00Z",
+                    "2026-03-11 05:35:14",
+                    "2026-03-11T05:35:14.955683+00:00Z",
+                    workspace_id,
+                ),
+            )
+            conn.commit()
+
+        summary = temp_db.list_workspaces()[0].to_dict()
+        workspace = temp_db.get_workspace(workspace_id)
+        assert workspace is not None
+        workspace_dict = workspace.to_dict()
+
+        assert summary["created_at"] == "2026-03-11T05:35:14.955683Z"
+        assert summary["updated_at"] == "2026-03-11T05:35:14Z"
+        assert workspace_dict["last_run_timestamp"] == "2026-03-11T05:35:14.955683Z"
 
 
 class TestWorkspaceUpdate:

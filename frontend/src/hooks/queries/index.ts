@@ -2,7 +2,7 @@
  * Query Hooks - Barrel Export
  *
  * Usage:
- *   import { useMissionAnalysis, useGroundStations, useTLESources } from '@/hooks/queries'
+ *   import { useMissionAnalysis, useMissionSettings, useTLESources } from '@/hooks/queries'
  */
 
 // TLE hooks
@@ -17,7 +17,7 @@ export {
 } from './useMissionQueries'
 
 // Config hooks
-export { useGroundStations, useMissionSettings, useSatellitesConfig } from './useConfigQueries'
+export { useMissionSettings, useSatellitesConfig } from './useConfigQueries'
 
 // Schedule hooks
 export { useScheduleHorizon, useScheduleContext } from './useScheduleQueries'
