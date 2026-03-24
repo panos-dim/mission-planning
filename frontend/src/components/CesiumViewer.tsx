@@ -70,7 +70,7 @@ const CesiumViewer: React.FC<CesiumViewerProps> = () => {
           // Style infoBox
           if (viewer.infoBox) {
             const infoBoxContainer = viewer.infoBox.container
-            if (infoBoxContainer) {
+            if (infoBoxContainer instanceof HTMLElement) {
               // Force visibility and positioning
               infoBoxContainer.style.display = 'block'
               infoBoxContainer.style.visibility = 'visible'
@@ -156,7 +156,8 @@ const CesiumViewer: React.FC<CesiumViewerProps> = () => {
                     // Ensure timeline stays synced after manual scrubbing
                     setTimeout(() => {
                       if (viewer.timeline && viewer.clock) {
-                        viewer.timeline.updateFromClock()
+                        const timeline = viewer.timeline as TimelineInternals
+                        timeline.updateFromClock?.()
                       }
                     }, 10)
                   })
@@ -490,15 +491,15 @@ const CesiumViewer: React.FC<CesiumViewerProps> = () => {
                     if (viewer.timeline) {
                       // Set timeline to exact mission bounds
                       viewer.timeline.zoomTo(start, stop)
-                      viewer.timeline.updateFromClock()
+                      const timeline = viewer.timeline as TimelineInternals
+                      timeline.updateFromClock?.()
 
                       // Force timeline to stay at exact bounds by manipulating internal properties
-                      const timeline = viewer.timeline as TimelineInternals
                       if (timeline._startJulian && timeline._endJulian) {
                         // Override the internal timeline bounds to prevent padding
                         timeline._startJulian = start
                         timeline._endJulian = stop
-                        timeline._makeTics() // Recreate the timeline ticks
+                        timeline._makeTics?.() // Recreate the timeline ticks
                       }
                     }
 

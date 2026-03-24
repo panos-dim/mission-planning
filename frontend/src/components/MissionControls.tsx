@@ -13,7 +13,7 @@ import { useTargetAddStore } from '../store/targetAddStore'
 import { usePlanningStore } from '../store/planningStore'
 import { useSlewVisStore } from '../store/slewVisStore'
 import { useVisStore } from '../store/visStore'
-import { RIGHT_SIDEBAR_PANELS } from '../constants/simpleMode'
+import { LEFT_SIDEBAR_PANELS, RIGHT_SIDEBAR_PANELS } from '../constants/simpleMode'
 
 // Governance indicator component
 const GovernanceIndicator: React.FC = () => {
@@ -57,12 +57,24 @@ const MissionControls: React.FC = () => {
   const { data: satellitesData } = useManagedSatellites()
   const allSatellites = useMemo(() => satellitesData?.satellites ?? [], [satellitesData])
   const hasAutoSelected = useRef(false)
+  const analysisHandoffPendingRef = useRef(false)
 
   // Client state: selected satellite IDs + TLE data (Zustand + persist → localStorage)
   const { selectedIds, selectedSatellites, setSelection } = useSatelliteSelectionStore()
 
   // Check if mission has been analyzed (CZML data loaded)
   const isAnalyzed = state.czmlData && state.czmlData.length > 0
+
+  useEffect(() => {
+    if (!analysisHandoffPendingRef.current || state.isLoading) return
+
+    if (isAnalyzed) {
+      useVisStore.getState().openRightPanel(RIGHT_SIDEBAR_PANELS.MISSION_RESULTS)
+      useVisStore.getState().openLeftPanel(LEFT_SIDEBAR_PANELS.PLANNING)
+    }
+
+    analysisHandoffPendingRef.current = false
+  }, [isAnalyzed, state.isLoading])
 
   // Calculate default end time (24 hours from now)
   const getDefaultEndTime = () => {
@@ -156,6 +168,7 @@ const MissionControls: React.FC = () => {
   const handleAnalyzeMission = async () => {
     // Turn off map-click add mode so clicks don't intercept after analysis
     disableAddMode()
+    analysisHandoffPendingRef.current = false
 
     if (formData.satellites.length === 0) {
       alert('Please add at least one satellite')
@@ -182,12 +195,12 @@ const MissionControls: React.FC = () => {
       tle: formData.satellites[0],
     }
 
+    analysisHandoffPendingRef.current = true
     await analyzeMission(missionData)
-    // Auto-open the right sidebar to Feasibility Results after analysis completes
-    useVisStore.getState().openRightPanel(RIGHT_SIDEBAR_PANELS.MISSION_RESULTS)
   }
 
   const handleClearMission = () => {
+    analysisHandoffPendingRef.current = false
     clearMission()
     // Also clear planning results so the planning panel resets too
     usePlanningStore.getState().clearResults()

@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react'
 import {
   AlertTriangle,
   CheckCircle,
@@ -14,6 +15,7 @@ import {
 import type { CommitPreview, ConflictInfo } from './ConflictWarningModal'
 import type { AddedEntry, DroppedEntry, MovedEntry, RepairDiff } from '../api/scheduleApi'
 import { cn } from './ui/utils'
+import { getRepairDisplayCounts, normalizeRepairDiffForDisplay } from '../utils/repairDisplay'
 
 interface TargetStatistics {
   total_targets: number
@@ -51,6 +53,11 @@ export interface ScheduleDataForApply {
   targetStatistics?: TargetStatistics
   plannerSummary?: PlannerSummary
   repairDiff?: RepairDiff
+  summaryStats?: {
+    acquisitions: number
+    satellites: number
+    targets: number
+  }
 }
 
 interface ApplyConfirmationPanelProps {
@@ -84,6 +91,10 @@ type AssignmentRow =
       satelliteId: string
       primaryTime: string
     }
+
+type AssignmentFilter = 'all' | 'added' | 'moved' | 'removed'
+
+const ASSIGNMENT_FILTER_ORDER: AssignmentFilter[] = ['all', 'moved', 'added', 'removed']
 
 // Format ISO time: "Feb 20, 14:22 UTC"
 function fmtTime(iso: string): string {
@@ -131,6 +142,7 @@ export default function ApplyConfirmationPanel({
   onBack,
   scheduleData,
 }: ApplyConfirmationPanelProps): JSX.Element {
+  const [activeFilter, setActiveFilter] = useState<AssignmentFilter>('all')
   const hasErrors = preview.conflicts.some((c) => c.severity === 'error')
   const hasWarnings =
     preview.conflicts.some((c) => c.severity === 'warning') || preview.warnings.length > 0
@@ -138,11 +150,16 @@ export default function ApplyConfirmationPanel({
 
   const ps = scheduleData?.plannerSummary
   const ts = scheduleData?.targetStatistics
-  const rd = scheduleData?.repairDiff
+  const rawRepairDiff = scheduleData?.repairDiff
+  const rd = rawRepairDiff ? normalizeRepairDiffForDisplay(rawRepairDiff) : undefined
   const totalScheduled = scheduleData?.schedule.length ?? preview.new_items_count
+  const summaryStats = scheduleData?.summaryStats
   const isRepairMode = !!rd
-  const assignmentRows: AssignmentRow[] = isRepairMode
-    ? [
+  const displayCounts = rd ? getRepairDisplayCounts(rd) : null
+  const assignmentRows: AssignmentRow[] = useMemo(
+    () =>
+      isRepairMode
+        ? [
         ...((rd?.change_log?.added ?? []).map((entry: AddedEntry) => ({
           kind: 'added' as const,
           key: `added-${entry.acquisition_id}`,
@@ -165,14 +182,54 @@ export default function ApplyConfirmationPanel({
           satelliteId: entry.satellite_id,
           primaryTime: entry.start,
         })) satisfies AssignmentRow[]),
-      ]
-    : (ps?.target_acquisitions ?? []).map((acq, idx) => ({
-        kind: 'added' as const,
-        key: `planned-${acq.target_id}-${acq.satellite_id}-${acq.start_time}-${idx}`,
-        targetId: acq.target_id,
-        satelliteId: acq.satellite_id,
-        primaryTime: acq.start_time,
-      }))
+          ]
+        : (ps?.target_acquisitions ?? []).map((acq, idx) => ({
+            kind: 'added' as const,
+            key: `planned-${acq.target_id}-${acq.satellite_id}-${acq.start_time}-${idx}`,
+            targetId: acq.target_id,
+            satelliteId: acq.satellite_id,
+            primaryTime: acq.start_time,
+          })),
+    [isRepairMode, ps?.target_acquisitions, rd],
+  )
+  const sortedAssignmentRows = useMemo(() => {
+    const priority: Record<AssignmentRow['kind'], number> = {
+      moved: 0,
+      added: 1,
+      removed: 2,
+    }
+
+    return [...assignmentRows].sort((a, b) => {
+      const kindDelta = priority[a.kind] - priority[b.kind]
+      if (kindDelta !== 0) return kindDelta
+      return new Date(a.primaryTime).getTime() - new Date(b.primaryTime).getTime()
+    })
+  }, [assignmentRows])
+  const assignmentCounts = useMemo(
+    () => ({
+      all: sortedAssignmentRows.length,
+      added: sortedAssignmentRows.filter((row) => row.kind === 'added').length,
+      moved: sortedAssignmentRows.filter((row) => row.kind === 'moved').length,
+      removed: sortedAssignmentRows.filter((row) => row.kind === 'removed').length,
+    }),
+    [sortedAssignmentRows],
+  )
+  const filteredAssignmentRows = useMemo(
+    () =>
+      activeFilter === 'all'
+        ? sortedAssignmentRows
+        : sortedAssignmentRows.filter((row) => row.kind === activeFilter),
+    [activeFilter, sortedAssignmentRows],
+  )
+  const coverageLabel = ts
+    ? `${ts.targets_acquired}/${ts.total_targets} (${ts.coverage_percentage.toFixed(0)}%)`
+    : '—'
+  const snapshotTone = hasErrors ? 'text-red-300' : hasWarnings ? 'text-yellow-300' : 'text-emerald-300'
+  const snapshotCopy = hasErrors
+    ? 'Requires operator acknowledgement before apply.'
+    : hasWarnings
+      ? 'Review the proposed changes before applying.'
+      : 'Ready for commit with no detected conflicts.'
 
   return (
     <div className="flex flex-col h-full">
@@ -210,17 +267,95 @@ export default function ApplyConfirmationPanel({
 
       {/* Scrollable Content */}
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+        <div className="sticky top-0 z-10 -mx-4 px-4 pb-3 bg-gray-950/85 backdrop-blur-sm border-b border-gray-800/70">
+          <div className="rounded-xl border border-gray-800/80 bg-gradient-to-br from-gray-900 via-gray-900 to-gray-950 shadow-[0_16px_32px_rgba(0,0,0,0.22)]">
+            <div className="flex items-start justify-between gap-3 px-3.5 py-3 border-b border-gray-800/70">
+              <div className="min-w-0">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-gray-500">
+                  Operations Snapshot
+                </div>
+                <div className={cn('mt-1 text-sm font-semibold', snapshotTone)}>
+                  {snapshotCopy}
+                </div>
+              </div>
+              <div className="rounded-full border border-gray-700/70 bg-gray-900/80 px-2.5 py-1 text-[10px] font-medium text-gray-300">
+                {isRepairMode ? 'Repair Review' : 'Fresh Schedule'}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 px-3.5 py-3">
+              <SnapshotMetric
+                label="Acquisitions"
+                value={summaryStats?.acquisitions ?? totalScheduled}
+                tone="text-white"
+              />
+              <SnapshotMetric
+                label="Coverage"
+                value={coverageLabel}
+                tone={ts?.coverage_percentage === 100 ? 'text-emerald-300' : 'text-gray-100'}
+              />
+              <SnapshotMetric
+                label="Targets"
+                value={summaryStats?.targets ?? ts?.targets_acquired ?? '—'}
+                tone="text-gray-100"
+              />
+              <SnapshotMetric
+                label="Conflicts"
+                value={preview.conflicts_count}
+                tone={hasConflicts ? 'text-red-300' : 'text-emerald-300'}
+              />
+            </div>
+
+            {(rd && (displayCounts?.totalChanges ?? rd.change_score.num_changes) > 0) || (!rd && totalScheduled > 0) ? (
+              <div className="flex flex-wrap items-center gap-1.5 border-t border-gray-800/70 px-3.5 py-3">
+                {rd && (displayCounts?.kept ?? rd.kept.length) > 0 && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-700/50 text-[11px] text-gray-400 border border-gray-600/30">
+                    <Shield className="w-3 h-3" />
+                    {displayCounts?.kept ?? rd.kept.length} kept
+                  </span>
+                )}
+                {rd && (displayCounts?.added ?? rd.added.length) > 0 && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-900/30 text-[11px] text-blue-300 border border-blue-700/30">
+                    <Plus className="w-3 h-3" />
+                    {displayCounts?.added ?? rd.added.length} added
+                  </span>
+                )}
+                {rd && (displayCounts?.dropped ?? rd.dropped.length) > 0 && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-900/25 text-[11px] text-red-300 border border-red-700/30">
+                    <Minus className="w-3 h-3" />
+                    {displayCounts?.dropped ?? rd.dropped.length} dropped
+                  </span>
+                )}
+                {rd && (displayCounts?.moved ?? rd.moved.length) > 0 && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-900/25 text-[11px] text-orange-300 border border-orange-700/30">
+                    <Clock className="w-3 h-3" />
+                    {displayCounts?.moved ?? rd.moved.length} moved
+                  </span>
+                )}
+                {!rd && totalScheduled > 0 && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-900/30 text-[11px] text-blue-300 border border-blue-700/30">
+                    <Plus className="w-3 h-3" />
+                    {totalScheduled} new
+                  </span>
+                )}
+              </div>
+            ) : null}
+          </div>
+        </div>
+
         {/* ── Stats Row ── */}
         <div className="grid grid-cols-3 gap-2">
           <div className="bg-gray-800/60 rounded-lg p-2.5 text-center border border-gray-700/40">
-            <div className="text-lg font-bold text-white leading-tight">{totalScheduled}</div>
+            <div className="text-lg font-bold text-white leading-tight">
+              {summaryStats?.acquisitions ?? totalScheduled}
+            </div>
             <div className="text-[10px] text-gray-500 uppercase tracking-wide mt-0.5">
               Acquisitions
             </div>
           </div>
           <div className="bg-gray-800/60 rounded-lg p-2.5 text-center border border-gray-700/40">
             <div className="text-lg font-bold text-white leading-tight">
-              {ps?.satellites_used.length ?? '—'}
+              {summaryStats?.satellites ?? ps?.satellites_used.length ?? '—'}
             </div>
             <div className="text-[10px] text-gray-500 uppercase tracking-wide mt-0.5">
               Satellites
@@ -228,61 +363,96 @@ export default function ApplyConfirmationPanel({
           </div>
           <div className="bg-gray-800/60 rounded-lg p-2.5 text-center border border-gray-700/40">
             <div className="text-lg font-bold text-white leading-tight">
-              {ts?.targets_acquired ?? '—'}
+              {summaryStats?.targets ?? ts?.targets_acquired ?? '—'}
             </div>
             <div className="text-[10px] text-gray-500 uppercase tracking-wide mt-0.5">Targets</div>
           </div>
         </div>
 
-        {/* ── Diff Pills ── */}
-        {rd && rd.change_score.num_changes > 0 ? (
-          <div className="flex flex-wrap items-center gap-1.5">
-            {rd.kept.length > 0 && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-700/50 text-[11px] text-gray-400 border border-gray-600/30">
-                <Shield className="w-3 h-3" />
-                {rd.kept.length} kept
-              </span>
-            )}
-            {rd.added.length > 0 && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-900/30 text-[11px] text-blue-300 border border-blue-700/30">
-                <Plus className="w-3 h-3" />
-                {rd.added.length} added
-              </span>
-            )}
-            {rd.dropped.length > 0 && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-900/25 text-[11px] text-red-300 border border-red-700/30">
-                <Minus className="w-3 h-3" />
-                {rd.dropped.length} dropped
-              </span>
-            )}
-            {rd.moved.length > 0 && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-900/25 text-[11px] text-orange-300 border border-orange-700/30">
-                <Clock className="w-3 h-3" />
-                {rd.moved.length} moved
-              </span>
-            )}
-          </div>
-        ) : !rd && totalScheduled > 0 ? (
-          <div className="flex items-center gap-1.5">
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-900/30 text-[11px] text-blue-300 border border-blue-700/30">
-              <Plus className="w-3 h-3" />
-              {totalScheduled} new
-            </span>
-          </div>
-        ) : null}
-
         {/* ── Target Assignments ── */}
         {assignmentRows.length > 0 && (
-          <div className="space-y-1.5">
-            <h4 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
-              Target Assignments
-            </h4>
-            <div className="space-y-1 max-h-[400px] overflow-y-auto">
-              {assignmentRows.map((row) => (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h4 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                  Target Assignments
+                </h4>
+                <div className="mt-1 text-[11px] text-gray-500">
+                  {filteredAssignmentRows.length}/{assignmentRows.length} visible
+                </div>
+              </div>
+              <div className="text-[11px] text-gray-500">
+                {activeFilter === 'all'
+                  ? 'All actions'
+                  : activeFilter === 'added'
+                    ? 'New work only'
+                    : activeFilter === 'moved'
+                      ? 'Reschedules only'
+                      : 'Removals only'}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-1.5">
+              {ASSIGNMENT_FILTER_ORDER.map((filterKey) => {
+                const count = assignmentCounts[filterKey]
+                if (filterKey !== 'all' && count === 0) return null
+
+                return (
+                  <button
+                    key={filterKey}
+                    type="button"
+                    onClick={() => setActiveFilter(filterKey)}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-all duration-150',
+                      activeFilter === filterKey
+                        ? filterKey === 'added'
+                          ? 'border-blue-500/40 bg-blue-950/40 text-blue-200 shadow-[0_0_0_1px_rgba(59,130,246,0.18)]'
+                          : filterKey === 'moved'
+                            ? 'border-orange-500/40 bg-orange-950/35 text-orange-200 shadow-[0_0_0_1px_rgba(251,146,60,0.18)]'
+                            : filterKey === 'removed'
+                              ? 'border-red-500/40 bg-red-950/35 text-red-200 shadow-[0_0_0_1px_rgba(248,113,113,0.18)]'
+                              : 'border-gray-500/40 bg-gray-800/90 text-gray-100'
+                        : 'border-gray-700/70 bg-gray-900/70 text-gray-400 hover:border-gray-600 hover:text-gray-200',
+                    )}
+                  >
+                    {filterKey === 'added' ? (
+                      <Plus className="w-3 h-3" />
+                    ) : filterKey === 'moved' ? (
+                      <Clock className="w-3 h-3" />
+                    ) : filterKey === 'removed' ? (
+                      <Minus className="w-3 h-3" />
+                    ) : (
+                      <Shield className="w-3 h-3" />
+                    )}
+                    {filterKey === 'all'
+                      ? 'All'
+                      : filterKey === 'added'
+                        ? 'New'
+                        : filterKey === 'moved'
+                          ? 'Moved'
+                          : 'Removed'}
+                    <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] font-semibold text-inherit">
+                      {count}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+
+            <div className="space-y-1 max-h-[420px] overflow-y-auto pr-1">
+              {filteredAssignmentRows.length === 0 && (
+                <div className="rounded-lg border border-dashed border-gray-700/80 bg-gray-900/55 px-3 py-4 text-center text-xs text-gray-500">
+                  No assignments match the current filter.
+                </div>
+              )}
+
+              {filteredAssignmentRows.map((row) => (
                 <div
                   key={row.key}
+                  data-assignment-kind={row.kind}
+                  data-target-id={row.targetId}
                   className={cn(
-                    'flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs transition-colors',
+                    'flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs transition-all duration-150 hover:translate-x-[1px]',
                     row.kind === 'added' && 'bg-blue-900/15 border border-blue-800/25',
                     row.kind === 'moved' && 'bg-orange-900/10 border border-orange-800/25',
                     row.kind === 'removed' && 'bg-red-900/10 border border-red-800/20 opacity-75',
@@ -535,6 +705,25 @@ function ConflictItem({ conflict }: { conflict: ConflictInfo }): JSX.Element {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+function SnapshotMetric({
+  label,
+  value,
+  tone,
+}: {
+  label: string
+  value: string | number
+  tone: string
+}): JSX.Element {
+  return (
+    <div className="rounded-lg border border-gray-800/70 bg-gray-950/55 px-3 py-2.5">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-500">
+        {label}
+      </div>
+      <div className={cn('mt-1 text-base font-semibold leading-tight', tone)}>{value}</div>
     </div>
   )
 }

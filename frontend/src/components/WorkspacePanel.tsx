@@ -28,7 +28,9 @@ import type { WorkspaceSummary, WorkspaceData } from '../types'
 import * as workspacesApi from '../api/workspaces'
 import { usePlanningStore } from '../store/planningStore'
 import { useOrdersStore } from '../store/ordersStore'
+import { useWorkspaceStore } from '../store/workspaceStore'
 import { useMission } from '../context/MissionContext'
+import { cn } from './ui/utils'
 import { formatShortLocalDateTime } from '../utils/date'
 
 interface WorkspacePanelProps {
@@ -40,14 +42,18 @@ export function WorkspacePanel({ hasMissionData, onWorkspaceLoad }: WorkspacePan
   const planningResults = usePlanningStore((s) => s.results)
   const activeAlgorithm = usePlanningStore((s) => s.activeAlgorithm)
   const orders = useOrdersStore((s) => s.orders)
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspace)
+  const activeWorkspaceName = useWorkspaceStore((s) => s.activeWorkspaceName)
   const { state } = useMission()
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const [showCreateDialog, setShowCreateDialog] = useState(false)
+  const [createName, setCreateName] = useState('')
   const [showSaveDialog, setShowSaveDialog] = useState(false)
   const [saveName, setSaveName] = useState('')
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null)
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null)
 
   // Load workspaces on mount
   const loadWorkspaces = useCallback(async () => {
@@ -56,12 +62,35 @@ export function WorkspacePanel({ hasMissionData, onWorkspaceLoad }: WorkspacePan
     try {
       const result = await workspacesApi.listWorkspaces()
       setWorkspaces(result.workspaces)
+      setLastSyncedAt(new Date().toISOString())
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load workspaces')
     } finally {
       setIsLoading(false)
     }
   }, [])
+
+  const openCreateDialog = () => {
+    setShowCreateDialog(true)
+    setShowSaveDialog(false)
+    setError(null)
+  }
+
+  const closeCreateDialog = () => {
+    setShowCreateDialog(false)
+    setCreateName('')
+  }
+
+  const openSaveDialog = () => {
+    setShowSaveDialog(true)
+    setShowCreateDialog(false)
+    setError(null)
+  }
+
+  const closeSaveDialog = () => {
+    setShowSaveDialog(false)
+    setSaveName('')
+  }
 
   useEffect(() => {
     loadWorkspaces()
@@ -76,6 +105,36 @@ export function WorkspacePanel({ hasMissionData, onWorkspaceLoad }: WorkspacePan
   }, [successMessage])
 
   // Save current mission
+  const handleCreateWorkspace = async () => {
+    if (!createName.trim()) {
+      setError('Please enter a workspace name')
+      return
+    }
+
+    setIsLoading(true)
+    setError(null)
+    try {
+      const { workspaceId } = await workspacesApi.createWorkspace({
+        name: createName.trim(),
+      })
+      const workspaceData = await workspacesApi.getWorkspace(workspaceId, true)
+
+      if (onWorkspaceLoad) {
+        onWorkspaceLoad(workspaceId, workspaceData)
+      }
+
+      setSuccessMessage(`Workspace "${createName.trim()}" created`)
+      setCreateName('')
+      setShowCreateDialog(false)
+      setShowSaveDialog(false)
+      await loadWorkspaces()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create workspace')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
   const handleSave = async () => {
     if (!saveName.trim()) {
       setError('Please enter a workspace name')
@@ -125,7 +184,6 @@ export function WorkspacePanel({ hasMissionData, onWorkspaceLoad }: WorkspacePan
       if (onWorkspaceLoad) {
         onWorkspaceLoad(workspaceId, workspaceData)
       }
-      setSelectedWorkspaceId(workspaceId)
       setSuccessMessage('Workspace loaded successfully')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load workspace')
@@ -145,9 +203,6 @@ export function WorkspacePanel({ hasMissionData, onWorkspaceLoad }: WorkspacePan
     try {
       await workspacesApi.deleteWorkspace(workspaceId)
       setSuccessMessage(`Workspace "${workspaceName}" deleted`)
-      if (selectedWorkspaceId === workspaceId) {
-        setSelectedWorkspaceId(null)
-      }
       await loadWorkspaces()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete workspace')
@@ -211,23 +266,69 @@ export function WorkspacePanel({ hasMissionData, onWorkspaceLoad }: WorkspacePan
       {/* Scrollable Content */}
       <div className="flex-1 overflow-y-auto">
         <div className="p-4 space-y-4">
-          {/* Action buttons */}
-          <div className="flex items-center justify-end gap-1">
-            <button
-              onClick={loadWorkspaces}
-              disabled={isLoading}
-              className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
-              title="Refresh"
-            >
-              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-            </button>
-            <label
-              className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors cursor-pointer"
-              title="Import workspace"
-            >
-              <Upload className="w-4 h-4" />
-              <input type="file" accept=".json" onChange={handleImport} className="hidden" />
-            </label>
+          <div className="rounded-lg border border-gray-700 bg-gray-800/40">
+            <div className="flex items-start justify-between gap-3 border-b border-gray-700/70 px-3 py-3">
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold uppercase text-gray-500">Workspace Library</p>
+                <p className="mt-1 text-sm font-medium text-white">
+                  {workspaces.length === 0
+                    ? 'No saved workspaces yet'
+                    : `${workspaces.length} saved workspace${workspaces.length === 1 ? '' : 's'}`}
+                </p>
+                <p className="mt-1 text-xs text-gray-400 text-pretty">
+                  {isLoading
+                    ? 'Refreshing workspace list from the server...'
+                    : lastSyncedAt
+                      ? `Updated ${formatShortLocalDateTime(lastSyncedAt)}`
+                      : 'Create a blank workspace or load one from the server.'}
+                </p>
+              </div>
+              <div className="flex items-center gap-1 rounded-lg border border-gray-700 bg-gray-900/70 p-1">
+                <label
+                  className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-gray-800 hover:text-white cursor-pointer"
+                  title="Import workspace"
+                  aria-label="Import workspace"
+                >
+                  <Upload className="w-4 h-4" />
+                  <input type="file" accept=".json" onChange={handleImport} className="hidden" />
+                </label>
+                <button
+                  onClick={loadWorkspaces}
+                  disabled={isLoading}
+                  className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-gray-800 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  title="Refresh workspace list"
+                  aria-label="Refresh workspace list"
+                >
+                  <RefreshCw className={cn('w-4 h-4', isLoading && 'animate-spin')} />
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-2 px-3 py-3">
+              <button
+                onClick={() => {
+                  if (showCreateDialog) {
+                    closeCreateDialog()
+                    return
+                  }
+                  openCreateDialog()
+                }}
+                disabled={isLoading}
+                className={cn(
+                  'flex w-full items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                  showCreateDialog
+                    ? 'border-blue-500 bg-blue-900/25 text-blue-200'
+                    : 'border-blue-600 bg-blue-600 text-white hover:bg-blue-700',
+                )}
+                title="Create blank workspace"
+              >
+                <Plus className="w-4 h-4" />
+                <span>{showCreateDialog ? 'Cancel New Workspace' : 'New Workspace'}</span>
+              </button>
+              <p className="text-xs text-gray-500 text-pretty">
+                Start a fresh workspace or import a saved `.json` export from the toolbar.
+              </p>
+            </div>
           </div>
 
           {/* Messages */}
@@ -241,6 +342,67 @@ export function WorkspacePanel({ hasMissionData, onWorkspaceLoad }: WorkspacePan
             <div className="flex items-center gap-2 p-2 text-xs text-green-300 bg-green-900/30 rounded border border-green-800">
               <Check className="w-4 h-4 flex-shrink-0" />
               <span>{successMessage}</span>
+            </div>
+          )}
+
+          <div className="rounded-lg border border-gray-700 bg-gray-800/40 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">
+                  Active Workspace
+                </p>
+                <p className="mt-1 truncate text-sm font-medium text-white">
+                  {activeWorkspaceName || 'Default Workspace'}
+                </p>
+                <p className="mt-1 text-xs text-gray-400">
+                  {activeWorkspaceId
+                    ? 'Loaded from saved workspaces'
+                    : 'Using the default unsaved workspace'}
+                </p>
+              </div>
+              <div
+                className={`rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${
+                  activeWorkspaceId
+                    ? 'bg-blue-500/15 text-blue-300 ring-1 ring-blue-500/30'
+                    : 'bg-gray-700 text-gray-300 ring-1 ring-gray-600'
+                }`}
+              >
+                {activeWorkspaceId ? 'Selected' : 'Default'}
+              </div>
+            </div>
+          </div>
+
+          {/* Create Empty Workspace */}
+          {showCreateDialog && (
+            <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-3">
+              <h4 className="text-xs font-semibold text-gray-400 mb-2">NEW WORKSPACE</h4>
+              <p className="text-xs text-gray-500 mb-3">
+                Starts with an empty mission, schedule, and planning state.
+              </p>
+              <input
+                type="text"
+                value={createName}
+                onChange={(e) => setCreateName(e.target.value)}
+                placeholder="Workspace name..."
+                className="w-full px-2 py-1.5 text-sm bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-blue-500"
+                onKeyDown={(e) => e.key === 'Enter' && handleCreateWorkspace()}
+                autoFocus
+              />
+              <div className="flex gap-2 mt-2">
+                <button
+                  onClick={handleCreateWorkspace}
+                  disabled={isLoading || !createName.trim()}
+                  className="flex-1 px-2 py-1.5 text-xs bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white rounded transition-colors"
+                >
+                  Create
+                </button>
+                <button
+                  onClick={closeCreateDialog}
+                  className="px-2 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           )}
 
@@ -268,10 +430,7 @@ export function WorkspacePanel({ hasMissionData, onWorkspaceLoad }: WorkspacePan
                       Save
                     </button>
                     <button
-                      onClick={() => {
-                        setShowSaveDialog(false)
-                        setSaveName('')
-                      }}
+                      onClick={closeSaveDialog}
                       className="px-2 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
                     >
                       Cancel
@@ -280,7 +439,7 @@ export function WorkspacePanel({ hasMissionData, onWorkspaceLoad }: WorkspacePan
                 </div>
               ) : (
                 <button
-                  onClick={() => setShowSaveDialog(true)}
+                  onClick={openSaveDialog}
                   className="flex items-center justify-center gap-2 w-full px-3 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors"
                 >
                   <Save className="w-4 h-4" />
@@ -292,6 +451,10 @@ export function WorkspacePanel({ hasMissionData, onWorkspaceLoad }: WorkspacePan
 
           {/* Workspace List */}
           <div className="space-y-2">
+            <div className="flex items-center justify-between px-1">
+              <p className="text-[11px] font-semibold uppercase text-gray-500">Saved Workspaces</p>
+              <span className="text-xs text-gray-400">{workspaces.length}</span>
+            </div>
             {workspaces.length === 0 ? (
               <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-6 text-center">
                 <FolderOpen className="w-8 h-8 mx-auto mb-2 text-gray-500" />
@@ -299,23 +462,38 @@ export function WorkspacePanel({ hasMissionData, onWorkspaceLoad }: WorkspacePan
                 <p className="mt-1 text-xs text-gray-500">
                   {hasMissionData
                     ? 'Save your current mission to create one'
-                    : 'Run a feasibility analysis first'}
+                    : 'Create a workspace now, or import one from the toolbar above'}
                 </p>
+                <button
+                  onClick={hasMissionData ? openSaveDialog : openCreateDialog}
+                  className="mt-4 inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+                >
+                  {hasMissionData ? <Save className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+                  <span>{hasMissionData ? 'Save Current Mission' : 'Create Workspace'}</span>
+                </button>
               </div>
             ) : (
               workspaces.map((ws) => (
                 <div
                   key={ws.id}
-                  className={`bg-gray-800/50 border rounded-lg p-3 transition-colors ${
-                    selectedWorkspaceId === ws.id
+                  className={cn(
+                    'rounded-lg border bg-gray-800/50 p-3 transition-colors',
+                    activeWorkspaceId === ws.id
                       ? 'border-blue-500 bg-blue-900/20'
-                      : 'border-gray-700 hover:border-gray-600'
-                  }`}
+                      : 'border-gray-700 hover:border-gray-600',
+                  )}
                 >
                   {/* Workspace Header */}
                   <div className="flex items-start justify-between mb-2">
                     <div className="flex-1 min-w-0">
-                      <h4 className="text-sm font-medium text-white truncate">{ws.name}</h4>
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-sm font-medium text-white truncate">{ws.name}</h4>
+                        {activeWorkspaceId === ws.id && (
+                          <span className="rounded-full bg-blue-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-blue-300 ring-1 ring-blue-500/30">
+                            Active
+                          </span>
+                        )}
+                      </div>
                       <div className="flex items-center gap-2 mt-1 text-xs text-gray-400">
                         <Clock className="w-3 h-3" />
                         <span>{formatShortLocalDateTime(ws.updated_at)}</span>
@@ -418,8 +596,10 @@ export function WorkspacePanel({ hasMissionData, onWorkspaceLoad }: WorkspacePan
                         e.stopPropagation()
                         handleExport(ws.id)
                       }}
+                      disabled={isLoading}
                       className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
                       title="Export workspace"
+                      aria-label={`Export workspace ${ws.name}`}
                     >
                       <Download className="w-4 h-4" />
                     </button>
@@ -428,8 +608,10 @@ export function WorkspacePanel({ hasMissionData, onWorkspaceLoad }: WorkspacePan
                         e.stopPropagation()
                         handleDelete(ws.id, ws.name)
                       }}
+                      disabled={isLoading}
                       className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-gray-700 rounded transition-colors"
                       title="Delete workspace"
+                      aria-label={`Delete workspace ${ws.name}`}
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>

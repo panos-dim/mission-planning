@@ -766,6 +766,8 @@ async def get_schedule_horizon(
         start_time=start_str,
         end_time=end_str,
         workspace_id=workspace_id,
+        include_tentative=include_tentative,
+        include_failed=include_failed,
     )
 
     horizon = HorizonInfo(

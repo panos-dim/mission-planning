@@ -16,6 +16,7 @@ import {
   Entity,
   ColorMaterialProperty,
   ConstantProperty,
+  MaterialProperty,
   Property,
   JulianDate,
   Viewer,
@@ -40,7 +41,7 @@ export interface HighlightRequest {
 }
 
 export interface OriginalEntityStyle {
-  polygonMaterial?: Property | undefined;
+  polygonMaterial?: MaterialProperty | undefined;
   polygonOutlineColor?: Property | undefined;
   polygonOutlineWidth?: Property | undefined;
   polygonOutline?: Property | undefined;

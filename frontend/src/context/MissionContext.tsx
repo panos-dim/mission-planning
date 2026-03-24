@@ -552,7 +552,7 @@ export function MissionProvider({ children }: MissionProviderProps): JSX.Element
     }
 
     // First, check regular entities collection
-    entity = viewer.entities.getById(searchId)
+    entity = viewer.entities.getById(searchId) ?? null
 
     // If not found, search through all data sources (CZML entities)
     if (!entity && viewer.dataSources && viewer.dataSources.length > 0) {
@@ -560,7 +560,7 @@ export function MissionProvider({ children }: MissionProviderProps): JSX.Element
         const dataSource = viewer.dataSources.get(i)
         if (dataSource && dataSource.entities) {
           // Try to find by mapped searchId
-          entity = dataSource.entities.getById(searchId)
+          entity = dataSource.entities.getById(searchId) ?? null
           if (entity) break
 
           // Also try searching by entity name for targets

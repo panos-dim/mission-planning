@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   Satellite,
   ChevronRight,
@@ -29,6 +29,10 @@ import { commitScheduleDirect, commitRepairPlan, DirectCommitItem } from '../api
 import { queryClient, queryKeys } from '../lib/queryClient'
 import { LEFT_SIDEBAR_PANELS, SIMPLE_MODE_LEFT_PANELS, isDebugMode } from '../constants/simpleMode'
 import { LABELS } from '../constants/labels'
+import {
+  loadAcceptedOrdersForWorkspace,
+  saveAcceptedOrdersForWorkspace,
+} from '../utils/acceptedOrdersStorage'
 
 interface SidebarPanel {
   id: string
@@ -47,20 +51,16 @@ interface LeftSidebarProps {
 const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey }) => {
   const [activePanel, setActivePanel] = useState<string | null>('mission')
   const [isPanelOpen, setIsPanelOpen] = useState(true)
-  const [orders, setOrders] = useState<AcceptedOrder[]>(() => {
-    // Load orders from localStorage on mount, dedup by order_id
-    const stored = localStorage.getItem('acceptedOrders')
-    if (!stored) return []
-    const parsed: AcceptedOrder[] = JSON.parse(stored)
-    const seen = new Set<string>()
-    return parsed.filter((o) => {
-      if (seen.has(o.order_id)) return false
-      seen.add(o.order_id)
-      return true
-    })
-  })
-  const { setLeftSidebarOpen, setActiveLeftPanel, leftSidebarWidth, setLeftSidebarWidth, uiMode } =
-    useVisStore()
+  const [orders, setOrders] = useState<AcceptedOrder[]>([])
+  const {
+    setLeftSidebarOpen,
+    setActiveLeftPanel,
+    leftSidebarWidth,
+    setLeftSidebarWidth,
+    uiMode,
+    requestedLeftPanel,
+    clearRequestedLeftPanel,
+  } = useVisStore()
 
   // Get UI mode - in developer mode, show all panels
   const isDeveloperMode = uiMode === 'developer' || isDebugMode()
@@ -69,6 +69,12 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
   const setOrdersInStore = useOrdersStore((s) => s.setOrders)
   const setPlanningResults = usePlanningStore((s) => s.setResults)
   const setActiveAlgorithm = usePlanningStore((s) => s.setActiveAlgorithm)
+  const ordersHydratingRef = useRef(true)
+
+  useEffect(() => {
+    ordersHydratingRef.current = true
+    setOrders(loadAcceptedOrdersForWorkspace(state.activeWorkspace))
+  }, [state.activeWorkspace])
 
   // Sync orders to store whenever they change
   useEffect(() => {
@@ -111,6 +117,18 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
   // Handler for loading workspace data into MissionContext
   const handleWorkspaceLoad = useCallback(
     (_workspaceId: string, workspaceData: WorkspaceData) => {
+      clearMission()
+      setPreviewTargets([])
+      setHidePreview(true)
+      setPlanningResults(null)
+      setActiveAlgorithm(null)
+      const workspaceOrders =
+        workspaceData.orders_state?.orders && Array.isArray(workspaceData.orders_state.orders)
+          ? (workspaceData.orders_state.orders as AcceptedOrder[])
+          : []
+      saveAcceptedOrdersForWorkspace(workspaceData.id, workspaceOrders)
+      setOrders(workspaceOrders)
+
       // Create scene objects from workspace data
       const sceneObjects: SceneObject[] = []
       const now = new Date().toISOString()
@@ -157,7 +175,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
       useSceneObjectStore.getState().setSceneObjects(sceneObjects)
 
       // Set active workspace via Zustand store
-      useWorkspaceStore.getState().setActiveWorkspace(workspaceData.id)
+      useWorkspaceStore.getState().setActiveWorkspace(workspaceData.id, workspaceData.name)
 
       // Restore full mission data if available (for Mission Results panel)
       const storedMissionData = workspaceData.analysis_state?.mission_data
@@ -205,18 +223,33 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
       }
 
       // Restore orders if available
-      if (workspaceData.orders_state?.orders && Array.isArray(workspaceData.orders_state.orders)) {
+      if (workspaceOrders.length > 0) {
         console.log('[Workspace Load] Restoring orders')
-        setOrders(workspaceData.orders_state.orders as AcceptedOrder[])
+        setOrders(workspaceOrders)
       }
     },
-    [dispatch, setPreviewTargets, setHidePreview, setPlanningResults, setActiveAlgorithm],
+    [
+      clearMission,
+      dispatch,
+      setPreviewTargets,
+      setHidePreview,
+      setPlanningResults,
+      setActiveAlgorithm,
+    ],
   )
 
   // Sync panel state to global store
   useEffect(() => {
     setLeftSidebarOpen(isPanelOpen)
   }, [isPanelOpen, setLeftSidebarOpen])
+
+  // Imperative open: triggered by other panels after successful actions
+  useEffect(() => {
+    if (!requestedLeftPanel) return
+    setActivePanel(requestedLeftPanel)
+    setIsPanelOpen(true)
+    clearRequestedLeftPanel()
+  }, [requestedLeftPanel, clearRequestedLeftPanel])
 
   // Sync active panel to global store so globe can react (e.g. planning-mode coloring)
   useEffect(() => {
@@ -225,8 +258,13 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
 
   // Persist orders to localStorage
   useEffect(() => {
-    localStorage.setItem('acceptedOrders', JSON.stringify(orders))
-  }, [orders])
+    if (ordersHydratingRef.current) {
+      ordersHydratingRef.current = false
+      return
+    }
+
+    saveAcceptedOrdersForWorkspace(state.activeWorkspace, orders)
+  }, [orders, state.activeWorkspace])
 
   // Handler for promoting schedule to orders
   // Now calls backend API to persist acquisitions to the database
@@ -535,6 +573,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
               <button
                 key={panel.id}
                 onClick={() => handlePanelClick(panel.id)}
+                aria-label={panel.title}
                 className={`
                   p-2.5 mb-1 rounded-lg transition-all duration-200 relative group
                   ${
@@ -575,6 +614,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
         <div className="border-t border-gray-700 pt-2 mt-2">
           <button
             onClick={onAdminPanelOpen}
+            aria-label="Admin Panel"
             className="p-2.5 rounded-lg transition-all duration-200 relative group text-gray-400 hover:text-white hover:bg-gray-800"
             title="Admin Panel"
           >

@@ -39,6 +39,7 @@ import {
   getReasonLabel,
   type TopContributor,
 } from '../adapters/repairReasons'
+import { getRepairDisplayCounts, normalizeRepairDiffForDisplay } from '../utils/repairDisplay'
 
 // =============================================================================
 // Types
@@ -1042,6 +1043,12 @@ export const RepairDiffPanel: React.FC<RepairDiffPanelProps> = ({
   planItemLookup: externalLookup,
 }) => {
   const { repair_diff, metrics_comparison, new_plan_items } = repairResult
+  const displayRepairDiff = useMemo(() => normalizeRepairDiffForDisplay(repair_diff), [repair_diff])
+  const displayRepairResult = useMemo(
+    () => ({ ...repairResult, repair_diff: displayRepairDiff }),
+    [repairResult, displayRepairDiff],
+  )
+  const displayCounts = useMemo(() => getRepairDisplayCounts(displayRepairDiff), [displayRepairDiff])
 
   // Repair highlight store integration
   const selectedDiffItem = useRepairHighlightStore((s) => s.selectedDiffItem)
@@ -1118,7 +1125,7 @@ export const RepairDiffPanel: React.FC<RepairDiffPanelProps> = ({
     const dl = new Map<string, DroppedEntry>()
     const al = new Map<string, AddedEntry>()
     const ml = new Map<string, MovedEntry>()
-    const cl = repair_diff.change_log
+    const cl = displayRepairDiff.change_log
     if (cl) {
       for (const entry of cl.dropped || []) {
         dl.set(entry.acquisition_id, entry)
@@ -1131,53 +1138,54 @@ export const RepairDiffPanel: React.FC<RepairDiffPanelProps> = ({
       }
     }
     return { droppedLogLookup: dl, addedLogLookup: al, movedLogLookup: ml }
-  }, [repair_diff.change_log])
+  }, [displayRepairDiff.change_log])
 
   // PR-OPS-REPAIR-EXPLAIN-01: Build structured reason map
   const reasonMapData = useMemo(
-    () => buildReasonMap(repair_diff, new_plan_items),
-    [repair_diff, new_plan_items],
+    () => buildReasonMap(displayRepairDiff, new_plan_items),
+    [displayRepairDiff, new_plan_items],
   )
 
   // Build reason lookup maps (string-based for DiffSection backwards compat)
   const droppedReasonMap = useMemo(() => {
     const map = new Map<string, string>()
-    for (const id of repair_diff.dropped) {
+    for (const id of displayRepairDiff.dropped) {
       const reason = reasonMapData.reasons.get(id)
       if (reason) map.set(id, reason.short_reason)
     }
     return map
-  }, [repair_diff.dropped, reasonMapData])
+  }, [displayRepairDiff.dropped, reasonMapData])
 
   const movedReasonMap = useMemo(() => {
     const map = new Map<string, string>()
-    for (const moved of repair_diff.moved) {
+    for (const moved of displayRepairDiff.moved) {
       const reason = reasonMapData.reasons.get(moved.id)
       if (reason) map.set(moved.id, reason.short_reason)
     }
     return map
-  }, [repair_diff.moved, reasonMapData])
+  }, [displayRepairDiff.moved, reasonMapData])
 
   const addedReasonMap = useMemo(() => {
     const map = new Map<string, string>()
-    for (const id of repair_diff.added) {
+    for (const id of displayRepairDiff.added) {
       const reason = reasonMapData.reasons.get(id)
       if (reason) map.set(id, reason.short_reason)
     }
     return map
-  }, [repair_diff.added, reasonMapData])
+  }, [displayRepairDiff.added, reasonMapData])
 
   // PR-OPS-REPAIR-EXPLAIN-01: Derive top contributors
   const topContributors = useMemo(
-    () => deriveTopContributors(repair_diff, new_plan_items, 5),
-    [repair_diff, new_plan_items],
+    () => deriveTopContributors(displayRepairDiff, new_plan_items, 5),
+    [displayRepairDiff, new_plan_items],
   )
 
   // PR-OPS-REPAIR-REPORT-01: Handle item click - select in repair highlight store + bridge to selectionStore
   const handleItemClick = useCallback(
     (id: string, type: RepairDiffType) => {
       const planItem = planItemLookup.get(id)
-      const movedInfo = type === 'moved' ? repair_diff.moved.find((m) => m.id === id) : undefined
+      const movedInfo =
+        type === 'moved' ? displayRepairDiff.moved.find((m) => m.id === id) : undefined
 
       // 1. Update repair highlight store (Cesium highlighting + timeline focus)
       selectDiffItem(id, type, {
@@ -1189,7 +1197,7 @@ export const RepairDiffPanel: React.FC<RepairDiffPanelProps> = ({
       // 2. Bridge to selectionStore → opens Inspector with repair context
       selectAcquisition(id, 'repair')
     },
-    [selectDiffItem, selectAcquisition, planItemLookup, repair_diff.moved],
+    [selectDiffItem, selectAcquisition, planItemLookup, displayRepairDiff.moved],
   )
 
   // PR-OPS-REPAIR-EXPLAIN-01: Narrative chip click → expand section + select first item
@@ -1199,16 +1207,16 @@ export const RepairDiffPanel: React.FC<RepairDiffPanelProps> = ({
 
       // Select the first item of this type
       let firstId: string | undefined
-      if (type === 'dropped') firstId = repair_diff.dropped[0]
-      else if (type === 'added') firstId = repair_diff.added[0]
-      else if (type === 'moved') firstId = repair_diff.moved[0]?.id
-      else if (type === 'kept') firstId = repair_diff.kept[0]
+      if (type === 'dropped') firstId = displayRepairDiff.dropped[0]
+      else if (type === 'added') firstId = displayRepairDiff.added[0]
+      else if (type === 'moved') firstId = displayRepairDiff.moved[0]?.id
+      else if (type === 'kept') firstId = displayRepairDiff.kept[0]
 
       if (firstId) {
         handleItemClick(firstId, type)
       }
     },
-    [repair_diff, handleItemClick],
+    [displayRepairDiff, handleItemClick],
   )
 
   // PR-OPS-REPAIR-EXPLAIN-01: "Value improved" chip → expand top contributors
@@ -1216,16 +1224,16 @@ export const RepairDiffPanel: React.FC<RepairDiffPanelProps> = ({
     setShowTopContributors(true)
   }, [])
 
-  const totalChanges = repair_diff.change_score.num_changes
+  const totalChanges = displayCounts.totalChanges
 
   // =========================================================================
   // Mission Planner view — clean, monochrome, no dev noise
   // =========================================================================
   if (!isDeveloperMode) {
-    const kept = repair_diff.kept.length
-    const added = repair_diff.added.length
-    const dropped = repair_diff.dropped.length
-    const moved = repair_diff.moved.length
+    const kept = displayCounts.kept
+    const added = displayCounts.added
+    const dropped = displayCounts.dropped
+    const moved = displayCounts.moved
     const conflictsAfter = metrics_comparison.conflicts_after
 
     return (
@@ -1307,7 +1315,7 @@ export const RepairDiffPanel: React.FC<RepairDiffPanelProps> = ({
         <div className="flex items-center gap-2">
           <span className="text-xs text-gray-400">
             {totalChanges} change{totalChanges !== 1 ? 's' : ''} (
-            {repair_diff.change_score.percent_changed.toFixed(0)}%)
+            {displayRepairDiff.change_score.percent_changed.toFixed(0)}%)
           </span>
           {metrics_comparison.conflicts_after > 0 && (
             <span className="flex items-center gap-1 text-xs text-yellow-400">
@@ -1345,7 +1353,7 @@ export const RepairDiffPanel: React.FC<RepairDiffPanelProps> = ({
       <div className="p-3 space-y-3">
         {/* Interactive narrative summary */}
         <NarrativeSummary
-          repairResult={repairResult}
+          repairResult={displayRepairResult}
           onSelectDiffType={handleNarrativeSelectDiffType}
           onSelectTopContributors={handleSelectTopContributors}
         />
@@ -1365,7 +1373,7 @@ export const RepairDiffPanel: React.FC<RepairDiffPanelProps> = ({
 
         {/* Priority Impact block */}
         <PriorityImpactBlock
-          repairResult={repairResult}
+          repairResult={displayRepairResult}
           topContributors={topContributors}
           onWinClick={handleItemClick}
         />
@@ -1376,7 +1384,7 @@ export const RepairDiffPanel: React.FC<RepairDiffPanelProps> = ({
             type="kept"
             title="Kept"
             icon={DIFF_ICONS.kept}
-            items={repair_diff.kept}
+            items={displayRepairDiff.kept}
             color={DIFF_COLORS.kept}
             selectedId={selectedDiffItem?.type === 'kept' ? selectedDiffItem.id : null}
             onItemClick={(id) => handleItemClick(id, 'kept')}
@@ -1389,7 +1397,7 @@ export const RepairDiffPanel: React.FC<RepairDiffPanelProps> = ({
             type="dropped"
             title="Dropped"
             icon={DIFF_ICONS.dropped}
-            items={repair_diff.dropped}
+            items={displayRepairDiff.dropped}
             color={DIFF_COLORS.dropped}
             reasonMap={droppedReasonMap}
             selectedId={selectedDiffItem?.type === 'dropped' ? selectedDiffItem.id : null}
@@ -1402,7 +1410,7 @@ export const RepairDiffPanel: React.FC<RepairDiffPanelProps> = ({
             type="added"
             title="Added"
             icon={DIFF_ICONS.added}
-            items={repair_diff.added}
+            items={displayRepairDiff.added}
             color={DIFF_COLORS.added}
             reasonMap={addedReasonMap}
             selectedId={selectedDiffItem?.type === 'added' ? selectedDiffItem.id : null}
@@ -1417,7 +1425,7 @@ export const RepairDiffPanel: React.FC<RepairDiffPanelProps> = ({
             title="Moved"
             icon={DIFF_ICONS.moved}
             items={[]}
-            movedItems={repair_diff.moved}
+            movedItems={displayRepairDiff.moved}
             color={DIFF_COLORS.moved}
             reasonMap={movedReasonMap}
             selectedId={selectedDiffItem?.type === 'moved' ? selectedDiffItem.id : null}

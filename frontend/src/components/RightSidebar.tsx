@@ -23,6 +23,62 @@ interface SidebarPanel {
   requiresMissionData?: boolean
 }
 
+interface SidebarUtilitySectionProps {
+  title: string
+  badge?: string
+  children: React.ReactNode
+}
+
+const SidebarUtilitySection: React.FC<SidebarUtilitySectionProps> = ({
+  title,
+  badge,
+  children,
+}) => (
+  <section className="border-b border-gray-800/90 pb-4 last:border-b-0 last:pb-0">
+    <div className="mb-2 flex items-center justify-between">
+      <h4 className="text-[11px] font-medium text-gray-300">{title}</h4>
+      {badge && (
+        <span className="rounded-md border border-blue-500/20 bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-300">
+          {badge}
+        </span>
+      )}
+    </div>
+    <div className="space-y-1.5">{children}</div>
+  </section>
+)
+
+interface LayerToggleRowProps {
+  title: string
+  description: string
+  checked: boolean
+  onChange: (checked: boolean) => void
+  accentClass: string
+}
+
+const LayerToggleRow: React.FC<LayerToggleRowProps> = ({
+  title,
+  description,
+  checked,
+  onChange,
+  accentClass,
+}) => (
+  <label className="flex cursor-pointer items-start gap-3 rounded-lg px-2 py-2 transition-colors hover:bg-gray-800/50">
+    <span
+      className={`mt-1.5 h-2.5 w-2.5 flex-shrink-0 rounded-full ${checked ? accentClass : 'bg-gray-600'}`}
+    />
+    <div className="flex-1">
+      <p className="text-sm font-medium text-gray-200">{title}</p>
+      <p className="text-[11px] text-gray-500">{description}</p>
+    </div>
+    <input
+      type="checkbox"
+      checked={checked}
+      onChange={(e) => onChange(e.target.checked)}
+      className="mt-0.5 h-4 w-4 rounded border-gray-600 bg-gray-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
+    />
+  </label>
+)
+
 const RightSidebar: React.FC = () => {
   const { state, toggleEntityVisibility } = useMission()
   const [activePanel, setActivePanel] = useState<string | null>(null)
@@ -98,7 +154,7 @@ const RightSidebar: React.FC = () => {
       },
       {
         id: RIGHT_SIDEBAR_PANELS.INSPECTOR,
-        title: 'Inspector',
+        title: 'Details',
         icon: FileSearch,
         component: (
           <div className="h-full overflow-y-auto">
@@ -112,232 +168,100 @@ const RightSidebar: React.FC = () => {
       },
       {
         id: RIGHT_SIDEBAR_PANELS.LAYERS,
-        title: 'Layers',
+        title: 'Map Layers',
         icon: Layers,
         component: (
-          <div className="h-full flex flex-col p-4">
-            {/* Layer Groups */}
-            <div className="flex-1 space-y-4 overflow-y-auto">
-              {/* Core Layers */}
-              <div className="bg-gray-800/50 rounded-lg p-3">
-                <h4 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-3">
-                  Core Elements
-                </h4>
-                <div className="space-y-2">
-                  <label className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-700/50 cursor-pointer transition-colors">
-                    <div
-                      className={`w-8 h-8 rounded-lg flex items-center justify-center ${activeLayers.orbitLine ? 'bg-blue-500/20' : 'bg-gray-700/50'}`}
-                    >
-                      <div
-                        className={`w-3 h-0.5 rounded ${activeLayers.orbitLine ? 'bg-blue-400' : 'bg-gray-500'}`}
-                      ></div>
-                    </div>
-                    <div className="flex-1">
-                      <p className="text-xs font-medium text-gray-200">Satellite Path</p>
-                      <p className="text-[10px] text-gray-500">Orbit trajectory line</p>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={activeLayers.orbitLine}
-                      onChange={(e) => setLayerVisibility('orbitLine', e.target.checked)}
-                      className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
-                    />
-                  </label>
-                  <label className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-700/50 cursor-pointer transition-colors">
-                    <div
-                      className={`w-8 h-8 rounded-lg flex items-center justify-center ${activeLayers.targets ? 'bg-green-500/20' : 'bg-gray-700/50'}`}
-                    >
-                      <div
-                        className={`w-2 h-2 rounded-full ${activeLayers.targets ? 'bg-green-400' : 'bg-gray-500'}`}
-                      ></div>
-                    </div>
-                    <div className="flex-1">
-                      <p className="text-xs font-medium text-gray-200">Ground Targets</p>
-                      <p className="text-[10px] text-gray-500">Target locations</p>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={activeLayers.targets}
-                      onChange={(e) => {
-                        setLayerVisibility('targets', e.target.checked)
-                        toggleEntityVisibility('target', e.target.checked)
-                      }}
-                      className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-green-500 focus:ring-green-500 focus:ring-offset-0"
-                    />
-                  </label>
-                </div>
-              </div>
+          <div className="h-full flex flex-col">
+            <div className="border-b border-gray-800/90 px-4 py-3">
+              <p className="text-sm text-gray-300">Choose which map aids stay visible while planning.</p>
+            </div>
+            <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
+              <SidebarUtilitySection title="Core">
+                <LayerToggleRow
+                  title="Satellite Path"
+                  description="Orbit trajectory line"
+                  checked={activeLayers.orbitLine}
+                  onChange={(checked) => setLayerVisibility('orbitLine', checked)}
+                  accentClass="bg-blue-400"
+                />
+                <LayerToggleRow
+                  title="Ground Targets"
+                  description="Target locations"
+                  checked={activeLayers.targets}
+                  onChange={(checked) => {
+                    setLayerVisibility('targets', checked)
+                    toggleEntityVisibility('target', checked)
+                  }}
+                  accentClass="bg-green-400"
+                />
+              </SidebarUtilitySection>
 
-              {/* Imaging Layers */}
               {state.missionData?.mission_type === 'imaging' && (
-                <div className="bg-gray-800/50 rounded-lg p-3">
-                  <h4 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-3">
-                    Imaging Overlays
-                  </h4>
-                  <div className="space-y-2">
-                    <label className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-700/50 cursor-pointer transition-colors">
-                      <div
-                        className={`w-8 h-8 rounded-lg flex items-center justify-center ${activeLayers.pointingCone ? 'bg-purple-500/20' : 'bg-gray-700/50'}`}
-                      >
-                        <div
-                          className={`w-0 h-0 border-l-[6px] border-r-[6px] border-b-[10px] border-l-transparent border-r-transparent ${activeLayers.pointingCone ? 'border-b-purple-400' : 'border-b-gray-500'}`}
-                        ></div>
-                      </div>
-                      <div className="flex-1">
-                        <p className="text-xs font-medium text-gray-200">Sensor Cone</p>
-                        <p className="text-[10px] text-gray-500">Field of view</p>
-                      </div>
-                      <input
-                        type="checkbox"
-                        checked={activeLayers.pointingCone}
-                        onChange={(e) => {
-                          setLayerVisibility('pointingCone', e.target.checked)
-                          toggleEntityVisibility('pointing_cone', e.target.checked)
-                        }}
-                        className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-purple-500 focus:ring-purple-500 focus:ring-offset-0"
-                      />
-                    </label>
-                    <label className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-700/50 cursor-pointer transition-colors">
-                      <div
-                        className={`w-8 h-8 rounded-lg flex items-center justify-center overflow-hidden ${activeLayers.dayNightLighting ? 'bg-orange-500/20' : 'bg-gray-700/50'}`}
-                      >
-                        <div className="w-full h-full flex">
-                          <div
-                            className={`w-1/2 ${activeLayers.dayNightLighting ? 'bg-orange-400/50' : 'bg-gray-500/30'}`}
-                          ></div>
-                          <div
-                            className={`w-1/2 ${activeLayers.dayNightLighting ? 'bg-gray-900/50' : 'bg-gray-600/30'}`}
-                          ></div>
-                        </div>
-                      </div>
-                      <div className="flex-1">
-                        <p className="text-xs font-medium text-gray-200">Day/Night</p>
-                        <p className="text-[10px] text-gray-500">Lighting terminator</p>
-                      </div>
-                      <input
-                        type="checkbox"
-                        checked={activeLayers.dayNightLighting}
-                        onChange={(e) => {
-                          setLayerVisibility('dayNightLighting', e.target.checked)
-                          toggleEntityVisibility('day_night_lighting', e.target.checked)
-                        }}
-                        className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-orange-500 focus:ring-orange-500 focus:ring-offset-0"
-                      />
-                    </label>
-                  </div>
-                </div>
+                <SidebarUtilitySection title="Imaging">
+                  <LayerToggleRow
+                    title="Sensor Cone"
+                    description="Field of view"
+                    checked={activeLayers.pointingCone}
+                    onChange={(checked) => {
+                      setLayerVisibility('pointingCone', checked)
+                      toggleEntityVisibility('pointing_cone', checked)
+                    }}
+                    accentClass="bg-purple-400"
+                  />
+                  <LayerToggleRow
+                    title="Day/Night"
+                    description="Lighting terminator"
+                    checked={activeLayers.dayNightLighting}
+                    onChange={(checked) => {
+                      setLayerVisibility('dayNightLighting', checked)
+                      toggleEntityVisibility('day_night_lighting', checked)
+                    }}
+                    accentClass="bg-orange-400"
+                  />
+                </SidebarUtilitySection>
               )}
 
-              {/* SAR Layers */}
               {(state.missionData?.imaging_type === 'sar' || state.missionData?.sar) && (
-                <div className="bg-gray-800/50 rounded-lg p-3">
-                  <h4 className="text-[10px] font-semibold text-purple-400 uppercase tracking-wide mb-3">
-                    SAR Overlays
-                  </h4>
-                  <SwathLayerControl isSARMission={true} />
-                </div>
+                <SidebarUtilitySection title="SAR">
+                  <div className="rounded-lg border border-gray-800/90 bg-gray-900/50 p-2">
+                    <SwathLayerControl isSARMission={true} />
+                  </div>
+                </SidebarUtilitySection>
               )}
 
-              {/* Globe Settings - 3D Only */}
-              <div className="bg-gray-800/50 rounded-lg p-3">
-                <div className="flex items-center justify-between mb-3">
-                  <h4 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">
-                    Globe Settings
-                  </h4>
-                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 font-medium">
-                    3D only
-                  </span>
-                </div>
-                <div className="space-y-2">
-                  <label className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-700/50 cursor-pointer transition-colors">
-                    <div
-                      className={`w-8 h-8 rounded-lg flex items-center justify-center ${activeLayers.atmosphere ? 'bg-sky-500/20' : 'bg-gray-700/50'}`}
-                    >
-                      <div
-                        className={`w-4 h-4 rounded-full ${activeLayers.atmosphere ? 'bg-gradient-to-b from-sky-300 to-sky-500' : 'bg-gray-500'}`}
-                      ></div>
-                    </div>
-                    <div className="flex-1">
-                      <p className="text-xs font-medium text-gray-200">Atmosphere</p>
-                      <p className="text-[10px] text-gray-500">Sky dome effect</p>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={activeLayers.atmosphere}
-                      onChange={(e) => setLayerVisibility('atmosphere', e.target.checked)}
-                      className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-sky-500 focus:ring-sky-500 focus:ring-offset-0"
-                    />
-                  </label>
-                  <label className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-700/50 cursor-pointer transition-colors">
-                    <div
-                      className={`w-8 h-8 rounded-lg flex items-center justify-center ${activeLayers.fog ? 'bg-slate-500/20' : 'bg-gray-700/50'}`}
-                    >
-                      <div
-                        className={`w-5 h-2 rounded ${activeLayers.fog ? 'bg-gradient-to-r from-slate-400/80 to-transparent' : 'bg-gray-500/50'}`}
-                      ></div>
-                    </div>
-                    <div className="flex-1">
-                      <p className="text-xs font-medium text-gray-200">Fog</p>
-                      <p className="text-[10px] text-gray-500">Distance haze</p>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={activeLayers.fog}
-                      onChange={(e) => setLayerVisibility('fog', e.target.checked)}
-                      className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-slate-500 focus:ring-slate-500 focus:ring-offset-0"
-                    />
-                  </label>
-                </div>
-              </div>
+              <SidebarUtilitySection title="Globe" badge="3D only">
+                <LayerToggleRow
+                  title="Atmosphere"
+                  description="Sky dome effect"
+                  checked={activeLayers.atmosphere}
+                  onChange={(checked) => setLayerVisibility('atmosphere', checked)}
+                  accentClass="bg-sky-400"
+                />
+                <LayerToggleRow
+                  title="Fog"
+                  description="Distance haze"
+                  checked={activeLayers.fog}
+                  onChange={(checked) => setLayerVisibility('fog', checked)}
+                  accentClass="bg-slate-400"
+                />
+              </SidebarUtilitySection>
 
-              {/* Post-Processing */}
-              <div className="bg-gray-800/50 rounded-lg p-3">
-                <h4 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-3">
-                  Visual Effects
-                </h4>
-                <div className="space-y-2">
-                  <label className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-700/50 cursor-pointer transition-colors">
-                    <div
-                      className={`w-8 h-8 rounded-lg flex items-center justify-center ${activeLayers.fxaa ? 'bg-indigo-500/20' : 'bg-gray-700/50'}`}
-                    >
-                      <div
-                        className={`text-[8px] font-bold ${activeLayers.fxaa ? 'text-indigo-400' : 'text-gray-500'}`}
-                      >
-                        AA
-                      </div>
-                    </div>
-                    <div className="flex-1">
-                      <p className="text-xs font-medium text-gray-200">Anti-aliasing</p>
-                      <p className="text-[10px] text-gray-500">Smoother edges</p>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={activeLayers.fxaa}
-                      onChange={(e) => setLayerVisibility('fxaa', e.target.checked)}
-                      className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-0"
-                    />
-                  </label>
-                  <label className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-700/50 cursor-pointer transition-colors">
-                    <div
-                      className={`w-8 h-8 rounded-lg flex items-center justify-center ${activeLayers.bloom ? 'bg-pink-500/20' : 'bg-gray-700/50'}`}
-                    >
-                      <div
-                        className={`w-3 h-3 rounded-full ${activeLayers.bloom ? 'bg-pink-400 shadow-[0_0_8px_2px_rgba(236,72,153,0.5)]' : 'bg-gray-500'}`}
-                      ></div>
-                    </div>
-                    <div className="flex-1">
-                      <p className="text-xs font-medium text-gray-200">Bloom</p>
-                      <p className="text-[10px] text-gray-500">Glow effect</p>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={activeLayers.bloom}
-                      onChange={(e) => setLayerVisibility('bloom', e.target.checked)}
-                      className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-pink-500 focus:ring-pink-500 focus:ring-offset-0"
-                    />
-                  </label>
-                </div>
-              </div>
+              <SidebarUtilitySection title="Effects">
+                <LayerToggleRow
+                  title="Anti-aliasing"
+                  description="Smoother edges"
+                  checked={activeLayers.fxaa}
+                  onChange={(checked) => setLayerVisibility('fxaa', checked)}
+                  accentClass="bg-indigo-400"
+                />
+                <LayerToggleRow
+                  title="Bloom"
+                  description="Glow effect"
+                  checked={activeLayers.bloom}
+                  onChange={(checked) => setLayerVisibility('bloom', checked)}
+                  accentClass="bg-pink-400"
+                />
+              </SidebarUtilitySection>
             </div>
           </div>
         ),
@@ -447,6 +371,7 @@ const RightSidebar: React.FC = () => {
               <button
                 onClick={() => setIsPanelOpen(false)}
                 className="p-1 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors"
+                aria-label={`Close ${activeContent.title} panel`}
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>

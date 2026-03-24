@@ -186,6 +186,7 @@ export interface MasterScheduleBucket {
 
 export interface MasterScheduleItem {
   id: string
+  opportunity_id?: string
   satellite_id: string
   target_id: string
   start_time: string
@@ -200,6 +201,9 @@ export interface MasterScheduleItem {
   target_lon?: number
   satellite_display_name?: string
   off_nadir_deg?: number
+  quality_score?: number
+  maneuver_time_s?: number
+  slack_time_s?: number
   geometry?: {
     roll_deg: number
     pitch_deg: number

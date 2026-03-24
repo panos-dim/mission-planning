@@ -37,8 +37,6 @@ import {
   ArrowLeft,
   ArrowRight,
   ChevronRight,
-  Lock,
-  Unlock,
   Shield,
 } from 'lucide-react'
 import { useExplorerStore } from '../../store/explorerStore'
@@ -95,6 +93,7 @@ const ICON_MAP: Record<string, React.ElementType> = {
   AlertCircle,
   ArrowLeft,
   ChevronRight,
+  Shield,
 }
 
 // =============================================================================
@@ -118,16 +117,16 @@ const InspectorSection: React.FC<InspectorSectionProps> = ({
   const IconComponent = icon ? ICON_MAP[icon] : Info
 
   return (
-    <div className="border-b border-gray-700 last:border-b-0">
+    <div className="border-b border-slate-800/90 last:border-b-0">
       <button
         onClick={() => setCollapsed(!collapsed)}
-        className="w-full px-4 py-2 flex items-center gap-2 text-sm font-medium text-gray-300 hover:bg-gray-800"
+        className="flex w-full items-center gap-2 px-4 py-3 text-sm font-medium text-gray-200 transition-colors hover:bg-slate-900/60"
       >
-        {IconComponent && <IconComponent className="w-4 h-4 text-gray-500" />}
+        {IconComponent && <IconComponent className="h-4 w-4 text-slate-500" />}
         <span className="flex-1 text-left">{title}</span>
-        <span className="text-gray-500 text-xs">{collapsed ? '▸' : '▾'}</span>
+        <span className="text-slate-500 text-xs">{collapsed ? '▸' : '▾'}</span>
       </button>
-      {!collapsed && <div className="px-4 pb-3 space-y-2">{children}</div>}
+      {!collapsed && <div className="px-4 pb-4 pt-0 space-y-2">{children}</div>}
     </div>
   )
 }
@@ -233,9 +232,9 @@ const ActionButton: React.FC<ActionButtonProps> = ({
   const IconComponent = ICON_MAP[icon] || Play
 
   const variantClasses = {
-    primary: 'bg-blue-600 hover:bg-blue-700 text-white',
-    secondary: 'bg-gray-700 hover:bg-gray-600 text-gray-300',
-    danger: 'bg-red-900/50 hover:bg-red-900/70 text-red-400',
+    primary: 'border border-blue-500/30 bg-blue-500/15 text-blue-100 hover:bg-blue-500/20',
+    secondary: 'border border-slate-700/90 bg-slate-800/80 text-slate-300 hover:bg-slate-800',
+    danger: 'border border-red-500/20 bg-red-500/10 text-red-200 hover:bg-red-500/15',
   }
 
   return (
@@ -243,7 +242,7 @@ const ActionButton: React.FC<ActionButtonProps> = ({
       onClick={onClick}
       disabled={disabled}
       className={`
-        flex items-center justify-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium
+        flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium
         transition-colors disabled:opacity-50 disabled:cursor-not-allowed
         ${variantClasses[variant]}
       `}
@@ -253,6 +252,61 @@ const ActionButton: React.FC<ActionButtonProps> = ({
     </button>
   )
 }
+
+interface FocusMetricProps {
+  label: string
+  value: string
+}
+
+const FocusMetric: React.FC<FocusMetricProps> = ({ label, value }) => (
+  <div
+    className="flex items-center justify-between gap-3 border-b border-slate-800/70 py-1.5 text-xs last:border-b-0"
+    data-testid={`inspector-metric-${label.toLowerCase().replace(/\s+/g, '-')}`}
+  >
+    <div className="text-slate-500">{label}</div>
+    <div className="truncate font-medium text-white">{value}</div>
+  </div>
+)
+
+interface FocusHeroProps {
+  eyebrow: string
+  title: string
+  subtitle: string
+  icon: React.ReactNode
+  metrics?: FocusMetricProps[]
+  testId?: string
+}
+
+const FocusHero: React.FC<FocusHeroProps> = ({
+  eyebrow,
+  title,
+  subtitle,
+  icon,
+  metrics = [],
+  testId,
+}) => (
+  <div className="mx-4 mt-3 border-b border-slate-800/90 pb-3" data-testid={testId}>
+    <div className="text-[11px] font-medium text-slate-500">{eyebrow}</div>
+    <div className="mt-1.5 flex items-start gap-2.5">
+      <div className="mt-0.5 text-slate-400">{icon}</div>
+      <div className="min-w-0 flex-1">
+        <h3 className="truncate text-sm font-semibold text-white">{title}</h3>
+        <p className="mt-0.5 text-xs leading-relaxed text-slate-400">{subtitle}</p>
+      </div>
+    </div>
+    {metrics.length > 0 && (
+      <div className="mt-2">
+        {metrics.map((metric) => (
+          <FocusMetric
+            key={`${metric.label}-${metric.value}`}
+            label={metric.label}
+            value={metric.value}
+          />
+        ))}
+      </div>
+    )}
+  </div>
+)
 
 // =============================================================================
 // Type-Specific Inspector Content
@@ -543,8 +597,12 @@ interface AcquisitionRow {
   id: string
   target_id: string
   start_time: string
+  end_time?: string
   satellite_name: string
   off_nadir_deg?: number
+  lock_level?: string
+  state?: string
+  order_id?: string
 }
 
 interface TargetAcquisitionsSectionProps {
@@ -556,6 +614,10 @@ const TargetAcquisitionsSection: React.FC<TargetAcquisitionsSectionProps> = ({
   targetId,
   rows,
 }) => {
+  const selectedAcquisitionId = useSelectionStore((s) => s.selectedAcquisitionId)
+  const selectAcquisition = useSelectionStore((s) => s.selectAcquisition)
+  const focusAcquisition = useScheduleStore((s) => s.focusAcquisition)
+  const lockLevels = useLockStore((s) => s.levels)
   const targetAcqs = useMemo(() => {
     return rows
       .filter((r) => r.target_id === targetId)
@@ -564,32 +626,48 @@ const TargetAcquisitionsSection: React.FC<TargetAcquisitionsSectionProps> = ({
 
   if (targetAcqs.length === 0) {
     return (
-      <InspectorSection title={`Acquisitions (0)`} icon="Calendar">
+      <InspectorSection title={`Schedule (0)`} icon="Calendar">
         <p className="text-xs text-gray-500">No scheduled acquisitions in current window</p>
       </InspectorSection>
     )
   }
 
   return (
-    <InspectorSection title={`Acquisitions (${targetAcqs.length})`} icon="Calendar">
+    <InspectorSection title={`Schedule (${targetAcqs.length})`} icon="Calendar">
       <div className="space-y-1.5">
         {targetAcqs.map((acq) => (
-          <div
+          <button
             key={acq.id}
-            className="flex items-center justify-between text-xs py-1 border-b border-gray-800 last:border-b-0"
+            onClick={() => {
+              selectAcquisition(acq.id, 'inspector')
+              focusAcquisition(acq.id)
+            }}
+            className={`w-full rounded-lg border px-3 py-2.5 text-left transition-all ${
+              selectedAcquisitionId === acq.id
+                ? 'border-blue-500/30 bg-blue-500/10'
+                : 'border-slate-800/90 bg-slate-900/50 hover:border-slate-700 hover:bg-slate-900/70'
+            }`}
+            data-testid="inspector-target-acquisition"
           >
-            <div className="min-w-0 flex-1">
-              <div className="font-mono text-gray-300 tabular-nums">
-                {formatDateTimeDDMMYYYY(acq.start_time)}
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium text-white">
+                  {formatAcquisitionWindow(acq.start_time, acq.end_time)}
+                </div>
+                <div className="mt-1 text-xs text-slate-400">
+                  {formatDateTimeDDMMYYYY(acq.start_time)} • {acq.satellite_name}
+                </div>
+                <div className="mt-1 text-[11px] text-slate-500">
+                  {(lockLevels.get(acq.id) ?? acq.lock_level) === 'hard'
+                    ? 'Protected on repair'
+                    : 'Flexible window'}
+                </div>
               </div>
-              <div className="text-gray-500 truncate">{acq.satellite_name}</div>
+              {acq.off_nadir_deg != null && (
+                <span className="text-xs font-medium text-slate-300">{fmt1(acq.off_nadir_deg)}°</span>
+              )}
             </div>
-            {acq.off_nadir_deg != null && (
-              <span className="text-gray-400 tabular-nums ml-2 flex-shrink-0">
-                {fmt1(acq.off_nadir_deg)}°
-              </span>
-            )}
-          </div>
+          </button>
         ))}
       </div>
     </InspectorSection>
@@ -631,6 +709,72 @@ const SatelliteInspector: React.FC<{
   </>
 )
 
+const TargetFocusSummary: React.FC<{
+  metadata?: Record<string, unknown>
+  acquisitionRows?: AcquisitionRow[]
+  selectionSource?: 'map' | 'table' | 'timeline' | 'inspector' | 'repair' | null
+}> = ({ metadata, acquisitionRows, selectionSource }) => {
+  const targetId = metadata?.name as string | undefined
+  const lockLevels = useLockStore((s) => s.levels)
+
+  const targetAcqs = useMemo(() => {
+    if (!targetId || !acquisitionRows) return []
+    return acquisitionRows
+      .filter((row) => row.target_id === targetId)
+      .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())
+  }, [acquisitionRows, targetId])
+
+  if (!targetId) return null
+
+  const protectedCount = targetAcqs.filter(
+    (row) => (lockLevels.get(row.id) ?? row.lock_level) === 'hard',
+  ).length
+  const nextWindow = targetAcqs[0]?.start_time
+  const latitude = typeof metadata?.latitude === 'number' ? metadata.latitude : undefined
+  const longitude = typeof metadata?.longitude === 'number' ? metadata.longitude : undefined
+  const hasCoordinates = latitude !== undefined && longitude !== undefined
+
+  return (
+    <FocusHero
+      eyebrow="Target"
+      title={targetId}
+      subtitle={
+        hasCoordinates
+          ? `${formatBriefCoordinate(latitude, true)} • ${formatBriefCoordinate(longitude, false)}`
+          : 'Schedule-aligned target ready for review'
+      }
+      icon={<MapPin className="h-5 w-5" />}
+      metrics={[
+        ...(shouldShowSelectionSource(selectionSource)
+          ? [{ label: 'Source', value: describeSelectionSource(selectionSource) }]
+          : []),
+        {
+          label: 'Status',
+          value: targetAcqs.length > 0 ? 'Scheduled' : 'Awaiting schedule',
+        },
+        {
+          label: 'Priority',
+          value:
+            typeof metadata?.priority === 'number' ? String(metadata.priority) : 'Unscored',
+        },
+        {
+          label: 'Windows',
+          value: targetAcqs.length === 1 ? '1 window' : `${targetAcqs.length} windows`,
+        },
+        {
+          label: 'Protected',
+          value: protectedCount > 0 ? `${protectedCount} locked` : 'None',
+        },
+        {
+          label: 'Next pass',
+          value: nextWindow ? formatCompactDateTime(nextWindow) : 'Not scheduled',
+        },
+      ]}
+      testId="inspector-target-hero"
+    />
+  )
+}
+
 const TargetInspector: React.FC<{
   metadata?: Record<string, unknown>
   onAction?: (action: string) => void
@@ -639,7 +783,8 @@ const TargetInspector: React.FC<{
   const targetId = metadata?.name as string | undefined
   return (
     <>
-      <InspectorSection title="Properties" icon="Target">
+      <TargetFocusSummary metadata={metadata} acquisitionRows={acquisitionRows} />
+      <InspectorSection title="Overview" icon="Target">
         <Field label="Priority" value={metadata?.priority as number} />
         {typeof metadata?.color === 'string' && (
           <div className="flex items-center justify-between text-xs">
@@ -660,7 +805,7 @@ const TargetInspector: React.FC<{
           />
         )}
       </InspectorSection>
-      <InspectorSection title="Statistics" icon="BarChart2">
+      <InspectorSection title="Coverage" icon="BarChart2">
         <Field label="Opportunities" value={metadata?.opportunitiesCount as number} />
         <Field
           label="Best Off-Nadir"
@@ -686,14 +831,14 @@ const TargetInspector: React.FC<{
         <TargetAcquisitionsSection targetId={targetId} rows={acquisitionRows} />
       )}
       {onAction && (
-        <div className="px-4 py-3 flex gap-2">
+        <QuickActionsCard>
           <ActionButton label="Fly To" icon="Navigation" onClick={() => onAction('flyTo')} />
           <ActionButton
             label="Filter Opps"
             icon="Filter"
             onClick={() => onAction('filterOpportunities')}
           />
-        </div>
+        </QuickActionsCard>
       )}
     </>
   )
@@ -1259,7 +1404,7 @@ const ConflictInspector: React.FC<ConflictInspectorProps> = ({
       {/* Quick Actions (PR-CONFLICT-UX-02) */}
       {(onFocusMap || onFocusTimeline) && (
         <div className="px-4 py-3 border-t border-gray-700">
-          <div className="text-xs text-gray-500 mb-2">Quick Actions</div>
+          <div className="text-xs text-gray-500 mb-2">Actions</div>
           <div className="flex gap-2">
             {onFocusMap && (
               <ActionButton
@@ -1288,6 +1433,38 @@ const ConflictInspector: React.FC<ConflictInspectorProps> = ({
     </>
   )
 }
+
+const AcquisitionFocusSummary: React.FC<{
+  metadata?: Record<string, unknown>
+}> = ({ metadata }) => {
+  const target = (metadata?.target_id as string | undefined) || (metadata?.name as string) || 'Acquisition'
+  const satellite =
+    (metadata?.satellite_name as string | undefined) ||
+    (metadata?.satellite_id as string | undefined) ||
+    'Assigned satellite'
+  const start = metadata?.start_time as string | undefined
+  const end = metadata?.end_time as string | undefined
+
+  return (
+    <FocusHero
+      eyebrow="Acquisition"
+      title={target}
+      subtitle={`${satellite} • ${formatAcquisitionWindow(start, end)}`}
+      icon={<Calendar className="h-5 w-5" />}
+      testId="inspector-acquisition-hero"
+    />
+  )
+}
+
+const QuickActionsCard: React.FC<{ title?: string; children: React.ReactNode }> = ({
+  title = 'Actions',
+  children,
+}) => (
+  <div className="mx-4 mt-3 mb-4 border-t border-slate-800/90 pt-3">
+    <div className="mb-2 text-[11px] font-medium text-slate-500">{title}</div>
+    <div className="flex flex-wrap gap-2">{children}</div>
+  </div>
+)
 
 // =============================================================================
 // Main Inspector Component
@@ -1328,8 +1505,12 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
         id: item.id,
         target_id: item.target_id,
         start_time: item.start_time,
+        end_time: item.end_time,
         satellite_name: item.satellite_display_name || item.satellite_id,
         off_nadir_deg: item.off_nadir_deg,
+        lock_level: item.lock_level,
+        state: item.state,
+        order_id: item.order_id,
       }))
     }
     // Fallback: derive from accepted orders (same source the timeline uses)
@@ -1344,8 +1525,11 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
           id: item.opportunity_id,
           target_id: item.target_id,
           start_time: item.start_time,
+          end_time: item.end_time,
           satellite_name: satelliteNameMap.get(item.satellite_id) || item.satellite_id,
           off_nadir_deg: Number.isFinite(rawAngle) ? rawAngle : undefined,
+          state: 'committed',
+          order_id: order.order_id,
         })
       }
     }
@@ -1361,6 +1545,7 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
     selectedConflictId,
     clearSelection,
     selectAcquisition,
+    selectTarget,
   } = useSelectionStore()
 
   // PR-LOCK-OPS-01: Lock store for acquisition lock control
@@ -1500,6 +1685,27 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
     }
 
     if (unifiedSelectedType === 'acquisition' && selectedAcquisitionId) {
+      const scheduleItem = scheduleItems.find((item) => item.id === selectedAcquisitionId)
+      if (scheduleItem) {
+        return {
+          name: `${scheduleItem.target_id} - ${scheduleItem.satellite_display_name || scheduleItem.satellite_id}`,
+          id: scheduleItem.id,
+          target_id: scheduleItem.target_id,
+          satellite_id: scheduleItem.satellite_id,
+          satellite_name: scheduleItem.satellite_display_name || scheduleItem.satellite_id,
+          start_time: scheduleItem.start_time,
+          end_time: scheduleItem.end_time,
+          off_nadir_deg: scheduleItem.off_nadir_deg,
+          state: scheduleItem.state,
+          order_id: scheduleItem.order_id,
+          lock_level: scheduleItem.lock_level,
+          roll_angle: scheduleItem.geometry?.roll_deg,
+          pitch_angle: scheduleItem.geometry?.pitch_deg,
+          incidence_angle: scheduleItem.geometry?.incidence_deg,
+          type: 'acquisition',
+        } as Record<string, unknown>
+      }
+
       // Find acquisition in orders
       for (const order of orders || []) {
         const acq = order.schedule?.find((s) => s.opportunity_id === selectedAcquisitionId)
@@ -1672,42 +1878,17 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
 
   // For unified selection without tree selection, render simplified content
   if (!hasTreeSelection && hasUnifiedSelection && metadata) {
-    const typeLabels: Record<string, string> = {
-      target: 'Target',
-      opportunity: 'Opportunity',
-      acquisition: 'Acquisition',
-      conflict: 'Conflict',
-    }
-    const TypeIcon = unifiedSelectedType === 'target' ? MapPin : Zap
-
     return (
       <div className="flex flex-col h-full bg-gray-900">
-        {/* Header with clear button */}
-        <div className="px-4 py-3 border-b border-gray-700">
-          <div className="flex items-center gap-2">
-            <TypeIcon className="w-5 h-5 text-blue-400" />
-            <div className="flex-1 min-w-0">
-              <h3 className="text-sm font-semibold text-white truncate">
-                {(metadata.name as string) || 'Selected Item'}
-              </h3>
-              <p className="text-xs text-gray-500">
-                {typeLabels[unifiedSelectedType || ''] || 'Unknown'}
-              </p>
-            </div>
-            <button
-              onClick={clearSelection}
-              className="p-1 rounded hover:bg-gray-700 text-gray-400 hover:text-white transition-colors"
-              title="Clear selection (Esc)"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-
         {/* Content based on unified type */}
         <div className="flex-1 overflow-y-auto">
           {unifiedSelectedType === 'target' && (
             <>
+              <TargetFocusSummary
+                metadata={metadata}
+                acquisitionRows={acquisitionRows}
+                selectionSource={lastSelectionSource}
+              />
               {metadata.latitude != null && metadata.longitude != null && (
                 <InspectorSection title="Location" icon="MapPin">
                   <CoordinateField
@@ -1718,13 +1899,24 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
                 </InspectorSection>
               )}
               {metadata.priority !== undefined && (
-                <InspectorSection title="Properties" icon="Settings">
+                <InspectorSection title="Overview" icon="Target">
                   <Field label="Priority" value={metadata.priority as number} />
                 </InspectorSection>
               )}
               {/* PR-UI-039: Acquisitions list for selected target */}
               {selectedTargetId && (
                 <TargetAcquisitionsSection targetId={selectedTargetId} rows={acquisitionRows} />
+              )}
+              {selectedTargetId && (
+                <QuickActionsCard>
+                  <ActionButton
+                    label="Fly To"
+                    icon="Navigation"
+                    onClick={() => flyToObject(`target_${selectedTargetId}`)}
+                    variant="primary"
+                  />
+                  <ActionButton label="Clear" icon="Trash2" onClick={clearSelection} />
+                </QuickActionsCard>
               )}
             </>
           )}
@@ -1765,7 +1957,7 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
               {/* Quick Actions for repair items */}
               {selectedRepairItem && (
                 <div className="px-4 py-3 border-t border-gray-700">
-                  <div className="text-xs text-gray-500 mb-2">Quick Actions</div>
+                  <div className="text-xs text-gray-500 mb-2">Actions</div>
                   <div className="flex gap-2">
                     <ActionButton
                       label="Focus Timeline"
@@ -1775,7 +1967,7 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
                     />
                     <ActionButton
                       label="Clear"
-                      icon="X"
+                      icon="Trash2"
                       onClick={clearRepairSelection}
                       variant="secondary"
                     />
@@ -1797,92 +1989,106 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
                   />
                 </div>
               )}
+              <AcquisitionFocusSummary
+                metadata={metadata}
+              />
               <InspectorSection title="Overview" icon="Target">
                 <Field label="Target" value={metadata.target_id as string} />
-                <Field label="Satellite" value={metadata.satellite_id as string} />
+                <Field
+                  label="Satellite"
+                  value={(metadata.satellite_name as string) || (metadata.satellite_id as string)}
+                />
                 {typeof metadata.order_id === 'string' && (
                   <Field label="Order" value={metadata.order_id} />
+                )}
+                {typeof metadata.state === 'string' &&
+                  (metadata.state as string).toLowerCase() !== 'committed' && (
+                  <Field label="State" value={toTitleCase(metadata.state as string)} />
                 )}
               </InspectorSection>
               <InspectorSection title="Timing" icon="Clock">
                 <Field label="Start" value={formatDateTime(metadata.start_time as string)} />
                 <Field label="End" value={formatDateTime(metadata.end_time as string)} />
               </InspectorSection>
+              {(metadata.off_nadir_deg !== undefined ||
+                metadata.roll_angle !== undefined ||
+                metadata.pitch_angle !== undefined) && (
+                <InspectorSection title="Pointing" icon="Gauge">
+                  {metadata.off_nadir_deg !== undefined && (
+                    <Field
+                      label="Total Off-Nadir"
+                      value={(metadata.off_nadir_deg as number)?.toFixed(1)}
+                      unit="°"
+                    />
+                  )}
+                  {metadata.roll_angle !== undefined && (
+                    <Field
+                      label="Roll Component"
+                      value={(metadata.roll_angle as number)?.toFixed(1)}
+                      unit="°"
+                    />
+                  )}
+                  {metadata.pitch_angle !== undefined && (
+                    <Field
+                      label="Pitch Component"
+                      value={(metadata.pitch_angle as number)?.toFixed(1)}
+                      unit="°"
+                    />
+                  )}
+                </InspectorSection>
+              )}
 
-              {/* PR-LOCK-OPS-01: Lock Control Section */}
-              <div className="px-4 py-3 border-t border-gray-700">
-                <div className="text-xs text-gray-500 mb-2 flex items-center gap-1">
-                  <Shield size={12} />
-                  Lock Control
-                </div>
+              <InspectorSection title="Protection" icon="Shield">
                 {(() => {
                   const isRepairPreview = lastSelectionSource === 'repair'
-                  const acqLockLevel = lockLevels.get(selectedAcquisitionId) ?? 'none'
+                  const acqLockLevel =
+                    (lockLevels.get(selectedAcquisitionId) ?? metadata.lock_level ?? 'none') as string
                   const isLocked = acqLockLevel === 'hard'
                   const isPending = lockPending.has(selectedAcquisitionId)
 
                   if (isRepairPreview) {
                     return (
-                      <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-800/50 border border-gray-700/50">
-                        <Lock size={14} className="text-gray-500" />
-                        <div>
-                          <div className="text-xs text-gray-400">Locking available after apply</div>
-                          <div className="text-[10px] text-gray-500">
-                            Apply the repair plan first, then lock items
-                          </div>
-                        </div>
+                      <div className="space-y-2">
+                        <Field label="Status" value="Available after apply" />
+                        <p className="text-[11px] leading-relaxed text-slate-500">
+                          Apply the repair plan first, then protect individual acquisitions.
+                        </p>
                       </div>
                     )
                   }
 
                   return (
-                    <button
-                      onClick={() => toggleLock(selectedAcquisitionId)}
-                      disabled={isPending}
-                      className={`
-                        w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-all
-                        ${isPending ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
-                        ${
-                          isLocked
-                            ? 'bg-red-950/30 border-red-800/40 hover:bg-red-950/50'
-                            : 'bg-gray-800/50 border-gray-700/50 hover:bg-gray-800 hover:border-gray-600'
-                        }
-                      `}
-                    >
-                      {isLocked ? (
-                        <Shield size={16} className="text-red-400" />
-                      ) : (
-                        <Unlock size={16} className="text-gray-400" />
-                      )}
-                      <div className="flex-1 text-left">
-                        <div
-                          className={`text-xs font-medium ${isLocked ? 'text-red-300' : 'text-gray-300'}`}
-                        >
-                          {isLocked ? 'Hard Locked' : 'Unlocked'}
-                        </div>
-                        <div className="text-[10px] text-gray-500">
-                          {isLocked
-                            ? 'Protected from repair — click to unlock'
-                            : 'Flexible — click to lock (protect from repair)'}
-                        </div>
+                    <div className="space-y-2.5">
+                      <Field label="Status" value={isLocked ? 'Hard locked' : 'Flexible window'} />
+                      <p className="text-[11px] leading-relaxed text-slate-500">
+                        {isLocked
+                          ? 'Protected from repair changes until you unlock it.'
+                          : 'Available for repair changes unless you protect it.'}
+                      </p>
+                      <div className="pt-1">
+                        <ActionButton
+                          label={isLocked ? 'Unlock' : 'Protect'}
+                          icon={isLocked ? 'Unlock' : 'Shield'}
+                          onClick={() => toggleLock(selectedAcquisitionId)}
+                          disabled={isPending}
+                          variant={isLocked ? 'danger' : 'secondary'}
+                        />
                       </div>
-                      <span
-                        className={`text-[10px] px-2 py-0.5 rounded font-medium ${
-                          isLocked ? 'bg-red-900/40 text-red-300' : 'bg-gray-700 text-gray-400'
-                        }`}
-                      >
-                        {isLocked ? 'Unlock' : 'Lock'}
-                      </span>
-                    </button>
+                    </div>
                   )
                 })()}
-              </div>
+              </InspectorSection>
 
               {/* Quick Actions for repair items */}
-              {selectedRepairItem && (
-                <div className="px-4 py-3 border-t border-gray-700">
-                  <div className="text-xs text-gray-500 mb-2">Quick Actions</div>
-                  <div className="flex gap-2">
+              <QuickActionsCard>
+                <ActionButton
+                  label="View Target"
+                  icon="MapPin"
+                  onClick={() => selectTarget((metadata.target_id as string) || null, 'inspector')}
+                  variant="primary"
+                />
+                {selectedRepairItem && (
+                  <>
                     <ActionButton
                       label="Focus Timeline"
                       icon="Clock"
@@ -1891,13 +2097,16 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
                     />
                     <ActionButton
                       label="Clear"
-                      icon="X"
+                      icon="Trash2"
                       onClick={clearRepairSelection}
                       variant="secondary"
                     />
-                  </div>
-                </div>
-              )}
+                  </>
+                )}
+                {!selectedRepairItem && (
+                  <ActionButton label="Clear" icon="Trash2" onClick={clearSelection} />
+                )}
+              </QuickActionsCard>
             </>
           )}
           {unifiedSelectedType === 'conflict' && selectedConflictId && (
@@ -2014,6 +2223,75 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
 // =============================================================================
 // Helper Functions
 // =============================================================================
+
+function toTitleCase(value: string): string {
+  return value
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
+function describeSelectionSource(
+  source: 'map' | 'table' | 'timeline' | 'inspector' | 'repair' | null | undefined,
+): string {
+  switch (source) {
+    case 'map':
+      return 'Map focus'
+    case 'table':
+      return 'Table focus'
+    case 'timeline':
+      return 'Timeline focus'
+    case 'inspector':
+      return 'Inspector focus'
+    case 'repair':
+      return 'Repair preview'
+    default:
+      return 'Selection'
+  }
+}
+
+function shouldShowSelectionSource(
+  source: 'map' | 'table' | 'timeline' | 'inspector' | 'repair' | null | undefined,
+): boolean {
+  return source === 'repair'
+}
+
+function formatBriefCoordinate(value: number, isLatitude: boolean): string {
+  const direction = isLatitude ? (value >= 0 ? 'N' : 'S') : value >= 0 ? 'E' : 'W'
+  return `${Math.abs(value).toFixed(2)}° ${direction}`
+}
+
+function formatCompactTime(dateStr?: string): string {
+  if (!dateStr) return '—'
+  try {
+    return new Date(dateStr).toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  } catch {
+    return dateStr
+  }
+}
+
+function formatCompactDateTime(dateStr?: string): string {
+  if (!dateStr) return '—'
+  try {
+    return new Date(dateStr).toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  } catch {
+    return dateStr
+  }
+}
+
+function formatAcquisitionWindow(start?: string, end?: string): string {
+  if (!start && !end) return 'Window unavailable'
+  if (!start) return formatCompactTime(end)
+  if (!end) return formatCompactTime(start)
+  return `${formatCompactTime(start)} - ${formatCompactTime(end)}`
+}
 
 function formatDate(dateStr: string | undefined): string {
   if (!dateStr) return '—'

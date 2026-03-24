@@ -1405,6 +1405,19 @@ def execute_repair_planning(
     drop_reasons: List[Dict[str, str]] = []
     move_reasons: List[Dict[str, str]] = []
     hard_lock_warnings: List[str] = []
+    dropped_replaced_by: Dict[str, List[str]] = {}
+    added_replaces: Dict[str, List[str]] = {}
+
+    def _link_replacement(dropped_id: str, added_id: str) -> None:
+        """Record exact drop/add linkage for change-log reporting."""
+        if dropped_id:
+            dropped_replaced_by.setdefault(dropped_id, [])
+            if added_id and added_id not in dropped_replaced_by[dropped_id]:
+                dropped_replaced_by[dropped_id].append(added_id)
+        if added_id:
+            added_replaces.setdefault(added_id, [])
+            if dropped_id and dropped_id not in added_replaces[added_id]:
+                added_replaces[added_id].append(dropped_id)
 
     # All hard-locked items are kept by definition
     for interval in repair_context.fixed_set:
@@ -1533,7 +1546,7 @@ def execute_repair_planning(
 
             # Find lowest-value flex item on same satellite AND same target
             for flex in sorted_kept_flex:
-                if flex.action == "drop":
+                if flex.action != "keep":
                     continue
                 if flex.satellite_id != opp_sat_id:
                     continue
@@ -1573,17 +1586,40 @@ def execute_repair_planning(
 
                     if is_feasible:
                         # Replace flex with better opportunity for same target
-                        flex.action = "drop"
+                        flex.action = "replace"
                         if flex.acquisition_id in kept_ids:
                             kept_ids.remove(flex.acquisition_id)
                         dropped_ids.append(flex.acquisition_id)
+                        opp_id = opp.get("id", opp.get("opportunity_id", ""))
+                        move_reason = (
+                            f"Rescheduled {flex.target_id} to a higher-value opportunity "
+                            f"(value: {opp_value:.2f} vs {flex.value:.2f})"
+                        )
                         drop_reasons.append(
                             {
                                 "id": flex.acquisition_id,
-                                "reason": f"Replaced by higher-value opportunity (value: {opp_value:.2f} vs {flex.value:.2f})",
+                                "reason": move_reason,
                             }
                         )
-                        added_ids.append(opp.get("id", opp.get("opportunity_id", "")))
+                        added_ids.append(opp_id)
+                        _link_replacement(flex.acquisition_id, opp_id)
+                        moved_items.append(
+                            MovedAcquisitionInfo(
+                                id=flex.acquisition_id,
+                                from_start=_isoformat_z(flex.original_start),
+                                from_end=_isoformat_z(flex.original_end),
+                                to_start=opp.get("start_time", ""),
+                                to_end=opp.get("end_time", ""),
+                                from_roll_deg=flex.roll_angle_deg,
+                                to_roll_deg=opp.get("roll_angle_deg", 0.0),
+                            )
+                        )
+                        move_reasons.append(
+                            {
+                                "id": flex.acquisition_id,
+                                "reason": move_reason,
+                            }
+                        )
                         changes_made += 1
                         break
                 except (ValueError, KeyError):
@@ -1829,6 +1865,7 @@ def execute_repair_planning(
                     if flex_candidate.acquisition_id in kept_ids:
                         kept_ids.remove(flex_candidate.acquisition_id)
                     dropped_ids.append(flex_candidate.acquisition_id)
+                    _link_replacement(flex_candidate.acquisition_id, opp_id)
                     drop_reasons.append(
                         {
                             "id": flex_candidate.acquisition_id,
@@ -1852,6 +1889,7 @@ def execute_repair_planning(
                         "id", alt_opp_match.get("opportunity_id", "")
                     )
                     added_ids.append(alt_opp_id)
+                    _link_replacement(flex_candidate.acquisition_id, alt_opp_id)
                     already_added.add(alt_opp_id)
                     # dropped_target stays in targets_covered
                     changes_made += 1
@@ -2007,6 +2045,7 @@ def execute_repair_planning(
                     if flex_candidate.acquisition_id in kept_ids:
                         kept_ids.remove(flex_candidate.acquisition_id)
                     dropped_ids.append(flex_candidate.acquisition_id)
+                    _link_replacement(flex_candidate.acquisition_id, opp_id)
                     drop_reasons.append(
                         {
                             "id": flex_candidate.acquisition_id,
@@ -2179,13 +2218,7 @@ def execute_repair_planning(
         flex_item = flex_lookup.get(did)
         reason_text = drop_reason_lookup.get(did, "Dropped during repair optimization")
         reason_code = _derive_reason_code(reason_text)
-        # Check if this was replaced by an added item (same satellite)
-        replaced_by_ids = []
-        if flex_item:
-            for aid in added_ids:
-                opp = opp_lookup.get(aid, {})
-                if opp.get("satellite_id") == flex_item.satellite_id:
-                    replaced_by_ids.append(aid)
+        replaced_by_ids = dropped_replaced_by.get(did, [])
         dropped_entries.append(
             DroppedEntry(
                 acquisition_id=did,
@@ -2203,13 +2236,8 @@ def execute_repair_planning(
     added_entries = []
     for aid in added_ids:
         opp = opp_lookup.get(aid, {})
-        # Check if this replaces a dropped item (same satellite)
-        replaces_ids = []
+        replaces_ids = added_replaces.get(aid, [])
         opp_sat = opp.get("satellite_id", "")
-        for did in dropped_ids:
-            flex_item = flex_lookup.get(did)
-            if flex_item and flex_item.satellite_id == opp_sat:
-                replaces_ids.append(did)
         reason_code = (
             RepairReasonCode.PRIORITY_UPGRADE.value
             if replaces_ids

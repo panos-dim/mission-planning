@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Orbit, Clock } from 'lucide-react'
+import { Orbit, Clock, FolderOpen } from 'lucide-react'
 import { Ion } from 'cesium'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
@@ -17,6 +17,7 @@ import { useTargetAddStore } from './store/targetAddStore'
 import { useSwathStore } from './store/swathStore'
 import { useSelectionStore } from './store/selectionStore'
 import { useLockModeStore } from './store/lockModeStore'
+import { useWorkspaceStore } from './store/workspaceStore'
 import LockToastContainer from './components/LockToast'
 import './App.css'
 
@@ -38,6 +39,12 @@ function AppContent(): JSX.Element {
   const { debugEnabled, setDebugEnabled } = useSwathStore()
   const { clearSelection } = useSelectionStore()
   const { disableLockMode } = useLockModeStore()
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspace)
+  const activeWorkspaceName = useWorkspaceStore((s) => s.activeWorkspaceName)
+  const workspaceLabel = activeWorkspaceName || 'Default Workspace'
+  const workspaceTitle = activeWorkspaceId
+    ? `Selected workspace: ${activeWorkspaceName || activeWorkspaceId}`
+    : 'Selected workspace: default unsaved workspace'
 
   // Keyboard handler for Esc key to exit add mode/clear selection and Ctrl+Shift+D for debug toggle
   useEffect(() => {
@@ -111,6 +118,16 @@ function AppContent(): JSX.Element {
           <div className="flex items-center space-x-4">
             <UIModeToggle />
             <ViewModeToggle />
+            <div
+              className="hidden md:flex items-center space-x-2 px-3 py-1.5 bg-gray-800 rounded-lg border border-gray-700"
+              title={workspaceTitle}
+            >
+              <FolderOpen className="w-4 h-4 text-emerald-400" />
+              <span className="hidden lg:inline text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">
+                Workspace
+              </span>
+              <span className="max-w-[180px] truncate text-sm text-gray-200">{workspaceLabel}</span>
+            </div>
             <div
               className="flex items-center space-x-2 px-3 py-1.5 bg-gray-800 rounded-lg border border-gray-700"
               title="System Time (UTC)"

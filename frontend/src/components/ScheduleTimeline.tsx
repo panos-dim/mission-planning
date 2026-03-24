@@ -8,6 +8,7 @@
 import React, { useMemo, useCallback, useRef, useState, useEffect, memo } from 'react'
 import {
   Clock,
+  ChevronDown,
   MapPin,
   X,
   Lock,
@@ -176,27 +177,37 @@ const ChipSelect: React.FC<ChipSelectProps> = ({ label, icon, value, options, on
     return (
       <button
         onClick={() => onChange(null)}
-        className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-900/50 text-blue-300 border border-blue-700/50 hover:bg-blue-800/50 transition-colors"
+        className="inline-flex items-center gap-1.5 rounded-md border border-blue-500/20 bg-blue-500/10 px-2.5 py-1 text-[10px] font-medium text-blue-100 transition-colors hover:border-blue-400/30 hover:bg-blue-500/15 hover:text-white"
       >
         {icon}
-        <span className="max-w-[80px] truncate">{value}</span>
+        <span className="text-slate-300">{label}</span>
+        <span className="max-w-[88px] truncate text-white">{value}</span>
         <X size={10} className="ml-0.5 opacity-70" />
       </button>
     )
   }
   return (
-    <select
-      value=""
-      onChange={(e) => onChange(e.target.value || null)}
-      className="appearance-none px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-800 text-gray-400 border border-gray-700/50 hover:bg-gray-700 hover:text-gray-300 cursor-pointer transition-colors"
-    >
-      <option value="">{label}</option>
-      {options.map((opt) => (
-        <option key={opt} value={opt}>
-          {opt}
-        </option>
-      ))}
-    </select>
+    <div className="relative">
+      <div className="pointer-events-none absolute inset-y-0 left-2 flex items-center text-slate-500">
+        {icon}
+      </div>
+      <select
+        value=""
+        onChange={(e) => onChange(e.target.value || null)}
+        aria-label={`${label} filter`}
+        className="appearance-none rounded-md border border-slate-700/90 bg-slate-900/80 py-1 pl-7 pr-7 text-[10px] font-medium text-slate-300 transition-colors hover:border-slate-600 hover:bg-slate-800 hover:text-white"
+      >
+        <option value="">{label}</option>
+        {options.map((opt) => (
+          <option key={opt} value={opt}>
+            {opt}
+          </option>
+        ))}
+      </select>
+      <div className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-slate-600">
+        <ChevronDown size={11} />
+      </div>
+    </div>
   )
 }
 
@@ -214,10 +225,10 @@ interface ChipToggleProps {
 const ChipToggle: React.FC<ChipToggleProps> = ({ label, icon, active, onToggle }) => (
   <button
     onClick={onToggle}
-    className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium transition-colors ${
+    className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[10px] font-medium transition-colors ${
       active
-        ? 'bg-blue-900/50 text-blue-300 border border-blue-700/50'
-        : 'bg-gray-800 text-gray-400 border border-gray-700/50 hover:bg-gray-700 hover:text-gray-300'
+        ? 'border-blue-500/20 bg-blue-500/10 text-blue-100 hover:border-blue-400/30 hover:bg-blue-500/15'
+        : 'border-slate-700/90 bg-slate-900/80 text-slate-300 hover:border-slate-600 hover:bg-slate-800 hover:text-white'
     }`}
   >
     {icon}
@@ -243,7 +254,7 @@ const FilterChips: React.FC<FilterChipsProps> = memo(
     const hasActive = filters.target !== null || filters.satellite !== null || filters.lockedOnly
 
     return (
-      <div className="flex flex-wrap items-center gap-1.5 px-3 py-2 border-b border-gray-700/50 bg-gray-900/50">
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-800/90 bg-slate-950/55 px-3 py-2.5">
         {targets.length > 1 && (
           <ChipSelect
             label="Target"
@@ -265,7 +276,7 @@ const FilterChips: React.FC<FilterChipsProps> = memo(
         )}
 
         <ChipToggle
-          label="Locked"
+          label="Protected"
           icon={<Lock size={11} />}
           active={filters.lockedOnly}
           onToggle={() => onFilterChange({ lockedOnly: !filters.lockedOnly })}
@@ -274,10 +285,10 @@ const FilterChips: React.FC<FilterChipsProps> = memo(
         {hasActive && (
           <button
             onClick={onClearAll}
-            className="ml-auto flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
+            className="ml-auto inline-flex items-center gap-1 rounded-md border border-slate-700/80 px-2.5 py-1 text-[10px] font-medium text-slate-300 transition-colors hover:border-slate-500 hover:bg-slate-800 hover:text-white"
           >
             <X size={10} />
-            Clear
+            Clear filters
           </button>
         )}
       </div>
@@ -575,7 +586,6 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
   // Selection store
   const selectedAcquisitionId = useSelectionStore((s) => s.selectedAcquisitionId)
   const selectAcquisition = useSelectionStore((s) => s.selectAcquisition)
-  const selectTarget = useSelectionStore((s) => s.selectTarget)
   const lastSelectionSource = useSelectionStore((s) => s.lastSelectionSource)
 
   // PR-UI-039: Schedule store — focusedAcquisitionId drives bar highlight after
@@ -829,23 +839,22 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
     if (!focusedAcquisitionId) return
     const stillExists = acquisitions.some((a) => a.id === focusedAcquisitionId)
     if (!stillExists) {
-      selectTarget(null)
+      selectAcquisition(null)
     }
-  }, [acquisitions, focusedAcquisitionId, selectTarget])
+  }, [acquisitions, focusedAcquisitionId, selectAcquisition])
 
-  // Handle acquisition selection → opens inspector + focuses Cesium
-  // PR-UI-039: Select the TARGET so Inspector shows target view with acquisitions list.
-  // The schedule store tracks the focused acquisition for Cesium sync + bar highlight.
+  // Handle acquisition selection → opens Details and focuses Cesium.
+  // The schedule store tracks focused acquisition for map/timeline sync.
   const handleSelectAcquisition = useCallback(
     (id: string) => {
       const acq = acquisitions.find((a) => a.id === id)
       if (acq) {
-        selectTarget(acq.target_id, 'timeline')
+        selectAcquisition(acq.id, 'timeline')
         onSelectAcquisition?.(acq)
       }
       onFocusAcquisition?.(id)
     },
-    [selectTarget, onFocusAcquisition, onSelectAcquisition, acquisitions],
+    [selectAcquisition, onFocusAcquisition, onSelectAcquisition, acquisitions],
   )
 
   // PR-UI-030: Notify parent of viewRange changes (debounced) for Cesium timeline sync
@@ -887,6 +896,9 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
   }
 
   const filtersHideAll = filteredAcquisitions.length === 0 && acquisitions.length > 0
+  const hasOptical = acquisitions.some((acq) => acq.mode !== 'SAR')
+  const hasSar = acquisitions.some((acq) => acq.mode === 'SAR')
+  const lockedCount = acquisitions.filter((acq) => acq.lock_level === 'hard').length
 
   // ---- Main render ----
   return (
@@ -933,15 +945,15 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
             {isZoomed && (
               <button
                 onClick={resetZoom}
-                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium text-blue-400 hover:text-white hover:bg-gray-700 transition-colors"
+                className="flex items-center gap-1 rounded-md border border-slate-700/80 px-2 py-1 text-[10px] font-medium text-slate-300 hover:border-slate-500 hover:bg-slate-800 hover:text-white transition-colors"
                 title="Reset zoom"
               >
                 <Maximize2 size={12} />
                 Reset
               </button>
             )}
-            <span className="ml-auto text-[9px] text-gray-500">
-              ⌘/Ctrl+Scroll to zoom · Drag to pan
+            <span className="ml-auto text-[10px] text-slate-500">
+              Scroll to zoom, drag to pan
             </span>
           </div>
 
@@ -1005,40 +1017,38 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
                 />
               ))}
             </div>
-
-            {/* Legend */}
-            <div className="flex items-center gap-4 px-2 pb-3 pt-1 border-t border-gray-800/50">
-              <div className="flex items-center gap-1.5">
-                <div className="w-3 h-2 rounded-sm bg-blue-500/70 border border-blue-400/50" />
-                <span className="text-[10px] text-gray-400">Optical</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <div className="w-3 h-2 rounded-sm bg-purple-500/70 border border-purple-400/50" />
-                <span className="text-[10px] text-gray-400">SAR</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <div className="size-3 rounded-sm bg-red-500/90 flex items-center justify-center">
-                  <Shield size={7} className="text-white" />
-                </div>
-                <span className="text-[10px] text-gray-400">Locked</span>
-              </div>
-              <span className="text-[10px] text-gray-500 ml-auto">
-                Double-click bar to toggle lock
-              </span>
-            </div>
           </div>
 
-          {/* Summary footer */}
-          <div className="border-t border-gray-700 bg-gray-900/95 px-3 py-2">
-            <div className="flex items-center justify-between text-[10px] text-gray-500">
-              <span>
+          <div className="border-t border-slate-800/90 bg-slate-950/75 px-3 py-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              {hasOptical && (
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-blue-500/20 bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium text-blue-100">
+                  <span className="h-2 w-2 rounded-full bg-blue-400" />
+                  Optical
+                </span>
+              )}
+              {hasSar && (
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-purple-500/20 bg-purple-500/10 px-2 py-0.5 text-[10px] font-medium text-purple-100">
+                  <span className="h-2 w-2 rounded-full bg-purple-400" />
+                  SAR
+                </span>
+              )}
+              {lockedCount > 0 && (
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-red-500/20 bg-red-500/10 px-2 py-0.5 text-[10px] font-medium text-red-100">
+                  <Shield size={10} />
+                  {lockedCount} locked
+                </span>
+              )}
+              <span className="ml-auto text-[10px] text-slate-400">
                 {filteredAcquisitions.length}
-                {filteredAcquisitions.length !== acquisitions.length &&
-                  ` / ${acquisitions.length}`}{' '}
-                acquisitions &middot; {targetLanes.length} target
-                {targetLanes.length !== 1 ? 's' : ''}
+                {filteredAcquisitions.length !== acquisitions.length
+                  ? ` / ${acquisitions.length}`
+                  : ''}{' '}
+                windows · {targetLanes.length} target{targetLanes.length !== 1 ? 's' : ''}
               </span>
-              <span>{acquisitions.filter((a) => a.lock_level === 'hard').length} locked</span>
+            </div>
+            <div className="mt-2 text-[10px] text-slate-500">
+              Double-click any bar to protect or unlock it.
             </div>
           </div>
         </>

@@ -15,6 +15,7 @@ import {
   ColorMaterialProperty,
   ConstantProperty,
   JulianDate,
+  MaterialProperty,
   Property,
   Viewer,
 } from "cesium";
@@ -75,7 +76,7 @@ interface RepairMetadataEntity extends Entity {
 }
 
 interface OriginalEntityStyle {
-  polygonMaterial?: Property | undefined;
+  polygonMaterial?: MaterialProperty | undefined;
   polygonOutlineColor?: Property | undefined;
   polygonOutlineWidth?: Property | undefined;
   pointColor?: Property | undefined;

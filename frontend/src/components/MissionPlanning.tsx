@@ -182,6 +182,7 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
   const activeTab = results
     ? (Object.keys(results)[0] ?? 'roll_pitch_best_fit')
     : 'roll_pitch_best_fit'
+  const activeResult = results?.[activeTab]
 
   // Schedule context — always loaded so auto-detect can decide the mode
   const scheduleContextEnabled = true
@@ -597,6 +598,45 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
     setCommitPreview(null)
   }
 
+  const applySummaryStats = useMemo(() => {
+    if (!activeResult) return undefined
+
+    if (schedulingReasoning?.mode === 'repair' && repairResult) {
+      const fallbackSatellites =
+        Object.keys(repairResult.existing_acquisitions.by_satellite || {}).length ||
+        new Set(activeResult.schedule.map((item) => item.satellite_id)).size
+
+      return {
+        acquisitions: repairResult.metrics_comparison.acquisition_count_after,
+        satellites: repairResult.planner_summary?.satellites_used.length ?? fallbackSatellites,
+        targets:
+          repairResult.planner_summary?.total_targets_covered ??
+          activeResult.target_statistics?.targets_acquired ??
+          new Set(activeResult.schedule.map((item) => item.target_id)).size,
+      }
+    }
+
+    const isIncremental = schedulingReasoning?.mode === 'incremental'
+    const fallbackSatellites =
+      new Set(activeResult.schedule.map((item) => item.satellite_id)).size || 0
+    const fallbackTargets =
+      new Set(activeResult.schedule.map((item) => item.target_id)).size || 0
+
+    return {
+      acquisitions: (isIncremental ? scheduleContext.count : 0) + activeResult.schedule.length,
+      satellites: activeResult.planner_summary?.satellites_used.length ?? fallbackSatellites,
+      targets:
+        activeResult.planner_summary?.total_targets_covered ??
+        activeResult.target_statistics?.targets_acquired ??
+        fallbackTargets,
+    }
+  }, [
+    activeResult,
+    schedulingReasoning?.mode,
+    repairResult,
+    scheduleContext.count,
+  ])
+
   const exportToCsv = (algorithm: string) => {
     if (!results || !results[algorithm]) return
 
@@ -720,13 +760,13 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
           onConfirm={handleConfirmCommit}
           onBack={handleCancelCommit}
           scheduleData={
-            results && results[activeTab]
+            results && activeResult
               ? {
-                  schedule: results[activeTab].schedule,
-                  targetStatistics: results[activeTab].target_statistics,
-                  plannerSummary:
-                    repairResult?.planner_summary ?? results[activeTab]?.planner_summary,
+                  schedule: activeResult.schedule,
+                  targetStatistics: activeResult.target_statistics,
+                  plannerSummary: repairResult?.planner_summary ?? activeResult.planner_summary,
                   repairDiff: repairResult?.repair_diff,
+                  summaryStats: applySummaryStats,
                 }
               : undefined
           }

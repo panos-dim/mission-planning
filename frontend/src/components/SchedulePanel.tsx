@@ -16,6 +16,10 @@ import { useMission } from '../context/MissionContext'
 import { useScheduleStore } from '../store/scheduleStore'
 import { useVisStore } from '../store/visStore'
 import { useSelectionStore } from '../store/selectionStore'
+import {
+  buildRecoveredOrdersFromScheduleItems,
+  getAcceptedOrderAcquisitionCount,
+} from '../utils/recoveredOrders'
 
 interface SchedulePanelProps {
   orders: AcceptedOrder[]
@@ -50,23 +54,44 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
 
   // PR-UI-030: Master schedule store + Cesium sync
   const scheduleItems = useScheduleStore((s) => s.items)
+  const fetchMaster = useScheduleStore((s) => s.fetchMaster)
   const startPolling = useScheduleStore((s) => s.startPolling)
   const stopPolling = useScheduleStore((s) => s.stopPolling)
   const focusAcquisition = useScheduleStore((s) => s.focusAcquisition)
   const focusedAcquisitionId = useScheduleStore((s) => s.focusedAcquisitionId)
   const setTimeRangeFromIso = useVisStore((s) => s.setTimeRangeFromIso)
+  const activeLeftPanel = useVisStore((s) => s.activeLeftPanel)
   const clearAcquisitionSelection = useSelectionStore((s) => s.selectAcquisition)
+  const workspaceId = missionState.activeWorkspace
+  const currentWorkspaceScheduleItems = useMemo(
+    () =>
+      scheduleItems.filter(
+        (item) => !workspaceId || !item.workspace_id || item.workspace_id === workspaceId,
+      ),
+    [scheduleItems, workspaceId],
+  )
 
   // PR-UI-030: Polling lifecycle — start when Timeline tab is visible, stop otherwise
-  const workspaceId = missionState.activeWorkspace
   useEffect(() => {
-    if (activeTab !== SCHEDULE_TABS.TIMELINE || !workspaceId) {
+    if (activeLeftPanel !== 'schedule' || !workspaceId) return
+
+    // Refresh once whenever the Schedule panel becomes active so both tabs
+    // can recover the live backend state after a hard refresh.
+    void fetchMaster({ workspace_id: workspaceId })
+  }, [activeLeftPanel, workspaceId, fetchMaster])
+
+  useEffect(() => {
+    if (
+      activeLeftPanel !== 'schedule' ||
+      activeTab !== SCHEDULE_TABS.TIMELINE ||
+      !workspaceId
+    ) {
       stopPolling()
       return
     }
     startPolling(workspaceId, POLL_INTERVAL_MS)
     return () => stopPolling()
-  }, [activeTab, workspaceId, startPolling, stopPolling])
+  }, [activeLeftPanel, activeTab, workspaceId, startPolling, stopPolling])
 
   // PR-UI-030: Click-to-focus handler — bridge selection to Cesium
   const handleSelectAcquisition = useCallback(
@@ -145,8 +170,8 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
   // Used as the primary source when scheduleStore has loaded data; falls back to
   // orders-derived acquisitions when the store is empty (e.g. no workspace).
   const masterAcquisitions = useMemo((): ScheduledAcquisition[] => {
-    if (scheduleItems.length === 0) return timelineAcquisitions
-    return scheduleItems.map((item) => ({
+    if (currentWorkspaceScheduleItems.length === 0) return timelineAcquisitions
+    return currentWorkspaceScheduleItems.map((item) => ({
       id: item.id,
       satellite_id: item.satellite_id,
       target_id: item.target_id,
@@ -166,7 +191,18 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
       target_lat: item.target_lat ?? undefined,
       target_lon: item.target_lon ?? undefined,
     }))
-  }, [scheduleItems, lockLevels, satelliteNameMap, timelineAcquisitions])
+  }, [currentWorkspaceScheduleItems, lockLevels, satelliteNameMap, timelineAcquisitions])
+
+  const committedOrders = useMemo(() => {
+    if (orders.length > 0) return orders
+    if (currentWorkspaceScheduleItems.length === 0) return []
+    return buildRecoveredOrdersFromScheduleItems(currentWorkspaceScheduleItems)
+  }, [orders, currentWorkspaceScheduleItems])
+
+  const committedAcquisitionCount = useMemo(
+    () => getAcceptedOrderAcquisitionCount(committedOrders),
+    [committedOrders],
+  )
 
   // Selection persistence: if polling removes the focused acquisition, clear both stores
   useEffect(() => {
@@ -183,7 +219,7 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
       id: SCHEDULE_TABS.COMMITTED,
       label: 'Schedule',
       icon: CheckSquare,
-      badge: orders.length > 0 ? orders.length : undefined,
+      badge: committedAcquisitionCount > 0 ? committedAcquisitionCount : undefined,
       badgeColor: 'green',
     },
     // PR-OPS-REPAIR-DEFAULT-01: Added Timeline tab
@@ -261,7 +297,7 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
       {/* Tab Content */}
       <div className="flex-1 overflow-hidden">
         {activeTab === SCHEDULE_TABS.COMMITTED && (
-          <AcceptedOrders orders={orders} onOrdersChange={onOrdersChange} />
+          <AcceptedOrders orders={committedOrders} onOrdersChange={onOrdersChange} />
         )}
 
         {/* PR-UI-006 / PR-UI-030: Timeline tab — uses live master schedule + Cesium sync */}

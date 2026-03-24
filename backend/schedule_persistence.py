@@ -2945,6 +2945,8 @@ class ScheduleDB:
         start_time: str,
         end_time: str,
         workspace_id: Optional[str] = None,
+        include_tentative: bool = True,
+        include_failed: bool = False,
     ) -> Dict[str, Any]:
         """Get acquisition statistics for a time window.
 
@@ -2952,6 +2954,8 @@ class ScheduleDB:
             start_time: Window start
             end_time: Window end
             workspace_id: Optional workspace filter
+            include_tentative: Include tentative acquisitions in the stats
+            include_failed: Include superseded failed acquisitions in the stats
 
         Returns:
             Statistics dict
@@ -2969,6 +2973,10 @@ class ScheduleDB:
                 # Filter by workspace_id
                 base_query += " AND workspace_id = ?"
                 params.append(workspace_id)
+            if not include_tentative:
+                base_query += " AND state != 'tentative'"
+            if not include_failed:
+                base_query += " AND state != 'failed'"
 
             # Total count
             cursor.execute(f"SELECT COUNT(*) as cnt {base_query}", params)

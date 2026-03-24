@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Viewer, CzmlDataSource } from 'resium'
 import {
   JulianDate,
@@ -53,6 +53,11 @@ import { useScheduleStore } from '../../store/scheduleStore'
 import { useSelectionStore } from '../../store/selectionStore'
 import debug from '../../utils/debug'
 import { registerSatellites, getSatColor, getSatColorWithAlpha } from '../../utils/satelliteColors'
+import { buildScheduleTargetStatus, collectScheduleTargetGeo } from '../../utils/scheduleTargets'
+
+function getScheduleLockLabelOffset(targetName: string): number {
+  return Math.min(12 + targetName.length * 3.8, 88)
+}
 
 /**
  * Extract SAR swath properties from entity
@@ -113,6 +118,58 @@ function extractLockableOpportunityId(entity: Entity): string | null {
   } catch {
     return null
   }
+}
+
+function resolveTargetNameFromEntity(entity: Entity): string | null {
+  if (typeof entity.name === 'string' && entity.name.trim().length > 0) {
+    return entity.name
+  }
+
+  if (typeof entity.id !== 'string') return null
+
+  if (entity.id.startsWith('sched_target_')) {
+    return entity.id.slice('sched_target_'.length)
+  }
+
+  if (entity.id.startsWith('preview_target_')) {
+    return entity.id.slice('preview_target_'.length)
+  }
+
+  if (entity.id.startsWith('target_')) {
+    return entity.id.slice('target_'.length)
+  }
+
+  return entity.id
+}
+
+function findTargetEntityByName(
+  viewer: {
+    entities: { getById: (id: string) => Entity | undefined; values: Entity[] }
+    selectedEntity?: Entity | undefined
+  },
+  targetName: string,
+  loadedDataSource: DataSource | null,
+): Entity | null {
+  const directEntity = viewer.entities.getById(`sched_target_${targetName}`)
+  if (directEntity) return directEntity
+
+  const viewerTarget =
+    viewer.entities.values.find(
+      (entity: Entity) =>
+        resolveTargetNameFromEntity(entity) === targetName || entity.id === `target_${targetName}`,
+    ) ?? null
+
+  if (viewerTarget) return viewerTarget
+
+  if (loadedDataSource?.entities) {
+    return (
+      loadedDataSource.entities.values.find(
+        (entity: Entity) => resolveTargetNameFromEntity(entity) === targetName,
+      ) ?? null
+    )
+  }
+
+  return null
 }
 
 interface GlobeViewportProps {
@@ -203,10 +260,14 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
     })),
   )
   const selectTargetInStore = useSelectionStore((s) => s.selectTarget)
+  const selectedType = useSelectionStore((s) => s.selectedType)
+  const selectedTargetId = useSelectionStore((s) => s.selectedTargetId)
+  const selectedAcquisitionId = useSelectionStore((s) => s.selectedAcquisitionId)
 
   // PR-UI-003: Lock Mode — click-to-lock on map
   const isLockMode = useLockModeStore((s) => s.isLockMode)
   const toggleLock = useLockStore((s) => s.toggleLock)
+  const lockLevels = useLockStore((s) => s.levels)
 
   // Conflict highlighting on map (PR-CONFLICT-UX-02)
   useConflictMapHighlight(viewerRef)
@@ -220,6 +281,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
 
   // PR-UI-013: Committed orders for schedule-mode target status colors
   const committedOrders = useOrdersStore((s) => s.orders)
+  const scheduleItems = useScheduleStore((s) => s.items)
 
   // Planning-mode state: which sidebar panel is active + planning results
   const activeLeftPanel = useVisStore((s) => s.activeLeftPanel)
@@ -487,7 +549,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
     if (!viewer) return
 
     const isScheduleTab = activeLeftPanel === 'schedule'
-    const hasOrders = committedOrders.length > 0
+    const hasScheduleTargets = scheduleItems.length > 0 || committedOrders.length > 0
 
     // Clean up schedule entities when leaving schedule tab
     if (!isScheduleTab) {
@@ -502,20 +564,25 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
       return
     }
 
-    if (!hasOrders) return
+    if (!hasScheduleTargets) return
 
-    // Build per-target schedule status from committed orders
-    const now = Date.now()
-    const targetStatus = new Map<string, 'upcoming' | 'past'>()
+    // The timeline and the map must agree on which targets exist.
+    // When master schedule data is loaded, it becomes the authoritative source.
+    const targetStatus = buildScheduleTargetStatus(scheduleItems, committedOrders, Date.now())
+    if (targetStatus.size === 0) return
+    const lockedTargets = new Set<string>()
+
+    for (const item of scheduleItems) {
+      if ((lockLevels.get(item.id) ?? item.lock_level ?? 'none') === 'hard') {
+        lockedTargets.add(item.target_id)
+      }
+    }
+
     for (const order of committedOrders) {
-      for (const item of order.schedule || []) {
-        if (!item.target_id) continue
-        const endTs = new Date(item.end_time).getTime()
-        const current = targetStatus.get(item.target_id)
-        if (endTs >= now) {
-          targetStatus.set(item.target_id, 'upcoming')
-        } else if (current !== 'upcoming') {
-          targetStatus.set(item.target_id, 'past')
+      for (const [index, item] of (order.schedule || []).entries()) {
+        const acquisitionId = order.backend_acquisition_ids?.[index] || item.opportunity_id
+        if (acquisitionId && lockLevels.get(acquisitionId) === 'hard') {
+          lockedTargets.add(item.target_id)
         }
       }
     }
@@ -534,6 +601,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
         if (!geo) continue
 
         const entityId = `sched_target_${targetName}`
+        const lockLabelId = `sched_lock_${targetName}`
 
         let fillColor: string
         let strokeColor: string
@@ -575,6 +643,26 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
           },
         })
         newIds.push(entityId)
+
+        if (lockedTargets.has(targetName)) {
+          viewer.entities.add({
+            id: lockLabelId,
+            name: `${targetName} lock`,
+            position: Cartesian3.fromDegrees(geo.lon, geo.lat, 0),
+            label: {
+              text: '🔒',
+              font: '12px sans-serif',
+              fillColor: Color.fromCssColorString('#f87171'),
+              outlineColor: Color.BLACK,
+              outlineWidth: 3,
+              style: LabelStyle.FILL_AND_OUTLINE,
+              horizontalOrigin: HorizontalOrigin.LEFT,
+              verticalOrigin: VerticalOrigin.BOTTOM,
+              pixelOffset: new Cartesian2(getScheduleLockLabelOffset(targetName), -30),
+            },
+          })
+          newIds.push(lockLabelId)
+        }
       }
       scheduleEntityIdsRef.current = newIds
       if (newIds.length > 0) {
@@ -583,56 +671,63 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
       }
     }
 
-    // Primary source: missionData.targets (synchronous, available after analysis/workspace load)
-    const targetGeo = new Map<string, { lat: number; lon: number }>()
-    for (const t of state.missionData?.targets || []) {
-      if (t.latitude != null && t.longitude != null) {
-        targetGeo.set(t.name, { lat: t.latitude, lon: t.longitude })
-      }
-    }
+    const targetGeo = collectScheduleTargetGeo(
+      scheduleItems,
+      state.missionData?.targets || [],
+      committedOrders,
+    )
+    const hasAllTargetGeo = [...targetStatus.keys()].every((targetName) => targetGeo.has(targetName))
 
-    if (targetGeo.size > 0) {
+    if (hasAllTargetGeo) {
       renderPins(targetGeo)
       return
     }
 
-    // Fallback 2: extract geo from committed orders' stored target_positions
-    // (persisted in localStorage — survives page refresh even when missionData is gone)
-    for (const order of committedOrders) {
-      for (const tp of order.target_positions || []) {
-        if (!targetGeo.has(tp.target_id) && tp.latitude != null && tp.longitude != null) {
-          targetGeo.set(tp.target_id, { lat: tp.latitude, lon: tp.longitude })
-        }
-      }
-    }
-
-    if (targetGeo.size > 0) {
-      renderPins(targetGeo)
-      return
-    }
-
-    // Fallback 3: fetch from backend /target-locations scoped to active workspace
-    let cancelled = false
     const wsId = state.activeWorkspace || undefined
+    if (!wsId) {
+      if (targetGeo.size > 0) {
+        renderPins(targetGeo)
+      }
+      return
+    }
+
+    // Final fallback: fetch geo from backend for any targets missing locally.
+    let cancelled = false
     getScheduleTargetLocations(wsId)
       .then((resp) => {
         if (cancelled) return
-        const backendGeo = new Map<string, { lat: number; lon: number }>()
+        const mergedGeo = new Map(targetGeo)
         for (const t of resp.targets || []) {
-          backendGeo.set(t.target_id, { lat: t.latitude, lon: t.longitude })
+          if (!mergedGeo.has(t.target_id)) {
+            mergedGeo.set(t.target_id, { lat: t.latitude, lon: t.longitude })
+          }
         }
-        if (backendGeo.size > 0) {
-          renderPins(backendGeo)
+        if (mergedGeo.size > 0) {
+          renderPins(mergedGeo)
         }
       })
       .catch((err) => {
         console.warn('[ScheduleTargets] Failed to fetch target locations:', err)
+        if (targetGeo.size > 0) {
+          renderPins(targetGeo)
+        }
       })
+
+    if (targetGeo.size > 0) {
+      renderPins(targetGeo)
+    }
 
     return () => {
       cancelled = true
     }
-  }, [activeLeftPanel, committedOrders, state.missionData?.targets, state.activeWorkspace])
+  }, [
+    activeLeftPanel,
+    committedOrders,
+    lockLevels,
+    scheduleItems,
+    state.missionData?.targets,
+    state.activeWorkspace,
+  ])
 
   // PR-UI-013: Hide CZML target entities when Schedule panel is active.
   // The dedicated schedule pin effect (above) already renders green/gray pins.
@@ -643,7 +738,8 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
     const viewer = viewerRef.current?.cesiumElement
     if (!viewer || !loadedDataSource?.entities) return
 
-    const isScheduleTab = activeLeftPanel === 'schedule' && committedOrders.length > 0
+    const hasSchedulePins = scheduleItems.length > 0 || committedOrders.length > 0
+    const isScheduleTab = activeLeftPanel === 'schedule' && hasSchedulePins
 
     if (isScheduleTab) {
       // Hide CZML target entities so the sched_target_* green pins are visible
@@ -668,13 +764,43 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
         viewer.scene.requestRender()
       }
     }
-  }, [committedOrders, loadedDataSource, activeLeftPanel])
+  }, [committedOrders, scheduleItems, loadedDataSource, activeLeftPanel])
 
   // PR-UI-030: Fly camera to focused acquisition target + sync Cesium clock
   const focusedTargetCoords = useScheduleStore((s) => s.focusedTargetCoords)
   const focusedStartTime = useScheduleStore((s) => s.focusedStartTime)
   const focusedAcquisitionId = useScheduleStore((s) => s.focusedAcquisitionId)
   const focusedTargetId = useScheduleStore((s) => s.focusedTargetId)
+  const selectedTargetName = useMemo(() => {
+    const targetFromAcquisition =
+      selectedAcquisitionId != null
+        ? scheduleItems.find((item) => item.id === selectedAcquisitionId)?.target_id ??
+          committedOrders.find((order) =>
+            (order.backend_acquisition_ids || []).includes(selectedAcquisitionId),
+          )?.schedule?.[
+            committedOrders
+              .find((order) => (order.backend_acquisition_ids || []).includes(selectedAcquisitionId))
+              ?.backend_acquisition_ids?.indexOf(selectedAcquisitionId) ?? -1
+          ]?.target_id ??
+          null
+        : null
+
+    return selectedType === 'target'
+      ? selectedTargetId
+      : selectedType === 'acquisition'
+        ? targetFromAcquisition
+        : selectedType === null
+          ? null
+          : focusedTargetId
+  }, [
+    committedOrders,
+    focusedTargetId,
+    scheduleItems,
+    selectedAcquisitionId,
+    selectedTargetId,
+    selectedType,
+  ])
+
   useEffect(() => {
     if (!focusedAcquisitionId) return
     const viewer = viewerRef.current?.cesiumElement
@@ -702,16 +828,75 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
       }
     }
 
-    // PR-UI-035: Select the schedule target entity on the map so the
-    // SelectionIndicator highlights it. Also opens Inspector via selectionStore.
-    if (viewer && focusedTargetId) {
-      const schedEntity = viewer.entities.getById(`sched_target_${focusedTargetId}`)
-      if (schedEntity) {
-        viewer.selectedEntity = schedEntity
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusedAcquisitionId, focusedTargetCoords, focusedStartTime, focusedTargetId, loadedDataSource])
+
+  // Keep Cesium's selected entity aligned with the shared selection store.
+  // The selection indicator reads from viewer.selectedEntity, so timeline,
+  // inspector, and map clicks must all bridge back to the same target entity.
+  useEffect(() => {
+    const viewer = viewerRef.current?.cesiumElement
+    if (!viewer) return
+
+    if (!selectedTargetName) {
+      if (selectedType === null && viewer.selectedEntity) {
+        viewer.selectedEntity = undefined
+      }
+      return
+    }
+
+    const targetEntity = findTargetEntityByName(viewer, selectedTargetName, loadedDataSource)
+    if (targetEntity && viewer.selectedEntity !== targetEntity) {
+      viewer.selectedEntity = targetEntity
+      viewer.scene?.requestRender?.()
+    }
+  }, [loadedDataSource, selectedTargetName, selectedType])
+
+  // Make shared selection visible directly on the schedule target pin.
+  useEffect(() => {
+    const viewer = viewerRef.current?.cesiumElement
+    if (!viewer) return
+
+    const selectedLabelColor = Color.fromCssColorString('#dbeafe')
+    const selectedOutlineColor = Color.fromCssColorString('#93c5fd')
+    const selectedLabelBackground = Color.fromCssColorString('rgba(15, 23, 42, 0.88)')
+    const lockSelectedColor = Color.fromCssColorString('#fca5a5')
+    const lockDefaultColor = Color.fromCssColorString('#f87171')
+
+    for (const entityId of scheduleEntityIdsRef.current) {
+      const entity = viewer.entities.getById(entityId)
+      if (!entity) continue
+
+      if (entityId.startsWith('sched_target_')) {
+        const targetName = entityId.slice('sched_target_'.length)
+        const isSelected = selectedTargetName === targetName
+
+        if (entity.billboard) {
+          entity.billboard.scale = isSelected ? 1.28 : 1
+        }
+        if (entity.label) {
+          entity.label.scale = isSelected ? 1.12 : 1
+          entity.label.fillColor = isSelected ? selectedLabelColor : Color.WHITE
+          entity.label.outlineColor = isSelected ? selectedOutlineColor : Color.BLACK
+          entity.label.outlineWidth = isSelected ? 5 : 3
+          entity.label.showBackground = isSelected
+          entity.label.backgroundColor = selectedLabelBackground
+          entity.label.pixelOffset = isSelected ? new Cartesian2(0, -34) : new Cartesian2(0, -30)
+        }
+      }
+
+      if (entityId.startsWith('sched_lock_')) {
+        const targetName = entityId.slice('sched_lock_'.length)
+        const isSelected = selectedTargetName === targetName
+        if (entity.label) {
+          entity.label.scale = isSelected ? 1.12 : 1
+          entity.label.fillColor = isSelected ? lockSelectedColor : lockDefaultColor
+        }
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusedAcquisitionId, focusedTargetCoords, focusedStartTime, focusedTargetId])
+
+    viewer.scene?.requestRender?.()
+  }, [selectedTargetName, scheduleItems, committedOrders])
 
   // Smart fallback: Only use OSM if Cesium Ion actually fails
   useEffect(() => {
@@ -1256,7 +1441,8 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
               entity.id?.includes('agility_envelope') ||
               entity.id?.includes('coverage') ||
               entity.id?.includes('ground_track') ||
-              entity.id?.includes('footprint')
+              entity.id?.includes('footprint') ||
+              entity.id?.startsWith('sched_lock_')
             ) {
               return
             }
@@ -1265,10 +1451,12 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
 
             // PR-UI-035: If a target entity is clicked on the map, open Inspector
             // via selectionStore. Does NOT open the Schedule panel (left sidebar).
-            if (entity.id?.startsWith('sched_target_') || entity.id?.startsWith('target_')) {
-              const targetName = entity.id.startsWith('sched_target_')
-                ? entity.id.slice('sched_target_'.length)
-                : entity.id.slice('target_'.length)
+            if (
+              entity.id?.startsWith('sched_target_') ||
+              entity.id?.startsWith('target_') ||
+              entity.id?.startsWith('preview_target_')
+            ) {
+              const targetName = resolveTargetNameFromEntity(entity)
               if (targetName) {
                 selectTargetInStore(targetName, 'map')
               }

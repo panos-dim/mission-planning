@@ -190,6 +190,46 @@ class TestSinglePriorityEviction:
 
 
 # =============================================================================
+# Scenario 1b: Same-target upgrade is reported as a move
+# =============================================================================
+
+
+class TestSameTargetUpgrade:
+    """
+    Existing: Target-A already scheduled on SAT-A at an earlier, lower-value slot.
+    Update:   A better opportunity for the same target appears later on the same satellite.
+    Expected: Repair keeps commit semantics (drop old + add new) but also reports
+              the change as a MOVE for the operator-facing diff.
+    """
+
+    def test_same_target_upgrade_emits_move_metadata(self) -> None:
+        flex = [
+            _flex("acq_a_old", "SAT-A", "Target-A", 0, value=0.30),
+        ]
+        opps = [
+            _opp("opp_a_better", "SAT-A", "Target-A", 12, value=0.95, priority=2),
+        ]
+
+        proposed, diff, _ = _run_repair(flex, opps)
+
+        assert "acq_a_old" in diff.dropped
+        assert "opp_a_better" in diff.added
+        assert len(diff.moved) == 1
+        moved = diff.moved[0]
+        assert moved.id == "acq_a_old"
+        assert moved.from_start != moved.to_start
+
+        change_log = diff.change_log
+        assert change_log["moved"], "Moved change_log entry should be populated"
+        assert change_log["dropped"][0]["replaced_by"] == ["opp_a_better"]
+        assert change_log["added"][0]["replaces"] == ["acq_a_old"]
+
+        proposed_targets = [(item["target_id"], item["action"]) for item in proposed]
+        assert proposed_targets == [("Target-A", "added")]
+        assert diff.change_score.num_changes == 1
+
+
+# =============================================================================
 # Scenario 2: Multiple priority changes at once — cascade eviction
 # =============================================================================
 

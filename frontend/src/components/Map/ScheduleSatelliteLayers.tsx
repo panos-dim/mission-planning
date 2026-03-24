@@ -14,8 +14,8 @@
  * timeline contents or the backend data.
  */
 
-import React, { useEffect, useRef, useState } from 'react'
-import { Satellite, Route, Crosshair, ChevronDown, ChevronUp, Shield } from 'lucide-react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { Satellite, Route, Crosshair, ChevronUp, Shield, Clock, MapPin } from 'lucide-react'
 import { type DataSource } from 'cesium'
 import { cn } from '../ui/utils'
 import { useScheduleStore } from '../../store/scheduleStore'
@@ -110,6 +110,27 @@ function SatRow({ satId, displayName, isFocused, isLocked }: SatRowProps) {
   )
 }
 
+function formatFocusStamp(iso: string | null): string {
+  if (!iso) return 'Time unavailable'
+  try {
+    const d = new Date(iso)
+    const date = d.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      timeZone: 'UTC',
+    })
+    const time = d.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      timeZone: 'UTC',
+    })
+    return `${date} · ${time} UTC`
+  } catch {
+    return iso
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
@@ -124,6 +145,8 @@ export function ScheduleSatelliteLayers({ loadedDataSource = null }: ScheduleSat
   const tStart = useScheduleStore((s) => s.tStart)
   const tEnd = useScheduleStore((s) => s.tEnd)
   const focusedSatelliteId = useScheduleStore((s) => s.focusedSatelliteId)
+  const focusedTargetId = useScheduleStore((s) => s.focusedTargetId)
+  const focusedStartTime = useScheduleStore((s) => s.focusedStartTime)
   const showSatellites = useScheduleStore((s) => s.schedLayerSatellites)
   const showGroundtracks = useScheduleStore((s) => s.schedLayerGroundtracks)
   const showHighlight = useScheduleStore((s) => s.schedLayerHighlight)
@@ -136,6 +159,15 @@ export function ScheduleSatelliteLayers({ loadedDataSource = null }: ScheduleSat
   const focusedIsLocked =
     focusedAcquisitionId != null ? getLockLevel(focusedAcquisitionId) === 'hard' : false
 
+  const focusedItem = useMemo(
+    () => items.find((item) => item.id === focusedAcquisitionId) ?? null,
+    [items, focusedAcquisitionId],
+  )
+  const focusedSatelliteLabel =
+    focusedItem?.satellite_display_name ?? focusedSatelliteId ?? 'Awaiting timeline selection'
+  const focusSubtitle = focusedTargetId
+    ? `${focusedTargetId} · ${formatFocusStamp(focusedStartTime)}`
+    : 'Select a timeline pass to sync the map view.'
   const [expanded, setExpanded] = useState(false)
   const wasScheduleViewRef = useRef(false)
 
@@ -192,28 +224,109 @@ export function ScheduleSatelliteLayers({ loadedDataSource = null }: ScheduleSat
       className={cn(
         'absolute bottom-24 right-2 z-30',
         'bg-gray-900/90 backdrop-blur-md border border-gray-700/60 rounded-lg',
-        'shadow-lg text-white w-44',
+        'shadow-lg text-white',
+        expanded ? 'w-56' : 'w-auto',
       )}
     >
       {/* Header */}
       <button
         onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center justify-between gap-1 px-3 py-2 text-xs font-semibold text-gray-200 hover:text-white transition-colors"
+        aria-expanded={expanded}
+        title={focusedTargetId ? `Map focus for ${focusedTargetId}` : 'Map focus'}
+        className={cn(
+          'flex w-full text-xs font-semibold text-gray-200 hover:text-white transition-colors',
+          expanded ? 'items-start justify-between gap-2 px-3 py-2' : 'items-center justify-center px-2 py-2',
+        )}
         aria-label="Toggle satellite layers panel"
       >
-        <span className="flex items-center gap-1.5">
-          <Satellite className="size-3.5 shrink-0" />
-          Satellite Layers
-        </span>
         {expanded ? (
-          <ChevronUp className="size-3.5 shrink-0 text-gray-500" />
+          <>
+            <span className="min-w-0 flex-1 text-left">
+              <span className="flex items-center gap-1.5">
+                <Satellite className="size-3.5 shrink-0" />
+                Map Focus
+              </span>
+
+              {focusedTargetId ? (
+                <span className="mt-1 block truncate text-[10px] font-medium text-gray-500">
+                  {focusSubtitle}
+                </span>
+              ) : (
+                <span className="mt-1 block text-[10px] font-medium text-gray-500">
+                  {focusSubtitle}
+                </span>
+              )}
+            </span>
+            <span className="mt-0.5 flex items-center gap-1.5 shrink-0">
+              {focusedTargetId && (
+                <span
+                  className={cn(
+                    'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium',
+                    focusedIsLocked
+                      ? 'border-red-700/40 bg-red-950/30 text-red-300'
+                      : 'border-blue-700/40 bg-blue-950/30 text-blue-300',
+                  )}
+                >
+                  {focusedIsLocked ? <Shield className="size-2.5" /> : <MapPin className="size-2.5" />}
+                  {focusedIsLocked ? 'Protected' : 'Aligned'}
+                </span>
+              )}
+              <ChevronUp className="size-3.5 text-gray-500" />
+            </span>
+          </>
         ) : (
-          <ChevronDown className="size-3.5 shrink-0 text-gray-500" />
+          <span className="relative inline-flex size-8 items-center justify-center rounded-full border border-gray-700/70 bg-gray-950/80 text-gray-200">
+            <Satellite className="size-3.5 shrink-0" />
+            {focusedTargetId && (
+              <span
+                className={cn(
+                  'absolute -right-0.5 -top-0.5 size-2 rounded-full ring-2 ring-gray-900',
+                  focusedIsLocked ? 'bg-red-400' : 'bg-blue-400',
+                )}
+              />
+            )}
+          </span>
         )}
       </button>
 
       {expanded && (
         <>
+          {focusedTargetId && (
+            <div className="border-t border-gray-700/50 px-3 py-2.5">
+              <div className="rounded-lg border border-gray-700/70 bg-gray-950/75 px-2.5 py-2 shadow-[0_10px_20px_rgba(0,0,0,0.22)]">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-500">
+                  Focus
+                </div>
+                <div className="mt-1.5 flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-white">{focusedTargetId}</div>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-400">
+                      <span>
+                        <Satellite className="mr-1 inline size-3 -mt-px" />
+                        {focusedSatelliteLabel}
+                      </span>
+                      <span>
+                        <Clock className="mr-1 inline size-3 -mt-px" />
+                        {formatFocusStamp(focusedStartTime)}
+                      </span>
+                    </div>
+                  </div>
+                  <span
+                    className={cn(
+                      'inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium',
+                      focusedIsLocked
+                        ? 'border-red-700/40 bg-red-950/30 text-red-300'
+                        : 'border-blue-700/40 bg-blue-950/30 text-blue-300',
+                    )}
+                  >
+                    {focusedIsLocked ? <Shield className="size-2.5" /> : <Crosshair className="size-2.5" />}
+                    {focusedIsLocked ? 'Protected on repair' : 'Aligned on map'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="border-t border-gray-700/50 px-3 py-2 space-y-2.5">
             <ToggleRow
               icon={<Satellite className="size-3.5" />}
@@ -239,7 +352,7 @@ export function ScheduleSatelliteLayers({ loadedDataSource = null }: ScheduleSat
           {satList.length > 0 && (
             <div className="border-t border-gray-700/50 px-2 py-2">
               <p className="px-1 pb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">
-                In window ({satList.length})
+                Satellites in window ({satList.length})
               </p>
               <div className="space-y-0.5 max-h-32 overflow-y-auto">
                 {satList.map(([satId, displayName]) => (

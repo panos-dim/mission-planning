@@ -186,6 +186,7 @@ const SelectionIndicator: React.FC<SelectionIndicatorProps> = ({ viewerRef }) =>
   return (
     <div
       ref={containerRef}
+      data-selection-indicator=""
       className="pointer-events-none"
       style={{
         position: 'absolute',

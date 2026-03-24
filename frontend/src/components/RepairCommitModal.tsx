@@ -19,6 +19,7 @@ import type {
   RepairPlanResponse,
 } from '../api/scheduleApi'
 import type { TargetData } from '../types'
+import { getRepairDisplayCounts, normalizeRepairDiffForDisplay } from '../utils/repairDisplay'
 
 // =============================================================================
 // Risk Rules (PR-COMMIT-PREVIEW-01)
@@ -207,22 +208,24 @@ export default function RepairCommitModal({
   const [showDropReasons, setShowDropReasons] = useState(false)
 
   const { repair_diff, metrics_comparison, commit_preview, conflicts_if_committed } = repairResult
+  const displayRepairDiff = useMemo(() => normalizeRepairDiffForDisplay(repair_diff), [repair_diff])
+  const displayCounts = useMemo(() => getRepairDisplayCounts(displayRepairDiff), [displayRepairDiff])
 
   const risk = useMemo(
     () =>
       computeRiskAssessment(
-        repair_diff,
+        displayRepairDiff,
         metrics_comparison,
         commit_preview,
         conflicts_if_committed,
         targets,
       ),
-    [repair_diff, metrics_comparison, commit_preview, conflicts_if_committed, targets],
+    [displayRepairDiff, metrics_comparison, commit_preview, conflicts_if_committed, targets],
   )
 
   const priorityImpact = useMemo(
-    () => computePriorityImpact(repair_diff, targets),
-    [repair_diff, targets],
+    () => computePriorityImpact(displayRepairDiff, targets),
+    [displayRepairDiff, targets],
   )
 
   if (!isOpen) return null
@@ -273,26 +276,26 @@ export default function RepairCommitModal({
             <div className="bg-gray-800 rounded-lg p-2.5 text-center">
               <div className="text-xl font-bold text-blue-400 flex items-center justify-center gap-1">
                 <Plus className="w-3.5 h-3.5" />
-                {repair_diff.added.length}
+                {displayCounts.added}
               </div>
               <div className="text-[10px] text-gray-400 mt-0.5">Added</div>
             </div>
             <div className="bg-gray-800 rounded-lg p-2.5 text-center">
               <div className="text-xl font-bold text-red-400 flex items-center justify-center gap-1">
                 <Minus className="w-3.5 h-3.5" />
-                {repair_diff.dropped.length}
+                {displayCounts.dropped}
               </div>
               <div className="text-[10px] text-gray-400 mt-0.5">Dropped</div>
             </div>
             <div className="bg-gray-800 rounded-lg p-2.5 text-center">
               <div className="text-xl font-bold text-yellow-400 flex items-center justify-center gap-1">
                 <Move className="w-3.5 h-3.5" />
-                {repair_diff.moved.length}
+                {displayCounts.moved}
               </div>
               <div className="text-[10px] text-gray-400 mt-0.5">Moved</div>
             </div>
             <div className="bg-gray-800 rounded-lg p-2.5 text-center">
-              <div className="text-xl font-bold text-green-400">{repair_diff.kept.length}</div>
+              <div className="text-xl font-bold text-green-400">{displayCounts.kept}</div>
               <div className="text-[10px] text-gray-400 mt-0.5">Kept</div>
             </div>
           </div>
@@ -425,7 +428,7 @@ export default function RepairCommitModal({
           )}
 
           {/* Dropped Details (expandable) */}
-          {repair_diff.dropped.length > 0 && (
+          {displayRepairDiff.dropped.length > 0 && (
             <div>
               <button
                 onClick={() => setShowDropReasons(!showDropReasons)}
@@ -434,10 +437,10 @@ export default function RepairCommitModal({
                 <Info className="w-3 h-3" />
                 {showDropReasons ? 'Hide' : 'Show'} drop reasons
               </button>
-              {showDropReasons && repair_diff.reason_summary?.dropped && (
+              {showDropReasons && displayRepairDiff.reason_summary?.dropped && (
                 <div className="mt-2 bg-gray-800 rounded-lg p-3 max-h-32 overflow-y-auto">
                   <div className="space-y-1">
-                    {repair_diff.reason_summary.dropped.map((item, idx) => (
+                    {displayRepairDiff.reason_summary.dropped.map((item, idx) => (
                       <div key={idx} className="text-xs">
                         <span className="text-gray-500 font-mono">{item.id.slice(0, 12)}</span>
                         <span className="text-gray-400 ml-2">{item.reason}</span>

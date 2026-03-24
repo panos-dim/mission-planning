@@ -3185,6 +3185,32 @@ class TestConflictResolution:
                     post_by_id[existing["id"]].get("state") != "failed"
                 ), "Hard-locked acq should not be marked as failed"
                 print(f"Dropped acqs marked failed, hard-lock preserved ✓")
+
+                # Horizon default should exclude failed acquisitions from both
+                # the returned list and the statistics summary.
+                active_horizon = _get("/schedule/horizon", {"workspace_id": ws})
+                active_acqs = active_horizon.get("acquisitions", [])
+                active_stats = active_horizon.get("statistics", {})
+                active_failed = active_stats.get("by_state", {}).get("failed", 0)
+                assert active_failed == 0, (
+                    "Default horizon stats should exclude failed acquisitions, "
+                    f"got by_state.failed={active_failed}"
+                )
+                assert active_stats.get("total_acquisitions") == len(active_acqs), (
+                    "Default horizon total_acquisitions should match the active "
+                    f"acquisitions list length, got "
+                    f"{active_stats.get('total_acquisitions')} vs {len(active_acqs)}"
+                )
+
+                # The history view should still surface failed acquisitions.
+                history_horizon = _get(
+                    "/schedule/horizon",
+                    {"workspace_id": ws, "include_failed": True},
+                )
+                history_stats = history_horizon.get("statistics", {})
+                assert history_stats.get("by_state", {}).get("failed", 0) >= len(drops), (
+                    "include_failed=true should report failed acquisitions in stats"
+                )
             else:
                 print(f"No drops to commit (repair found no conflicts to resolve)")
         finally:

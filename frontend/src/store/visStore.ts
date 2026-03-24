@@ -92,6 +92,9 @@ interface VisStore {
   setCameraPosition: (position: CameraState | null) => void
 
   // Imperative panel open signal — consumed once by RightSidebar
+  requestedLeftPanel: string | null
+  openLeftPanel: (panelId: string) => void
+  clearRequestedLeftPanel: () => void
   requestedRightPanel: string | null
   openRightPanel: (panelId: string) => void
   clearRequestedRightPanel: () => void
@@ -148,6 +151,7 @@ export const useVisStore = create<VisStore>()(
       },
       cameraPosition: null,
 
+      requestedLeftPanel: null,
       requestedRightPanel: null,
 
       // Actions
@@ -205,6 +209,8 @@ export const useVisStore = create<VisStore>()(
 
       setCameraPosition: (position: CameraState | null) => set({ cameraPosition: position }),
 
+      openLeftPanel: (panelId) => set({ requestedLeftPanel: panelId }),
+      clearRequestedLeftPanel: () => set({ requestedLeftPanel: null }),
       openRightPanel: (panelId) => set({ requestedRightPanel: panelId }),
       clearRequestedRightPanel: () => set({ requestedRightPanel: null }),
 

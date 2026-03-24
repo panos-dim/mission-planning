@@ -5,13 +5,14 @@ import type { Workspace, SceneObject, MissionData, CZMLPacket } from "../types";
 interface WorkspaceState {
   workspaces: Workspace[];
   activeWorkspace: string | null;
+  activeWorkspaceName: string | null;
 }
 
 interface WorkspaceActions {
   saveWorkspace: (workspace: Workspace) => void;
   loadWorkspace: (id: string) => Workspace | undefined;
   deleteWorkspace: (id: string) => void;
-  setActiveWorkspace: (id: string | null) => void;
+  setActiveWorkspace: (id: string | null, name?: string | null) => void;
   createWorkspace: (
     name: string,
     sceneObjects: SceneObject[],
@@ -29,6 +30,7 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
         // State
         workspaces: [],
         activeWorkspace: null,
+        activeWorkspaceName: null,
 
         // Actions
         saveWorkspace: (workspace) =>
@@ -46,6 +48,7 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
               return {
                 workspaces: updatedWorkspaces,
                 activeWorkspace: workspace.id,
+                activeWorkspaceName: workspace.name,
               };
             },
             false,
@@ -55,7 +58,14 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
         loadWorkspace: (id) => {
           const workspace = get().workspaces.find((w) => w.id === id);
           if (workspace) {
-            set({ activeWorkspace: workspace.id }, false, "loadWorkspace");
+            set(
+              {
+                activeWorkspace: workspace.id,
+                activeWorkspaceName: workspace.name,
+              },
+              false,
+              "loadWorkspace"
+            );
           }
           return workspace;
         },
@@ -66,13 +76,19 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
               workspaces: state.workspaces.filter((w) => w.id !== id),
               activeWorkspace:
                 state.activeWorkspace === id ? null : state.activeWorkspace,
+              activeWorkspaceName:
+                state.activeWorkspace === id ? null : state.activeWorkspaceName,
             }),
             false,
             "deleteWorkspace"
           ),
 
-        setActiveWorkspace: (id) =>
-          set({ activeWorkspace: id }, false, "setActiveWorkspace"),
+        setActiveWorkspace: (id, name = null) =>
+          set(
+            { activeWorkspace: id, activeWorkspaceName: id ? name : null },
+            false,
+            "setActiveWorkspace"
+          ),
 
         createWorkspace: (name, sceneObjects, missionData, czmlData) => {
           const workspace: Workspace = {
@@ -89,6 +105,33 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
       }),
       {
         name: "mission_workspaces",
+        version: 1,
+        migrate: (persistedState) => {
+          const state = persistedState as Partial<WorkspaceStore> | undefined
+
+          return {
+            workspaces: Array.isArray(state?.workspaces) ? state.workspaces : [],
+            activeWorkspace: null,
+            activeWorkspaceName: null,
+          }
+        },
+        // Keep the legacy local workspace list, but never silently restore the
+        // previously active workspace on page refresh. Users should explicitly
+        // load/select a workspace after reload.
+        partialize: (state) => ({
+          workspaces: state.workspaces,
+        }),
+        merge: (persistedState, currentState) => ({
+          ...currentState,
+          ...(persistedState as Partial<WorkspaceStore>),
+          activeWorkspace: null,
+          activeWorkspaceName: null,
+        }),
+        onRehydrateStorage: () => (state) => {
+          // Persist the new shape back to storage so older blobs that still
+          // contain activeWorkspace do not linger after refresh.
+          state?.setActiveWorkspace(null)
+        },
       }
     ),
     {
