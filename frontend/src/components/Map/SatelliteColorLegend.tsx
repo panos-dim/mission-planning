@@ -11,7 +11,8 @@ import React, { useState, useMemo } from 'react'
 import { ChevronDown, ChevronRight, Satellite } from 'lucide-react'
 import { useMission } from '../../context/MissionContext'
 import {
-  getRegisteredSatelliteColors,
+  getSatCssColor,
+  registerSatellites,
   satIdToDisplayName,
 } from '../../utils/satelliteColors'
 
@@ -21,10 +22,28 @@ const SatelliteColorLegend: React.FC = () => {
 
   // Re-derive entries whenever CZML data changes (triggers re-render)
   const entries = useMemo(() => {
-    // Access state.czmlData to set up the dependency — the registry is populated
-    // when CZML loads in GlobeViewport, so this memo recomputes after that.
     if (!state.czmlData || state.czmlData.length === 0) return []
-    return getRegisteredSatelliteColors()
+
+    const satIds = Array.from(
+      new Set(
+        state.czmlData
+          .map((packet) => packet?.id)
+          .filter(
+            (id): id is string =>
+              typeof id === 'string' && id.startsWith('sat_') && !id.includes('ground_track'),
+          ),
+      ),
+    )
+
+    if (satIds.length === 0) return []
+
+    // Keep the legend order aligned with the backend/CZML packet order.
+    registerSatellites(satIds)
+
+    return satIds.map((satId) => ({
+      satId,
+      cssColor: getSatCssColor(satId),
+    }))
   }, [state.czmlData])
 
   // Don't render if no satellites are registered

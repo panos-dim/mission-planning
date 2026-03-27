@@ -15,7 +15,7 @@ import {
 import type { CommitPreview, ConflictInfo } from './ConflictWarningModal'
 import type { AddedEntry, DroppedEntry, MovedEntry, RepairDiff } from '../api/scheduleApi'
 import { cn } from './ui/utils'
-import { getRepairDisplayCounts, normalizeRepairDiffForDisplay } from '../utils/repairDisplay'
+import { normalizeRepairDiffForDisplay } from '../utils/repairDisplay'
 
 interface TargetStatistics {
   total_targets: number
@@ -155,33 +155,32 @@ export default function ApplyConfirmationPanel({
   const totalScheduled = scheduleData?.schedule.length ?? preview.new_items_count
   const summaryStats = scheduleData?.summaryStats
   const isRepairMode = !!rd
-  const displayCounts = rd ? getRepairDisplayCounts(rd) : null
   const assignmentRows: AssignmentRow[] = useMemo(
     () =>
       isRepairMode
         ? [
-        ...((rd?.change_log?.added ?? []).map((entry: AddedEntry) => ({
-          kind: 'added' as const,
-          key: `added-${entry.acquisition_id}`,
-          targetId: entry.target_id,
-          satelliteId: entry.satellite_id,
-          primaryTime: entry.start,
-        })) satisfies AssignmentRow[]),
-        ...((rd?.change_log?.moved ?? []).map((entry: MovedEntry) => ({
-          kind: 'moved' as const,
-          key: `moved-${entry.acquisition_id}`,
-          targetId: entry.target_id,
-          satelliteId: entry.satellite_id,
-          primaryTime: entry.from_start,
-          secondaryTime: entry.to_start,
-        })) satisfies AssignmentRow[]),
-        ...((rd?.change_log?.dropped ?? []).map((entry: DroppedEntry) => ({
-          kind: 'removed' as const,
-          key: `removed-${entry.acquisition_id}`,
-          targetId: entry.target_id,
-          satelliteId: entry.satellite_id,
-          primaryTime: entry.start,
-        })) satisfies AssignmentRow[]),
+            ...((rd?.change_log?.added ?? []).map((entry: AddedEntry) => ({
+              kind: 'added' as const,
+              key: `added-${entry.acquisition_id}`,
+              targetId: entry.target_id,
+              satelliteId: entry.satellite_id,
+              primaryTime: entry.start,
+            })) satisfies AssignmentRow[]),
+            ...((rd?.change_log?.moved ?? []).map((entry: MovedEntry) => ({
+              kind: 'moved' as const,
+              key: `moved-${entry.acquisition_id}`,
+              targetId: entry.target_id,
+              satelliteId: entry.satellite_id,
+              primaryTime: entry.from_start,
+              secondaryTime: entry.to_start,
+            })) satisfies AssignmentRow[]),
+            ...((rd?.change_log?.dropped ?? []).map((entry: DroppedEntry) => ({
+              kind: 'removed' as const,
+              key: `removed-${entry.acquisition_id}`,
+              targetId: entry.target_id,
+              satelliteId: entry.satellite_id,
+              primaryTime: entry.start,
+            })) satisfies AssignmentRow[]),
           ]
         : (ps?.target_acquisitions ?? []).map((acq, idx) => ({
             kind: 'added' as const,
@@ -221,15 +220,6 @@ export default function ApplyConfirmationPanel({
         : sortedAssignmentRows.filter((row) => row.kind === activeFilter),
     [activeFilter, sortedAssignmentRows],
   )
-  const coverageLabel = ts
-    ? `${ts.targets_acquired}/${ts.total_targets} (${ts.coverage_percentage.toFixed(0)}%)`
-    : '—'
-  const snapshotTone = hasErrors ? 'text-red-300' : hasWarnings ? 'text-yellow-300' : 'text-emerald-300'
-  const snapshotCopy = hasErrors
-    ? 'Requires operator acknowledgement before apply.'
-    : hasWarnings
-      ? 'Review the proposed changes before applying.'
-      : 'Ready for commit with no detected conflicts.'
 
   return (
     <div className="flex flex-col h-full">
@@ -267,82 +257,6 @@ export default function ApplyConfirmationPanel({
 
       {/* Scrollable Content */}
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
-        <div className="sticky top-0 z-10 -mx-4 px-4 pb-3 bg-gray-950/85 backdrop-blur-sm border-b border-gray-800/70">
-          <div className="rounded-xl border border-gray-800/80 bg-gradient-to-br from-gray-900 via-gray-900 to-gray-950 shadow-[0_16px_32px_rgba(0,0,0,0.22)]">
-            <div className="flex items-start justify-between gap-3 px-3.5 py-3 border-b border-gray-800/70">
-              <div className="min-w-0">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-gray-500">
-                  Operations Snapshot
-                </div>
-                <div className={cn('mt-1 text-sm font-semibold', snapshotTone)}>
-                  {snapshotCopy}
-                </div>
-              </div>
-              <div className="rounded-full border border-gray-700/70 bg-gray-900/80 px-2.5 py-1 text-[10px] font-medium text-gray-300">
-                {isRepairMode ? 'Repair Review' : 'Fresh Schedule'}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 px-3.5 py-3">
-              <SnapshotMetric
-                label="Acquisitions"
-                value={summaryStats?.acquisitions ?? totalScheduled}
-                tone="text-white"
-              />
-              <SnapshotMetric
-                label="Coverage"
-                value={coverageLabel}
-                tone={ts?.coverage_percentage === 100 ? 'text-emerald-300' : 'text-gray-100'}
-              />
-              <SnapshotMetric
-                label="Targets"
-                value={summaryStats?.targets ?? ts?.targets_acquired ?? '—'}
-                tone="text-gray-100"
-              />
-              <SnapshotMetric
-                label="Conflicts"
-                value={preview.conflicts_count}
-                tone={hasConflicts ? 'text-red-300' : 'text-emerald-300'}
-              />
-            </div>
-
-            {(rd && (displayCounts?.totalChanges ?? rd.change_score.num_changes) > 0) || (!rd && totalScheduled > 0) ? (
-              <div className="flex flex-wrap items-center gap-1.5 border-t border-gray-800/70 px-3.5 py-3">
-                {rd && (displayCounts?.kept ?? rd.kept.length) > 0 && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-700/50 text-[11px] text-gray-400 border border-gray-600/30">
-                    <Shield className="w-3 h-3" />
-                    {displayCounts?.kept ?? rd.kept.length} kept
-                  </span>
-                )}
-                {rd && (displayCounts?.added ?? rd.added.length) > 0 && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-900/30 text-[11px] text-blue-300 border border-blue-700/30">
-                    <Plus className="w-3 h-3" />
-                    {displayCounts?.added ?? rd.added.length} added
-                  </span>
-                )}
-                {rd && (displayCounts?.dropped ?? rd.dropped.length) > 0 && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-900/25 text-[11px] text-red-300 border border-red-700/30">
-                    <Minus className="w-3 h-3" />
-                    {displayCounts?.dropped ?? rd.dropped.length} dropped
-                  </span>
-                )}
-                {rd && (displayCounts?.moved ?? rd.moved.length) > 0 && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-900/25 text-[11px] text-orange-300 border border-orange-700/30">
-                    <Clock className="w-3 h-3" />
-                    {displayCounts?.moved ?? rd.moved.length} moved
-                  </span>
-                )}
-                {!rd && totalScheduled > 0 && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-900/30 text-[11px] text-blue-300 border border-blue-700/30">
-                    <Plus className="w-3 h-3" />
-                    {totalScheduled} new
-                  </span>
-                )}
-              </div>
-            ) : null}
-          </div>
-        </div>
-
         {/* ── Stats Row ── */}
         <div className="grid grid-cols-3 gap-2">
           <div className="bg-gray-800/60 rounded-lg p-2.5 text-center border border-gray-700/40">
@@ -705,25 +619,6 @@ function ConflictItem({ conflict }: { conflict: ConflictInfo }): JSX.Element {
           )}
         </div>
       )}
-    </div>
-  )
-}
-
-function SnapshotMetric({
-  label,
-  value,
-  tone,
-}: {
-  label: string
-  value: string | number
-  tone: string
-}): JSX.Element {
-  return (
-    <div className="rounded-lg border border-gray-800/70 bg-gray-950/55 px-3 py-2.5">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-500">
-        {label}
-      </div>
-      <div className={cn('mt-1 text-base font-semibold leading-tight', tone)}>{value}</div>
     </div>
   )
 }

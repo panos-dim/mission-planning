@@ -111,27 +111,23 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
 
           return {
             workspaces: Array.isArray(state?.workspaces) ? state.workspaces : [],
-            activeWorkspace: null,
-            activeWorkspaceName: null,
+            activeWorkspace:
+              typeof state?.activeWorkspace === "string" ? state.activeWorkspace : null,
+            activeWorkspaceName:
+              typeof state?.activeWorkspaceName === "string"
+                ? state.activeWorkspaceName
+                : null,
           }
         },
-        // Keep the legacy local workspace list, but never silently restore the
-        // previously active workspace on page refresh. Users should explicitly
-        // load/select a workspace after reload.
         partialize: (state) => ({
           workspaces: state.workspaces,
+          activeWorkspace: state.activeWorkspace,
+          activeWorkspaceName: state.activeWorkspaceName,
         }),
         merge: (persistedState, currentState) => ({
           ...currentState,
           ...(persistedState as Partial<WorkspaceStore>),
-          activeWorkspace: null,
-          activeWorkspaceName: null,
         }),
-        onRehydrateStorage: () => (state) => {
-          // Persist the new shape back to storage so older blobs that still
-          // contain activeWorkspace do not linger after refresh.
-          state?.setActiveWorkspace(null)
-        },
       }
     ),
     {

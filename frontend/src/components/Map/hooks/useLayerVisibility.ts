@@ -39,18 +39,18 @@ export function useLayerVisibility(
         return
       }
       
-      // Satellite entity
-      if (entity.id?.startsWith('sat_')) {
-        entity.show = true // Always show satellite point
-        return
-      }
-      
       // Ground track
-      if (entity.id === 'satellite_ground_track') {
+      if (entity.id?.includes('ground_track')) {
         entity.show = true
         if (entity.path) {
           entity.path.show = new ConstantProperty(activeLayers.orbitLine)
         }
+        return
+      }
+
+      // Satellite entity
+      if (entity.id?.startsWith('sat_')) {
+        entity.show = true // Always show satellite point
         return
       }
       

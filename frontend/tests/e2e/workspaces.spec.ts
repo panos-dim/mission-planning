@@ -39,8 +39,8 @@ async function createWorkspace(request: APIRequestContext, name: string) {
     data: { name },
   })
   expect(response.ok()).toBeTruthy()
-  const body = (await response.json()) as { workspaceId: string }
-  return body.workspaceId
+  const body = (await response.json()) as { workspaceId?: string; workspace_id?: string }
+  return body.workspaceId ?? body.workspace_id ?? ''
 }
 
 async function deleteWorkspace(request: APIRequestContext, workspaceId: string) {
@@ -116,7 +116,7 @@ test.describe('Workspaces tab', () => {
     expect(remaining.some((workspace) => workspace.name === workspaceName)).toBeFalsy()
   })
 
-  test('loads an existing workspace and clears the active selection after reload', async ({
+  test('loads an existing workspace and preserves the active selection after reload', async ({
     page,
     request,
   }) => {
@@ -140,19 +140,23 @@ test.describe('Workspaces tab', () => {
       await expect(page.getByText('Active Workspace')).toBeVisible()
 
       await page.reload({ waitUntil: 'networkidle' })
-      await expect(headerWorkspaceBadge).toContainText('Default Workspace')
+      await expect(headerWorkspaceBadge).toContainText(workspaceName)
 
       await page.getByLabel('Workspaces').click()
-      await expect(page.getByText('Using the default unsaved workspace')).toBeVisible()
-      const reloadedCard = page
-        .locator('div.rounded-lg')
-        .filter({ has: page.getByText(workspaceName, { exact: true }) })
+      const activeSummary = page
+        .locator('div')
+        .filter({
+          has: page.getByText('Active Workspace'),
+          hasText: 'Loaded from saved workspaces',
+        })
         .first()
-      await expect(reloadedCard.getByText('Active', { exact: true })).toHaveCount(0)
+      await expect(activeSummary).toBeVisible()
+      await expect(activeSummary).toContainText(workspaceName)
+      await expect(activeSummary).toContainText('Loaded from saved workspaces')
 
       const persisted = await page.evaluate(() => localStorage.getItem('mission_workspaces'))
       expect(persisted).toContain('"version":1')
-      expect(persisted).not.toContain('activeWorkspace')
+      expect(persisted).toContain(`"activeWorkspace":"${workspaceId}"`)
     } finally {
       await deleteWorkspace(request, workspaceId)
     }

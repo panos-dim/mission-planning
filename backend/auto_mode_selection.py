@@ -54,6 +54,7 @@ class ModeSelectionResult:
     workspace_id: str
     existing_acquisition_count: int = 0
     new_target_count: int = 0
+    removed_scheduled_target_count: int = 0
     conflict_count: int = 0
     previous_plan_count: int = 0
     request_payload_hash: str = ""
@@ -69,6 +70,7 @@ class ModeSelectionResult:
             "workspace_id": self.workspace_id,
             "existing_acquisition_count": self.existing_acquisition_count,
             "new_target_count": self.new_target_count,
+            "removed_scheduled_target_count": self.removed_scheduled_target_count,
             "conflict_count": self.conflict_count,
             "previous_plan_count": self.previous_plan_count,
             "request_payload_hash": self.request_payload_hash,
@@ -92,6 +94,7 @@ def select_planning_mode(
     existing_acquisition_count: int,
     existing_target_ids: Optional[Set[str]],
     current_target_ids: Optional[Set[str]],
+    scheduled_target_ids: Optional[Set[str]] = None,
     target_priorities: Optional[Dict[str, int]] = None,
     weight_priority: float = 40.0,
     weight_geometry: float = 40.0,
@@ -107,8 +110,9 @@ def select_planning_mode(
     Args:
         workspace_id: Active workspace ID
         existing_acquisition_count: Number of acquisitions already in schedule
-        existing_target_ids: Target IDs covered by existing acquisitions
+        existing_target_ids: Target IDs from the previous planned workspace scope
         current_target_ids: Target IDs in current planning request
+        scheduled_target_ids: Target IDs backed by live scheduled acquisitions
         conflict_count: Number of detected conflicts in existing schedule
         previous_plan_count: Number of committed plans for this workspace
         request_payload_hash: Hash of request payload for audit
@@ -119,7 +123,9 @@ def select_planning_mode(
     """
     existing_targets = existing_target_ids or set()
     current_targets = current_target_ids or set()
+    scheduled_targets = scheduled_target_ids or set()
     new_targets = current_targets - existing_targets
+    removed_scheduled_targets = scheduled_targets - current_targets
     priorities = target_priorities or {}
 
     result = ModeSelectionResult(
@@ -128,6 +134,7 @@ def select_planning_mode(
         workspace_id=workspace_id,
         existing_acquisition_count=existing_acquisition_count,
         new_target_count=len(new_targets),
+        removed_scheduled_target_count=len(removed_scheduled_targets),
         conflict_count=conflict_count,
         previous_plan_count=previous_plan_count,
         request_payload_hash=request_payload_hash,
@@ -148,6 +155,16 @@ def select_planning_mode(
         result.reason = (
             "No existing schedule found for workspace. "
             "Building new optimized schedule from all opportunities."
+        )
+        _log_mode_selection(result)
+        return result
+
+    if removed_scheduled_targets:
+        result.mode = "repair"
+        result.reason = (
+            f"{len(removed_scheduled_targets)} scheduled target(s) are no longer in scope "
+            f"({', '.join(sorted(removed_scheduled_targets)[:5])}). "
+            f"Repairing the current schedule so removed work can be dropped safely."
         )
         _log_mode_selection(result)
         return result
@@ -238,6 +255,7 @@ def _log_mode_selection(result: ModeSelectionResult) -> None:
         f"workspace={result.workspace_id} | "
         f"existing_acq={result.existing_acquisition_count} | "
         f"new_targets={result.new_target_count} | "
+        f"removed_scheduled={result.removed_scheduled_target_count} | "
         f"conflicts={result.conflict_count} | "
         f"reason={result.reason}"
     )

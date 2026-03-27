@@ -554,7 +554,7 @@ async function runPlanningViaUi(
 
 async function openScheduleTimeline(page: Page, testInfo?: TestInfo) {
   console.log('[live-ui] open schedule timeline')
-  await page.getByLabel('Schedule').click()
+  await page.getByRole('button', { name: 'Schedule', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Schedule', exact: true }).first()).toBeVisible()
   const schedulePanel = page
     .locator('div.h-full.flex.flex-col')
@@ -893,6 +893,147 @@ test.describe('Live operator drill', () => {
       ),
     )
     await testInfo.attach('live-repair-add-remove-summary', {
+      path: summaryPath,
+      contentType: 'application/json',
+    })
+  })
+
+  test('preserves the loaded workspace across refresh and still finds live repair conflicts', async ({
+    page,
+    request,
+  }, testInfo) => {
+    test.setTimeout(10 * 60 * 1000)
+
+    const workspaceName = `live_refresh_repair_${Date.now()}`
+    const workspaceId = await createWorkspace(request, workspaceName)
+    const customSatellite = await getCustomSatellite(request)
+    const baseTargets = generateFallbackTargetPool(50)
+
+    await analyzeWorkspace(request, workspaceId, customSatellite, baseTargets, {
+      startOffsetMs: 6 * 60 * 60 * 1000,
+    })
+    const baselinePlan = await apiPost<{
+      results: {
+        roll_pitch_best_fit: {
+          schedule: DirectScheduleItem[]
+        }
+      }
+    }>(request, '/api/v1/planning/schedule', {
+      workspace_id: workspaceId,
+      algorithms: ['roll_pitch_best_fit'],
+      mode: 'from_scratch',
+      weight_priority: 40,
+      weight_geometry: 40,
+      weight_timing: 20,
+    })
+    const baselineSchedule = baselinePlan.results.roll_pitch_best_fit.schedule
+    expect(baselineSchedule.length).toBeGreaterThan(0)
+    await apiPost(request, '/api/v1/schedule/commit/direct', {
+      workspace_id: workspaceId,
+      items: toCommitItems(baselineSchedule),
+      algorithm: 'roll_pitch_best_fit',
+      force: true,
+    })
+
+    const removedTargetId = baselineSchedule[0]?.target_id
+    expect(removedTargetId).toBeTruthy()
+    const repairTargets = [
+      ...baseTargets.filter((target) => target.name !== removedTargetId),
+      ...customPriorityTargets,
+    ]
+
+    await analyzeWorkspace(request, workspaceId, customSatellite, repairTargets, {
+      startOffsetMs: 6 * 60 * 60 * 1000,
+    })
+
+    await loadWorkspaceInUi(page, workspaceName)
+    const headerWorkspaceBadge = page.locator('div[title^="Selected workspace:"]')
+    await expect(headerWorkspaceBadge).toContainText(workspaceName)
+
+    await page.reload({ waitUntil: 'networkidle' })
+    await expect(headerWorkspaceBadge).toContainText(workspaceName)
+
+    await page.getByLabel('Workspaces').click()
+    const activeSummary = page
+      .locator('div')
+      .filter({
+        has: page.getByText('Active Workspace'),
+        hasText: 'Loaded from saved workspaces',
+      })
+      .first()
+    await expect(activeSummary).toBeVisible()
+    await expect(activeSummary).toContainText(workspaceName)
+
+    await page.getByRole('button', { name: 'Planning', exact: true }).click()
+    const generateButton = page.getByRole('button', { name: /Generate Mission Plan/i })
+    await expect(generateButton).toBeVisible({ timeout: 60_000 })
+
+    const modePromise = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        response.url().includes('/api/v1/schedule/mode-selection'),
+    )
+    const repairPromise = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' && response.url().includes('/api/v1/schedule/repair'),
+    )
+
+    await generateButton.click()
+
+    const modeResponse = await modePromise
+    const repairResponse = await repairPromise
+    expect(modeResponse.ok()).toBeTruthy()
+    expect(repairResponse.ok()).toBeTruthy()
+
+    const modeSelection = (await modeResponse.json()) as PlanningModeSelection
+    const repairPlan = (await repairResponse.json()) as RepairPlanResponse
+    const repairChangeCount =
+      repairPlan.repair_diff.added.length +
+      repairPlan.repair_diff.dropped.length +
+      repairPlan.repair_diff.moved.length
+
+    expect(modeSelection.planning_mode).toBe('repair')
+    expect(repairChangeCount).toBeGreaterThan(0)
+
+    await expect(page.getByRole('button', { name: /^Next$/i })).toBeVisible({ timeout: 60_000 })
+    await page.getByRole('button', { name: /^Next$/i }).click()
+    await page.waitForTimeout(1500)
+
+    const applyHeading = page
+      .getByRole('heading', { level: 3 })
+      .filter({ hasText: /Ready to Apply|Review Changes|Conflicts Detected/ })
+      .first()
+    await expect(applyHeading).toBeVisible()
+    const badgeCount =
+      (await page.getByText('NEW', { exact: true }).count()) +
+      (await page.getByText('REMOVED', { exact: true }).count()) +
+      (await page.getByText('MOVED', { exact: true }).count())
+    expect(badgeCount).toBeGreaterThan(0)
+
+    const screenshotPath = testInfo.outputPath('live-refresh-repair-page2.png')
+    await page.screenshot({ path: screenshotPath, fullPage: true })
+    await testInfo.attach('live-refresh-repair-page2', {
+      path: screenshotPath,
+      contentType: 'image/png',
+    })
+
+    const persistedWorkspaces = await page.evaluate(() => localStorage.getItem('mission_workspaces'))
+    const summaryPath = testInfo.outputPath('live-refresh-repair-summary.json')
+    writeFileSync(
+      summaryPath,
+      JSON.stringify(
+        {
+          workspace_id: workspaceId,
+          workspace_name: workspaceName,
+          mode_selection: modeSelection,
+          repair_diff: repairPlan.repair_diff,
+          persisted_workspaces: persistedWorkspaces,
+        },
+        null,
+        2,
+      ),
+    )
+    await testInfo.attach('live-refresh-repair-summary', {
       path: summaryPath,
       contentType: 'application/json',
     })

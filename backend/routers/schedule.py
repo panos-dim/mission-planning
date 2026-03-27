@@ -487,9 +487,10 @@ def _resolve_auto_mode_selection(
     current_target_ids = _build_current_target_ids(mission_data, raw_opportunities)
     target_priorities = _build_target_priorities(mission_data)
     previous_target_ids = _load_workspace_target_baseline(workspace_id)
-    existing_target_ids = previous_target_ids or {
-        acquisition.target_id for acquisition in active_existing
+    scheduled_target_ids = {
+        acquisition.target_id for acquisition in active_existing if acquisition.target_id
     }
+    existing_target_ids = previous_target_ids or scheduled_target_ids
 
     conflict_count = 0
     if active_existing:
@@ -513,6 +514,7 @@ def _resolve_auto_mode_selection(
         existing_acquisition_count=len(active_existing),
         existing_target_ids=existing_target_ids,
         current_target_ids=current_target_ids,
+        scheduled_target_ids=scheduled_target_ids,
         target_priorities=target_priorities,
         weight_priority=weight_priority,
         weight_geometry=weight_geometry,
@@ -530,6 +532,7 @@ def _resolve_auto_mode_selection(
         "conflict_count": conflict_count,
         "current_target_ids": sorted(current_target_ids),
         "existing_target_ids": sorted(existing_target_ids),
+        "scheduled_target_ids": sorted(scheduled_target_ids),
         "active_existing": active_existing,
     }
     return mode_result, mode_context
@@ -2300,6 +2303,7 @@ class PlanningModeSelectionResponse(BaseModel):
     workspace_id: str
     existing_acquisition_count: int = 0
     new_target_count: int = 0
+    removed_scheduled_target_count: int = 0
     conflict_count: int = 0
     current_target_ids: List[str] = Field(default_factory=list)
     existing_target_ids: List[str] = Field(default_factory=list)
@@ -2367,6 +2371,7 @@ async def get_planning_mode_selection(
         workspace_id=mode_context["workspace_id"],
         existing_acquisition_count=mode_context["existing_acquisition_count"],
         new_target_count=mode_context["new_target_count"],
+        removed_scheduled_target_count=mode_result.removed_scheduled_target_count,
         conflict_count=mode_context["conflict_count"],
         current_target_ids=mode_context["current_target_ids"],
         existing_target_ids=mode_context["existing_target_ids"],

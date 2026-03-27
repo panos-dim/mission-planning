@@ -15,6 +15,7 @@ import {
   OpenStreetMapImageryProvider,
   Cartesian3,
   Color,
+  ConstantProperty,
   VerticalOrigin,
   HorizontalOrigin,
   LabelStyle,
@@ -852,52 +853,6 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
     }
   }, [loadedDataSource, selectedTargetName, selectedType])
 
-  // Make shared selection visible directly on the schedule target pin.
-  useEffect(() => {
-    const viewer = viewerRef.current?.cesiumElement
-    if (!viewer) return
-
-    const selectedLabelColor = Color.fromCssColorString('#dbeafe')
-    const selectedOutlineColor = Color.fromCssColorString('#93c5fd')
-    const selectedLabelBackground = Color.fromCssColorString('rgba(15, 23, 42, 0.88)')
-    const lockSelectedColor = Color.fromCssColorString('#fca5a5')
-    const lockDefaultColor = Color.fromCssColorString('#f87171')
-
-    for (const entityId of scheduleEntityIdsRef.current) {
-      const entity = viewer.entities.getById(entityId)
-      if (!entity) continue
-
-      if (entityId.startsWith('sched_target_')) {
-        const targetName = entityId.slice('sched_target_'.length)
-        const isSelected = selectedTargetName === targetName
-
-        if (entity.billboard) {
-          entity.billboard.scale = isSelected ? 1.28 : 1
-        }
-        if (entity.label) {
-          entity.label.scale = isSelected ? 1.12 : 1
-          entity.label.fillColor = isSelected ? selectedLabelColor : Color.WHITE
-          entity.label.outlineColor = isSelected ? selectedOutlineColor : Color.BLACK
-          entity.label.outlineWidth = isSelected ? 5 : 3
-          entity.label.showBackground = isSelected
-          entity.label.backgroundColor = selectedLabelBackground
-          entity.label.pixelOffset = isSelected ? new Cartesian2(0, -34) : new Cartesian2(0, -30)
-        }
-      }
-
-      if (entityId.startsWith('sched_lock_')) {
-        const targetName = entityId.slice('sched_lock_'.length)
-        const isSelected = selectedTargetName === targetName
-        if (entity.label) {
-          entity.label.scale = isSelected ? 1.12 : 1
-          entity.label.fillColor = isSelected ? lockSelectedColor : lockDefaultColor
-        }
-      }
-    }
-
-    viewer.scene?.requestRender?.()
-  }, [selectedTargetName, scheduleItems, committedOrders])
-
   // Smart fallback: Only use OSM if Cesium Ion actually fails
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -1145,10 +1100,10 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
 
   // Layer visibility synchronization
   useEffect(() => {
-    if (!viewerRef.current?.cesiumElement || !czmlDataSourceRef.current) return
+    if (!viewerRef.current?.cesiumElement || !loadedDataSource) return
 
     const viewer = viewerRef.current.cesiumElement
-    const dataSource = czmlDataSourceRef.current
+    const dataSource = loadedDataSource
 
     // Apply layer visibility
     if (dataSource && dataSource.entities) {
@@ -1162,18 +1117,17 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
           else if (entity.id === 'pointing_cone') {
             entity.show = activeLayers.pointingCone
           }
-          // Satellite entity - keep visible but control path separately
-          else if (entity.id?.startsWith('sat_') || entity.point) {
-            // Always show the satellite point itself
-            entity.show = true
-          }
           // Ground track: single-sat (satellite_ground_track) or constellation ({sat_id}_ground_track)
           else if (entity.id?.includes('ground_track')) {
             entity.show = true // Always show entity
             if (entity.path) {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Cesium Property system accepts boolean at runtime
-              ;(entity.path.show as any) = activeLayers.orbitLine
+              entity.path.show = new ConstantProperty(activeLayers.orbitLine)
             }
+          }
+          // Satellite entity - keep visible but control path separately
+          else if (entity.id?.startsWith('sat_') || entity.point) {
+            // Always show the satellite point itself
+            entity.show = true
           }
           // Targets
           else if (entity.name?.includes('Target') || entity.id?.startsWith('target_')) {
@@ -1237,7 +1191,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
         viewer.scene.postProcessStages.bloom.stepSize = 5.0
       }
     }
-  }, [activeLayers, viewportId, mode])
+  }, [activeLayers, viewportId, mode, loadedDataSource])
 
   // Initialize clock when mission data is available
   useEffect(() => {
@@ -1668,8 +1622,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
 
                   // Apply ground track path visibility from layer settings
                   if (entity.id?.includes('ground_track') && entity.path) {
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Cesium Property system accepts boolean at runtime
-                    ;(entity.path.show as any) = activeLayers.orbitLine
+                    entity.path.show = new ConstantProperty(activeLayers.orbitLine)
                   }
 
                   // --- Satellite entities: apply per-satellite color from registry ---

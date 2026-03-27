@@ -136,16 +136,19 @@ export function MissionProvider({ children }: MissionProviderProps): JSX.Element
   // Session persistence: save missionData + czmlData to localStorage on change
   const saveMissionSession = useSessionStore((s) => s.saveMissionSession)
   const sessionRestoreWorkspaceRef = useRef<string | null>(null)
+  const previousMissionDataRef = useRef<MissionData | null | undefined>(undefined)
   const currentWorkspaceId = activeWorkspace || 'default'
 
   useEffect(() => {
     if (reducerState.missionData && reducerState.czmlData.length > 0) {
       saveMissionSession(reducerState.missionData, reducerState.czmlData, currentWorkspaceId)
-    } else if (!reducerState.missionData) {
+    } else if (previousMissionDataRef.current && !reducerState.missionData) {
       // When mission is cleared (CLEAR_MISSION), ensure session store is also cleared.
       // This prevents stale data from being restored on next page refresh.
       useSessionStore.getState().clearSession()
     }
+
+    previousMissionDataRef.current = reducerState.missionData
   }, [reducerState.missionData, reducerState.czmlData, saveMissionSession, currentWorkspaceId])
 
   // Restore only the session that belongs to the currently active workspace.

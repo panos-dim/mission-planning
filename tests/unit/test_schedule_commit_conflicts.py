@@ -1085,6 +1085,99 @@ class TestPlanningModeSelection:
         assert body["existing_acquisition_count"] == 1
         assert body["new_target_count"] == 1
 
+    def test_mode_selection_returns_repair_when_scheduled_target_is_removed(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Removing currently scheduled work from scope must trigger repair."""
+        client, db, workspace_id = isolated_schedule_api
+        original_state = _snapshot_analysis_state()
+        set_current_mission_data(
+            _set_current_targets(["TGT-1", "TGT-3"]),
+            workspace_id,
+        )
+
+        start = datetime.now(timezone.utc) + timedelta(days=1)
+        db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="TGT-1",
+            start_time=_iso(start),
+            end_time=_iso(start + timedelta(minutes=2)),
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="committed",
+            workspace_id=workspace_id,
+        )
+        db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="TGT-2",
+            start_time=_iso(start + timedelta(minutes=10)),
+            end_time=_iso(start + timedelta(minutes=12)),
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="committed",
+            workspace_id=workspace_id,
+        )
+
+        try:
+            response = client.post(
+                "/api/v1/schedule/mode-selection",
+                json={"workspace_id": workspace_id},
+            )
+        finally:
+            _restore_analysis_state(original_state)
+
+        assert response.status_code == 200, response.json()
+        body = response.json()
+        assert body["success"] is True
+        assert body["planning_mode"] == "repair"
+        assert body["removed_scheduled_target_count"] == 1
+        assert "no longer in scope" in body["reason"]
+
+    def test_mode_selection_keeps_incremental_when_only_unscheduled_baseline_target_is_removed(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Removing an unscheduled baseline-only target should not force repair."""
+        client, db, workspace_id = isolated_schedule_api
+        original_state = _snapshot_analysis_state()
+        set_current_mission_data(
+            _set_current_targets(["TGT-1", "TGT-2", "TGT-4"]),
+            workspace_id,
+        )
+
+        get_workspace_db().update_workspace(
+            workspace_id=workspace_id,
+            planning_state={
+                "current_target_ids": ["TGT-1", "TGT-2", "TGT-3"],
+            },
+        )
+
+        start = datetime.now(timezone.utc) + timedelta(days=1)
+        db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="TGT-1",
+            start_time=_iso(start),
+            end_time=_iso(start + timedelta(minutes=2)),
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="committed",
+            workspace_id=workspace_id,
+        )
+
+        try:
+            response = client.post(
+                "/api/v1/schedule/mode-selection",
+                json={"workspace_id": workspace_id},
+            )
+        finally:
+            _restore_analysis_state(original_state)
+
+        assert response.status_code == 200, response.json()
+        body = response.json()
+        assert body["success"] is True
+        assert body["planning_mode"] == "incremental"
+        assert body["removed_scheduled_target_count"] == 0
+        assert body["new_target_count"] == 1
+
     def test_mode_selection_escalates_to_repair_for_higher_priority_new_targets(
         self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
     ) -> None:

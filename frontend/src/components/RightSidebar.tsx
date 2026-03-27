@@ -178,8 +178,8 @@ const RightSidebar: React.FC = () => {
             <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
               <SidebarUtilitySection title="Core">
                 <LayerToggleRow
-                  title="Satellite Path"
-                  description="Orbit trajectory line"
+                  title="Ground Track"
+                  description="Projected path on Earth"
                   checked={activeLayers.orbitLine}
                   onChange={(checked) => setLayerVisibility('orbitLine', checked)}
                   accentClass="bg-blue-400"

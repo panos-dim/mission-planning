@@ -46,7 +46,7 @@ describe('workspaceStore', () => {
     expect(useWorkspaceStore.getState().activeWorkspaceName).toBe('Kuwait Repairs')
   })
 
-  it('drops persisted active selection on rehydrate but keeps the workspace list', async () => {
+  it('rehydrates the persisted active selection alongside the workspace list', async () => {
     const persistedWorkspace = buildWorkspace('ws-rome', 'Rome Demo')
 
     localStorage.setItem(
@@ -65,13 +65,13 @@ describe('workspaceStore', () => {
     await Promise.resolve()
 
     expect(useWorkspaceStore.getState().workspaces).toEqual([persistedWorkspace])
-    expect(useWorkspaceStore.getState().activeWorkspace).toBeNull()
-    expect(useWorkspaceStore.getState().activeWorkspaceName).toBeNull()
+    expect(useWorkspaceStore.getState().activeWorkspace).toBe(persistedWorkspace.id)
+    expect(useWorkspaceStore.getState().activeWorkspaceName).toBe(persistedWorkspace.name)
 
     const persisted = JSON.parse(localStorage.getItem('mission_workspaces') || '{}')
     expect(persisted.state.workspaces).toEqual([persistedWorkspace])
-    expect(persisted.state.activeWorkspace).toBeUndefined()
-    expect(persisted.state.activeWorkspaceName).toBeUndefined()
+    expect(persisted.state.activeWorkspace).toBe(persistedWorkspace.id)
+    expect(persisted.state.activeWorkspaceName).toBe(persistedWorkspace.name)
     expect(persisted.version).toBe(1)
   })
 })
