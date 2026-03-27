@@ -1,5 +1,12 @@
 import { defineConfig, devices } from '@playwright/test'
 
+// The desktop app shell can provide both NO_COLOR and FORCE_COLOR.
+// Node warns loudly when both are set, so keep the explicit color setting
+// and drop the conflicting no-color flag for Playwright runs.
+if (process.env.FORCE_COLOR && process.env.NO_COLOR) {
+  delete process.env.NO_COLOR
+}
+
 const frontendBaseUrl = process.env.PLAYWRIGHT_BASE_URL || 'http://127.0.0.1:3000'
 const chromiumViewport = {
   width: 1728,

@@ -33,6 +33,7 @@ import {
   loadAcceptedOrdersForWorkspace,
   saveAcceptedOrdersForWorkspace,
 } from '../utils/acceptedOrdersStorage'
+import * as workspacesApi from '../api/workspaces'
 
 interface SidebarPanel {
   id: string
@@ -70,6 +71,12 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
   const setPlanningResults = usePlanningStore((s) => s.setResults)
   const setActiveAlgorithm = usePlanningStore((s) => s.setActiveAlgorithm)
   const ordersHydratingRef = useRef(true)
+  const missionDataRef = useRef(state.missionData)
+  const autoRestoredWorkspaceRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    missionDataRef.current = state.missionData
+  }, [state.missionData])
 
   useEffect(() => {
     ordersHydratingRef.current = true
@@ -237,6 +244,31 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
       setActiveAlgorithm,
     ],
   )
+
+  useEffect(() => {
+    const activeWorkspaceId = state.activeWorkspace
+    if (!activeWorkspaceId || missionDataRef.current) return
+    if (autoRestoredWorkspaceRef.current === activeWorkspaceId) return
+
+    autoRestoredWorkspaceRef.current = activeWorkspaceId
+    let cancelled = false
+
+    const restoreWorkspace = async () => {
+      try {
+        const workspaceData = await workspacesApi.getWorkspace(activeWorkspaceId, true)
+        if (cancelled || missionDataRef.current) return
+        handleWorkspaceLoad(activeWorkspaceId, workspaceData)
+      } catch (error) {
+        console.warn('[Workspace Restore] Failed to auto-restore active workspace:', error)
+      }
+    }
+
+    void restoreWorkspace()
+
+    return () => {
+      cancelled = true
+    }
+  }, [state.activeWorkspace, handleWorkspaceLoad])
 
   // Sync panel state to global store
   useEffect(() => {
@@ -424,9 +456,10 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
       // ── Invalidate schedule cache so next planning run sees fresh DB state ──
       queryClient.invalidateQueries({ queryKey: queryKeys.schedule.all })
 
-      // ── Clear all visualization & analysis state for a fresh start ──
-      // clearMission: clears reducer (missionData, czmlData), scene objects, AND session store
-      clearMission()
+      // ── Clear transient planning overlays, but preserve mission/CZML context ──
+      // Operators typically move straight into Schedule after commit. Keeping the
+      // current mission snapshot alive lets the map retain targets, CZML, and
+      // ground tracks for immediate review instead of dropping into an empty globe.
       // Planning results
       usePlanningStore.getState().clearResults()
       // Slew visualization
@@ -438,14 +471,13 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
 
       setActivePanel(LEFT_SIDEBAR_PANELS.SCHEDULE)
       console.log(
-        `[PromoteToOrders] ✓ Schedule committed to database (plan: ${planId}). State cleared for fresh start.`,
+        `[PromoteToOrders] ✓ Schedule committed to database (plan: ${planId}). Schedule review kept mission context active.`,
       )
     },
     [
       orders.length,
       state.activeWorkspace,
       state.missionData?.targets,
-      clearMission,
       setPreviewTargets,
       setHidePreview,
     ],

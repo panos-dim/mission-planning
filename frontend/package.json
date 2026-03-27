@@ -19,7 +19,7 @@
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:ui": "vitest --ui",
-    "test:e2e": "playwright test",
+    "test:e2e": "node scripts/run-playwright.mjs test",
     "generate:api-types": "bash scripts/generate-api-types.sh"
   },
   "dependencies": {

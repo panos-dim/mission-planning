@@ -87,6 +87,14 @@ export const _devGroundtrackStats = {
   /** True when the point cap forced the step to be increased in the last rebuild. */
   capTriggered: false,
   capNote: null as string | null,
+  /** Satellite IDs considered in-window during the latest rebuild. */
+  lastInWindowSatIds: [] as string[],
+  /** Ground-track entity IDs sampled during the latest rebuild. */
+  lastGroundTrackIds: [] as string[],
+  /** Sliced entity IDs successfully created during the latest rebuild. */
+  lastSlicedIds: [] as string[],
+  /** Ground-track entity IDs whose sample pass returned null during the latest rebuild. */
+  lastNullSliceIds: [] as string[],
 }
 
 // ---------------------------------------------------------------------------

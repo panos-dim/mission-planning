@@ -40,9 +40,59 @@ function toCzmlSatId(schedSatId: string): string {
   return schedSatId.startsWith('sat_') ? schedSatId : `sat_${schedSatId}`
 }
 
+function getSatellitesInWindow(
+  items: Array<{
+    satellite_id: string
+    start_time: string
+    end_time: string
+  }>,
+  tStart: string | null,
+  tEnd: string | null,
+): Set<string> {
+  const inWindowCzmlIds = new Set<string>()
+
+  if (tStart && tEnd) {
+    const tStartMs = new Date(tStart).getTime()
+    const tEndMs = new Date(tEnd).getTime()
+
+    items.forEach((item) => {
+      const itemStart = new Date(item.start_time).getTime()
+      const itemEnd = new Date(item.end_time).getTime()
+      if (itemEnd >= tStartMs && itemStart <= tEndMs) {
+        inWindowCzmlIds.add(toCzmlSatId(item.satellite_id))
+      }
+    })
+    return inWindowCzmlIds
+  }
+
+  // No time range yet — treat ALL scheduled satellites as in-window
+  // so we don't flash-hide everything on first render.
+  items.forEach((item) => inWindowCzmlIds.add(toCzmlSatId(item.satellite_id)))
+  return inWindowCzmlIds
+}
+
+function applySatelliteIsolation(
+  satellitesInWindow: Set<string>,
+  isolatedSatelliteId: string | null,
+  focusedSatelliteId: string | null,
+): Set<string> {
+  if (isolatedSatelliteId) {
+    return new Set([toCzmlSatId(isolatedSatelliteId)])
+  }
+
+  const visibleSatelliteIds = new Set(satellitesInWindow)
+  const focusedCzmlId = focusedSatelliteId ? toCzmlSatId(focusedSatelliteId) : null
+  if (focusedCzmlId) {
+    visibleSatelliteIds.add(focusedCzmlId)
+  }
+  return visibleSatelliteIds
+}
+
 /** Default groundtrack path width used in the rest of the app. */
 const DEFAULT_PATH_WIDTH = 1.5
 const HIGHLIGHT_PATH_WIDTH = 3
+const MAX_SLICE_REBUILD_ATTEMPTS = 8
+const SLICE_RETRY_DELAY_MS = 250
 
 // ---------------------------------------------------------------------------
 // Hook
@@ -60,6 +110,7 @@ export function useScheduleSatelliteLayers(
   const tStart = useScheduleStore((s) => s.tStart)
   const tEnd = useScheduleStore((s) => s.tEnd)
   const focusedSatelliteId = useScheduleStore((s) => s.focusedSatelliteId)
+  const isolatedSatelliteId = useScheduleStore((s) => s.isolatedSatelliteId)
   const showSatellites = useScheduleStore((s) => s.schedLayerSatellites)
   const showGroundtracks = useScheduleStore((s) => s.schedLayerGroundtracks)
   const showHighlight = useScheduleStore((s) => s.schedLayerHighlight)
@@ -151,31 +202,12 @@ export function useScheduleSatelliteLayers(
     // -----------------------------------------------------------------
     // Schedule view: compute which satellites are in [tStart, tEnd]
     // -----------------------------------------------------------------
-    const inWindowCzmlIds = new Set<string>()
-
-    if (tStart && tEnd) {
-      const tStartMs = new Date(tStart).getTime()
-      const tEndMs = new Date(tEnd).getTime()
-
-      items.forEach((item) => {
-        const itemStart = new Date(item.start_time).getTime()
-        const itemEnd = new Date(item.end_time).getTime()
-        if (itemEnd >= tStartMs && itemStart <= tEndMs) {
-          inWindowCzmlIds.add(toCzmlSatId(item.satellite_id))
-        }
-      })
-    } else {
-      // No time range yet — treat ALL scheduled satellites as in-window
-      // so we don't flash-hide everything on first render.
-      items.forEach((item) => inWindowCzmlIds.add(toCzmlSatId(item.satellite_id)))
-    }
-
+    const visibleCzmlIds = applySatelliteIsolation(
+      getSatellitesInWindow(items, tStart, tEnd),
+      isolatedSatelliteId,
+      focusedSatelliteId,
+    )
     const focusedCzmlId = focusedSatelliteId ? toCzmlSatId(focusedSatelliteId) : null
-
-    // Always include the focused satellite so it's visible even before items load
-    if (focusedCzmlId) {
-      inWindowCzmlIds.add(focusedCzmlId)
-    }
 
     // -----------------------------------------------------------------
     // Apply visibility overrides
@@ -185,7 +217,7 @@ export function useScheduleSatelliteLayers(
 
       // ── Satellite billboard / point entity ────────────────────────
       if (id.startsWith('sat_') && !id.includes('ground_track')) {
-        const isInWindow = inWindowCzmlIds.size > 0 && inWindowCzmlIds.has(id)
+        const isInWindow = visibleCzmlIds.size > 0 && visibleCzmlIds.has(id)
         entity.show = showSatellites && isInWindow
         touchedEntityIdsRef.current.add(id)
 
@@ -206,7 +238,7 @@ export function useScheduleSatelliteLayers(
       // Only match sat_<id>_ground_track; not the single-sat 'satellite_ground_track' entity.
       if (id.startsWith('sat_') && id.endsWith('_ground_track')) {
         const ownerSatId = id.slice(0, -'_ground_track'.length)
-        const isInWindow = inWindowCzmlIds.size > 0 && inWindowCzmlIds.has(ownerSatId)
+        const isInWindow = visibleCzmlIds.size > 0 && visibleCzmlIds.has(ownerSatId)
         entity.show = showGroundtracks && isInWindow
         touchedEntityIdsRef.current.add(id)
 
@@ -238,6 +270,7 @@ export function useScheduleSatelliteLayers(
     tStart,
     tEnd,
     focusedSatelliteId,
+    isolatedSatelliteId,
     showSatellites,
     showGroundtracks,
     showHighlight,
@@ -265,31 +298,27 @@ export function useScheduleSatelliteLayers(
       }
       return
     }
+    let cancelled = false
+    let attempts = 0
+    const timers: ReturnType<typeof setTimeout>[] = []
 
-    const timer = setTimeout(() => {
+    const rebuildSlices = () => {
+      if (cancelled) return
       const viewer = viewerRef.current?.cesiumElement
       if (!viewer) return
 
       // Recompute which satellites fall within the visible window.
-      const inWindowCzmlIds = new Set<string>()
-      if (tStart && tEnd) {
-        const tStartMs = new Date(tStart).getTime()
-        const tEndMs = new Date(tEnd).getTime()
-        items.forEach((item) => {
-          const itemStart = new Date(item.start_time).getTime()
-          const itemEnd = new Date(item.end_time).getTime()
-          if (itemEnd >= tStartMs && itemStart <= tEndMs) {
-            inWindowCzmlIds.add(toCzmlSatId(item.satellite_id))
-          }
-        })
-      } else {
-        items.forEach((item) => inWindowCzmlIds.add(toCzmlSatId(item.satellite_id)))
-      }
-
+      const inWindowCzmlIds = applySatelliteIsolation(
+        getSatellitesInWindow(items, tStart, tEnd),
+        isolatedSatelliteId,
+        focusedSatelliteId,
+      )
       const focusedCzmlId = focusedSatelliteId ? toCzmlSatId(focusedSatelliteId) : null
 
       // Build the set of sliced IDs that should exist after this run.
       const nextSlicedIds = new Set<string>()
+      const attemptedGroundTrackIds = new Set<string>()
+      const nullSliceIds = new Set<string>()
 
       // Per-rebuild dev counters (written to _devGroundtrackStats after the loop).
       let rebuildHits = 0
@@ -304,10 +333,14 @@ export function useScheduleSatelliteLayers(
         const ownerSatId = id.slice(0, -'_ground_track'.length)
         const isInWindow = inWindowCzmlIds.size > 0 && inWindowCzmlIds.has(ownerSatId)
         if (!isInWindow || !tStart || !tEnd) return
+        attemptedGroundTrackIds.add(id)
 
         // Sample positions within the visible window (cache-aware).
         const sliceResult = sliceGroundtrackPositions(entity, tStart, tEnd, sampleStep)
-        if (!sliceResult) return
+        if (!sliceResult) {
+          nullSliceIds.add(id)
+          return
+        }
 
         const { positions, effectiveStep, capTriggered, cacheHit } = sliceResult
 
@@ -371,6 +404,10 @@ export function useScheduleSatelliteLayers(
         _devGroundtrackStats.capNote = rebuildCapTriggered
           ? `step auto-increased to ${rebuildEffectiveStep}s to maintain cap`
           : null
+        _devGroundtrackStats.lastInWindowSatIds = Array.from(inWindowCzmlIds)
+        _devGroundtrackStats.lastGroundTrackIds = Array.from(attemptedGroundTrackIds)
+        _devGroundtrackStats.lastSlicedIds = Array.from(nextSlicedIds)
+        _devGroundtrackStats.lastNullSliceIds = Array.from(nullSliceIds)
       }
 
       // Remove any previously sliced entities that are no longer needed.
@@ -383,9 +420,23 @@ export function useScheduleSatelliteLayers(
       slicedEntityIdsRef.current = nextSlicedIds
 
       viewer.scene?.requestRender()
-    }, SLICE_DEBOUNCE_MS)
 
-    return () => clearTimeout(timer)
+      if (
+        nextSlicedIds.size === 0 &&
+        inWindowCzmlIds.size > 0 &&
+        attempts < MAX_SLICE_REBUILD_ATTEMPTS
+      ) {
+        attempts += 1
+        timers.push(setTimeout(rebuildSlices, SLICE_RETRY_DELAY_MS))
+      }
+    }
+
+    timers.push(setTimeout(rebuildSlices, SLICE_DEBOUNCE_MS))
+
+    return () => {
+      cancelled = true
+      timers.forEach((timer) => clearTimeout(timer))
+    }
   }, [
     isScheduleView,
     loadedDataSource,
@@ -393,6 +444,7 @@ export function useScheduleSatelliteLayers(
     tStart,
     tEnd,
     focusedSatelliteId,
+    isolatedSatelliteId,
     showGroundtracks,
     showHighlight,
     sampleStep,

@@ -71,16 +71,28 @@ interface SatRowProps {
   satId: string
   displayName: string
   isFocused: boolean
+  isIsolated: boolean
   isLocked?: boolean
+  onClick: () => void
 }
 
-function SatRow({ satId, displayName, isFocused, isLocked }: SatRowProps) {
+function SatRow({ satId, displayName, isFocused, isIsolated, isLocked, onClick }: SatRowProps) {
   const color = getSatCssColor(satId)
   return (
-    <div
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={isIsolated}
+      aria-label={isIsolated ? `Show all satellites` : `Show only ${displayName}`}
+      data-satellite-filter={satId}
       className={cn(
-        'flex items-center gap-1.5 px-1 py-0.5 rounded text-xs',
-        isFocused && 'bg-white/10',
+        'flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-xs transition-colors',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500',
+        isIsolated
+          ? 'bg-blue-950/50 text-white ring-1 ring-blue-700/40'
+          : isFocused
+            ? 'bg-white/8 text-white'
+            : 'text-gray-400 hover:bg-white/5 hover:text-gray-200',
       )}
     >
       <span
@@ -88,14 +100,14 @@ function SatRow({ satId, displayName, isFocused, isLocked }: SatRowProps) {
         style={{ backgroundColor: color }}
       />
       <span
-        className={cn('truncate', isFocused ? 'text-white font-medium' : 'text-gray-400')}
+        className={cn('truncate', (isFocused || isIsolated) && 'font-medium')}
         title={satId}
       >
         {displayName}
       </span>
-      {isFocused && (
+      {(isIsolated || isFocused) && (
         <span className="ml-auto shrink-0 flex items-center gap-1">
-          {isLocked && (
+          {isLocked && isFocused && (
             <span
               className="inline-flex items-center gap-0.5 text-[10px] text-red-400 font-medium"
               title="Focused acquisition is locked"
@@ -103,10 +115,10 @@ function SatRow({ satId, displayName, isFocused, isLocked }: SatRowProps) {
               <Shield className="size-2.5" />
             </span>
           )}
-          <span className="text-[10px] text-blue-400 font-medium">selected</span>
+          {isIsolated && <span className="text-[10px] text-blue-300 font-medium">only</span>}
         </span>
       )}
-    </div>
+    </button>
   )
 }
 
@@ -147,10 +159,12 @@ export function ScheduleSatelliteLayers({ loadedDataSource = null }: ScheduleSat
   const focusedSatelliteId = useScheduleStore((s) => s.focusedSatelliteId)
   const focusedTargetId = useScheduleStore((s) => s.focusedTargetId)
   const focusedStartTime = useScheduleStore((s) => s.focusedStartTime)
+  const isolatedSatelliteId = useScheduleStore((s) => s.isolatedSatelliteId)
   const showSatellites = useScheduleStore((s) => s.schedLayerSatellites)
   const showGroundtracks = useScheduleStore((s) => s.schedLayerGroundtracks)
   const showHighlight = useScheduleStore((s) => s.schedLayerHighlight)
   const setSchedLayer = useScheduleStore((s) => s.setSchedLayer)
+  const setIsolatedSatellite = useScheduleStore((s) => s.setIsolatedSatellite)
   const groundtrackSampleStep = useScheduleStore((s) => s.groundtrackSampleStep)
   const setGroundtrackSampleStep = useScheduleStore((s) => s.setGroundtrackSampleStep)
   const focusedAcquisitionId = useScheduleStore((s) => s.focusedAcquisitionId)
@@ -199,6 +213,8 @@ export function ScheduleSatelliteLayers({ loadedDataSource = null }: ScheduleSat
   }
 
   const satList = Array.from(inWindowSats.entries())
+  const isolatedDisplayName =
+    satList.find(([satId]) => satId === isolatedSatelliteId)?.[1] ?? isolatedSatelliteId
 
   // Dev-mode entity counts (only computed in DEV to avoid runtime cost in prod)
   let satEntitiesFound = 0
@@ -233,11 +249,11 @@ export function ScheduleSatelliteLayers({ loadedDataSource = null }: ScheduleSat
         onClick={() => setExpanded((v) => !v)}
         aria-expanded={expanded}
         title={focusedTargetId ? `Map focus for ${focusedTargetId}` : 'Map focus'}
+        aria-label={expanded ? 'Collapse Map Focus panel' : 'Open Map Focus panel'}
         className={cn(
           'flex w-full text-xs font-semibold text-gray-200 hover:text-white transition-colors',
           expanded ? 'items-start justify-between gap-2 px-3 py-2' : 'items-center justify-center px-2 py-2',
         )}
-        aria-label="Toggle satellite layers panel"
       >
         {expanded ? (
           <>
@@ -351,9 +367,25 @@ export function ScheduleSatelliteLayers({ loadedDataSource = null }: ScheduleSat
           {/* Per-satellite list (schedule items exist in window) */}
           {satList.length > 0 && (
             <div className="border-t border-gray-700/50 px-2 py-2">
-              <p className="px-1 pb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">
-                Satellites in window ({satList.length})
-              </p>
+              <div className="flex items-center justify-between gap-2 px-1 pb-1">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+                  Satellites in window ({satList.length})
+                </p>
+                {isolatedSatelliteId && (
+                  <button
+                    type="button"
+                    onClick={() => setIsolatedSatellite(null)}
+                    className="text-[10px] font-medium text-blue-300 hover:text-blue-200"
+                  >
+                    Show all
+                  </button>
+                )}
+              </div>
+              {isolatedDisplayName && (
+                <p className="px-1 pb-1 text-[10px] text-gray-500">
+                  Reviewing {isolatedDisplayName} only
+                </p>
+              )}
               <div className="space-y-0.5 max-h-32 overflow-y-auto">
                 {satList.map(([satId, displayName]) => (
                   <SatRow
@@ -361,7 +393,11 @@ export function ScheduleSatelliteLayers({ loadedDataSource = null }: ScheduleSat
                     satId={satId}
                     displayName={displayName}
                     isFocused={focusedSatelliteId === satId}
+                    isIsolated={isolatedSatelliteId === satId}
                     isLocked={focusedSatelliteId === satId && focusedIsLocked}
+                    onClick={() =>
+                      setIsolatedSatellite(isolatedSatelliteId === satId ? null : satId)
+                    }
                   />
                 ))}
               </div>

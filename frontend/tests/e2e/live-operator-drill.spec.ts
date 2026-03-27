@@ -114,12 +114,6 @@ const modTargetsSubset: Target[] = [
   { name: 'Madrid', latitude: 40.4168, longitude: -3.7038, priority: 4 },
 ]
 
-const customPriorityTargets: Target[] = [
-  { name: 'OPS_PRIO_A', latitude: 24.7, longitude: 46.69, priority: 1, color: '#22C55E' },
-  { name: 'OPS_PRIO_B', latitude: 24.75, longitude: 46.63, priority: 1, color: '#22C55E' },
-  { name: 'OPS_PRIO_C', latitude: 24.67, longitude: 46.73, priority: 1, color: '#22C55E' },
-]
-
 const fallbackCustomSatellite = {
   name: customSatelliteName,
   line1: '1 99001U 25999A   25337.00000000  .00000000  00000+0  00000+0 0  9990',
@@ -311,9 +305,19 @@ async function runPlanningViaApi(
   workspaceId: string,
   targets: Target[],
   beforeCount: number,
+  weights?: {
+    weight_priority: number
+    weight_geometry: number
+    weight_timing: number
+  },
 ) {
   const now = new Date()
   const end = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
+  const weightConfig = weights ?? {
+    weight_priority: 40,
+    weight_geometry: 40,
+    weight_timing: 20,
+  }
 
   const modeSelection = await apiPost<PlanningModeSelection>(
     request,
@@ -322,9 +326,7 @@ async function runPlanningViaApi(
       workspace_id: workspaceId,
       horizon_from: now.toISOString(),
       horizon_to: end.toISOString(),
-      weight_priority: 40,
-      weight_geometry: 40,
-      weight_timing: 20,
+      ...weightConfig,
     },
   )
 
@@ -338,9 +340,7 @@ async function runPlanningViaApi(
       workspace_id: workspaceId,
       include_tentative: false,
       target_priorities: targetPriorities,
-      weight_priority: 40,
-      weight_geometry: 40,
-      weight_timing: 20,
+      ...weightConfig,
     })
 
     const dropped = repair.repair_diff?.dropped ?? []
@@ -391,9 +391,7 @@ async function runPlanningViaApi(
     workspace_id: workspaceId,
     algorithms: ['roll_pitch_best_fit'],
     mode: modeSelection.planning_mode,
-    weight_priority: 40,
-    weight_geometry: 40,
-    weight_timing: 20,
+    ...weightConfig,
   })
 
   const result = planner.results.roll_pitch_best_fit
@@ -430,9 +428,16 @@ async function runPlanningViaApi(
 
 async function loadWorkspaceInUi(page: Page, workspaceName: string) {
   console.log(`[live-ui] load workspace: ${workspaceName}`)
-  await page.goto('/', { waitUntil: 'networkidle' })
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
+  console.log('[live-ui] root page loaded')
   await page.getByLabel('Workspaces').click()
   await expect(page.getByText('Workspace Library')).toBeVisible()
+  console.log('[live-ui] workspace library open')
+  const refreshButton = page.getByRole('button', { name: 'Refresh workspace list' })
+  if (await refreshButton.isVisible().catch(() => false)) {
+    await refreshButton.click()
+    console.log('[live-ui] workspace list refresh requested')
+  }
 
   const workspaceCard = page
     .locator('div.rounded-lg')
@@ -440,6 +445,7 @@ async function loadWorkspaceInUi(page: Page, workspaceName: string) {
     .first()
 
   await expect(workspaceCard).toBeVisible({ timeout: 60_000 })
+  console.log('[live-ui] workspace card visible')
   await workspaceCard.getByTitle('Load workspace').click()
   await expect(page.getByText('Workspace loaded successfully')).toBeVisible({ timeout: 60_000 })
   console.log(`[live-ui] workspace loaded: ${workspaceName}`)
@@ -450,14 +456,23 @@ async function runPlanningViaUi(
   workspaceName: string,
   screenshotName: string,
   testInfo: TestInfo,
-  options?: { autoCommit?: boolean },
+  options?: { autoCommit?: boolean; skipWorkspaceLoad?: boolean; scoringPreset?: string },
 ) {
-  await loadWorkspaceInUi(page, workspaceName)
+  if (!options?.skipWorkspaceLoad) {
+    await loadWorkspaceInUi(page, workspaceName)
+  }
   console.log('[live-ui] open planning panel')
   await page.getByLabel('Planning').click()
 
   const generateButton = page.getByRole('button', { name: /Generate Mission Plan/i })
   await expect(generateButton).toBeVisible({ timeout: 60_000 })
+
+  if (options?.scoringPreset) {
+    const presetButton = page.getByRole('button', { name: options.scoringPreset, exact: true })
+    await expect(presetButton).toBeVisible({ timeout: 30_000 })
+    await presetButton.click()
+    console.log(`[live-ui] scoring preset selected: ${options.scoringPreset}`)
+  }
 
   const modePromise = page.waitForResponse(
     (response) =>
@@ -624,6 +639,7 @@ test.describe('Live operator drill', () => {
       addition_pattern: weeklyAdditionPattern,
       runs: [],
     }
+    let workspaceLoadedInUi = false
 
     for (let runIndex = 0; runIndex < weeklyAdditionPattern.length + 1; runIndex += 1) {
       if (runIndex > 0) {
@@ -631,6 +647,11 @@ test.describe('Live operator drill', () => {
         const nextSliceEnd = Math.min(currentTargets.length + nextCount, targetPool.length)
         currentTargets.push(...targetPool.slice(currentTargets.length, nextSliceEnd))
       }
+
+      const runNumber = runIndex + 1
+      console.log(
+        `[live-weekly] run ${runNumber}/${weeklyAdditionPattern.length + 1} start with ${currentTargets.length} targets`,
+      )
 
       const analyze = await analyzeWorkspace(request, workspaceId, customSatellite, currentTargets)
       const passes =
@@ -643,13 +664,14 @@ test.describe('Live operator drill', () => {
       const beforeHorizon = await getHorizon(request, workspaceId)
       const beforeCount = beforeHorizon.acquisitions?.length ?? 0
 
-      const runNumber = runIndex + 1
       const checkpointScreenshot = weeklyCheckpointRuns.has(runNumber)
         ? `live-weekly-run-${String(runNumber).padStart(2, '0')}.png`
         : null
 
       const result = checkpointScreenshot
-        ? await runPlanningViaUi(page, workspaceName, checkpointScreenshot, testInfo)
+        ? await runPlanningViaUi(page, workspaceName, checkpointScreenshot, testInfo, {
+            skipWorkspaceLoad: workspaceLoadedInUi,
+          })
         : await runPlanningViaApi(request, workspaceId, currentTargets, beforeCount)
 
       const afterHorizon = await getHorizon(request, workspaceId)
@@ -674,6 +696,12 @@ test.describe('Live operator drill', () => {
       }
 
       report.runs.push(summary)
+      console.log(
+        `[live-weekly] run ${runNumber} complete: mode=${summary.mode} before=${beforeCount} after=${afterCount} committed=${summary.commit.committed} dropped=${summary.commit.dropped}`,
+      )
+      if ('uiSummary' in result && result.uiSummary) {
+        workspaceLoadedInUi = true
+      }
 
       if (result.modeSelection.planning_mode === 'repair') {
         const metricsAfter =
@@ -735,6 +763,7 @@ test.describe('Live operator drill', () => {
       workspace_name: workspaceName,
       steps: [],
     }
+    let workspaceLoadedInUi = false
 
     await analyzeWorkspace(request, workspaceId, liveIceyeSatellite, modTargetsA, {
       startOffsetMs: 6 * 60 * 60 * 1000,
@@ -745,7 +774,9 @@ test.describe('Live operator drill', () => {
       workspaceName,
       'live-mode-matrix-step-1-from-scratch.png',
       testInfo,
+      { skipWorkspaceLoad: workspaceLoadedInUi },
     )
+    workspaceLoadedInUi = true
     const afterFromScratch = (await getHorizon(request, workspaceId)).acquisitions?.length ?? 0
     expect(fromScratch.modeSelection.planning_mode).toBe('from_scratch')
     matrixReport.steps.push({
@@ -766,6 +797,7 @@ test.describe('Live operator drill', () => {
       workspaceName,
       'live-mode-matrix-step-2-incremental.png',
       testInfo,
+      { skipWorkspaceLoad: workspaceLoadedInUi },
     )
     const afterIncremental = (await getHorizon(request, workspaceId)).acquisitions?.length ?? 0
     expect(incremental.modeSelection.planning_mode).toBe('incremental')
@@ -788,6 +820,7 @@ test.describe('Live operator drill', () => {
       workspaceName,
       'live-mode-matrix-step-3-repair-remove.png',
       testInfo,
+      { skipWorkspaceLoad: workspaceLoadedInUi },
     )
     const afterRepair = (await getHorizon(request, workspaceId, false, 10)).acquisitions?.length ?? 0
     const repairPlan = repair.planResponse as RepairPlanResponse
@@ -821,7 +854,13 @@ test.describe('Live operator drill', () => {
     const workspaceName = `live_repair_add_remove_${Date.now()}`
     const workspaceId = await createWorkspace(request, workspaceName)
     const customSatellite = await getCustomSatellite(request)
-    const baseTargets = generateFallbackTargetPool(50)
+    const targetPool = generateFallbackTargetPool(58)
+    const baseTargets = targetPool.slice(0, 50)
+    const expansionTargets = targetPool.slice(50).map((target) => ({
+      ...target,
+      priority: 1,
+      color: '#22C55E',
+    }))
 
     await analyzeWorkspace(request, workspaceId, customSatellite, baseTargets, {
       startOffsetMs: 6 * 60 * 60 * 1000,
@@ -853,7 +892,7 @@ test.describe('Live operator drill', () => {
     expect(removedTargetId).toBeTruthy()
     const repairTargets = [
       ...baseTargets.filter((target) => target.name !== removedTargetId),
-      ...customPriorityTargets,
+      ...expansionTargets,
     ]
 
     await analyzeWorkspace(request, workspaceId, customSatellite, repairTargets, {
@@ -907,7 +946,13 @@ test.describe('Live operator drill', () => {
     const workspaceName = `live_refresh_repair_${Date.now()}`
     const workspaceId = await createWorkspace(request, workspaceName)
     const customSatellite = await getCustomSatellite(request)
-    const baseTargets = generateFallbackTargetPool(50)
+    const targetPool = generateFallbackTargetPool(53)
+    const baseTargets = targetPool.slice(0, 50)
+    const expansionTargets = targetPool.slice(50).map((target) => ({
+      ...target,
+      priority: 1,
+      color: '#22C55E',
+    }))
 
     await analyzeWorkspace(request, workspaceId, customSatellite, baseTargets, {
       startOffsetMs: 6 * 60 * 60 * 1000,
@@ -939,7 +984,7 @@ test.describe('Live operator drill', () => {
     expect(removedTargetId).toBeTruthy()
     const repairTargets = [
       ...baseTargets.filter((target) => target.name !== removedTargetId),
-      ...customPriorityTargets,
+      ...expansionTargets,
     ]
 
     await analyzeWorkspace(request, workspaceId, customSatellite, repairTargets, {
@@ -950,7 +995,7 @@ test.describe('Live operator drill', () => {
     const headerWorkspaceBadge = page.locator('div[title^="Selected workspace:"]')
     await expect(headerWorkspaceBadge).toContainText(workspaceName)
 
-    await page.reload({ waitUntil: 'networkidle' })
+    await page.reload({ waitUntil: 'domcontentloaded' })
     await expect(headerWorkspaceBadge).toContainText(workspaceName)
 
     await page.getByLabel('Workspaces').click()
@@ -1044,6 +1089,11 @@ test.describe('Live operator drill', () => {
     request,
   }, testInfo) => {
     test.setTimeout(12 * 60 * 1000)
+    const qualityWeights = {
+      weight_priority: 0,
+      weight_geometry: 100,
+      weight_timing: 0,
+    }
 
     const workspaceName = `live_repair_moved_${Date.now()}`
     const workspaceId = await createWorkspace(request, workspaceName)
@@ -1055,7 +1105,7 @@ test.describe('Live operator drill', () => {
       startOffsetMs: 6 * 60 * 60 * 1000,
     })
 
-    const baseline = await runPlanningViaApi(request, workspaceId, targets, 0)
+    const baseline = await runPlanningViaApi(request, workspaceId, targets, 0, qualityWeights)
     expect(baseline.modeSelection.planning_mode).toBe('from_scratch')
 
     const beforeRepair = (await getHorizon(request, workspaceId, false, 10)).acquisitions?.length ?? 0
@@ -1070,7 +1120,7 @@ test.describe('Live operator drill', () => {
       workspaceName,
       'live-repair-moved-page2.png',
       testInfo,
-      { autoCommit: false },
+      { autoCommit: false, scoringPreset: 'Quality' },
     )
     const repairPlan = liveRepair.planResponse as RepairPlanResponse
 
@@ -1142,6 +1192,7 @@ test.describe('Live operator drill', () => {
       addition_pattern: incrementalCampaignPattern,
       runs: [],
     }
+    let workspaceLoadedInUi = false
 
     for (let runIndex = 0; runIndex < incrementalCampaignPattern.length + 1; runIndex += 1) {
       if (runIndex > 0) {
@@ -1150,19 +1201,25 @@ test.describe('Live operator drill', () => {
         currentTargets.push(...targetPool.slice(currentTargets.length, nextSliceEnd))
       }
 
+      const runNumber = runIndex + 1
+      console.log(
+        `[live-incremental] run ${runNumber}/${incrementalCampaignPattern.length + 1} start with ${currentTargets.length} targets`,
+      )
+
       await analyzeWorkspace(request, workspaceId, customSatellite, currentTargets, {
         startOffsetMs: 6 * 60 * 60 * 1000,
       })
       const opportunities = await getOpportunitiesCount(request, workspaceId)
       const beforeHorizon = await getHorizon(request, workspaceId)
       const beforeCount = beforeHorizon.acquisitions?.length ?? 0
-      const runNumber = runIndex + 1
       const checkpointScreenshot = incrementalCampaignCheckpointRuns.has(runNumber)
         ? `live-incremental-campaign-run-${String(runNumber).padStart(2, '0')}.png`
         : null
 
       const result = checkpointScreenshot
-        ? await runPlanningViaUi(page, workspaceName, checkpointScreenshot, testInfo)
+        ? await runPlanningViaUi(page, workspaceName, checkpointScreenshot, testInfo, {
+            skipWorkspaceLoad: workspaceLoadedInUi,
+          })
         : await runPlanningViaApi(request, workspaceId, currentTargets, beforeCount)
 
       const afterHorizon = await getHorizon(request, workspaceId)
@@ -1192,6 +1249,12 @@ test.describe('Live operator drill', () => {
       }
 
       report.runs.push(summary)
+      console.log(
+        `[live-incremental] run ${runNumber} complete: mode=${summary.mode} before=${beforeCount} after=${afterCount} committed=${summary.commit.committed} dropped=${summary.commit.dropped}`,
+      )
+      if ('uiSummary' in result && result.uiSummary) {
+        workspaceLoadedInUi = true
+      }
     }
 
     const summaryPath = testInfo.outputPath('live-incremental-campaign-summary.json')
@@ -1294,12 +1357,12 @@ test.describe('Live operator drill', () => {
     })
     console.log('[live-lock] conflicting acquisition injected')
 
-    await page.goto('/', { waitUntil: 'networkidle' })
     const liveRepair = await runPlanningViaUi(
       page,
       workspaceName,
       'live-lock-repair-page2.png',
       testInfo,
+      { skipWorkspaceLoad: true },
     )
     console.log('[live-lock] repair flow committed via UI')
 

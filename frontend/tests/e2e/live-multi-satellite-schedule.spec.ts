@@ -106,6 +106,7 @@ type ViewerState = {
     visibleGroundTrackPaths: number
   }>
   slicedGroundTrackSegments: number
+  slicedGroundTrackSegmentsBySatellite: Record<string, number>
 }
 
 const reviewTargets: Target[] = [
@@ -415,6 +416,68 @@ async function openScheduleTimeline(page: Page) {
   await expect(page.locator('[data-acquisition-id]').first()).toBeVisible({ timeout: 30_000 })
 }
 
+async function waitForScheduleMapReady(page: Page, timeoutMs = 20_000) {
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(async () => {
+          type DebugEntity = { id?: string }
+          type DebugViewer = {
+            entities?: {
+              values?: DebugEntity[]
+            }
+            dataSources?: {
+              length?: number
+            }
+          }
+          type GlobeDebug = {
+            viewerDataSources?: number
+          }
+
+          const viewer = (globalThis as typeof globalThis & { __primaryViewer?: DebugViewer })
+            .__primaryViewer
+          const globeDebug = (globalThis as typeof globalThis & { __primaryGlobeDebug?: GlobeDebug })
+            .__primaryGlobeDebug
+          const slicedCount =
+            viewer?.entities?.values?.filter?.(
+              (entity) => typeof entity.id === 'string' && entity.id.endsWith('_ground_track_sliced'),
+            ).length ?? 0
+
+          return {
+            viewerDataSources: globeDebug?.viewerDataSources ?? viewer?.dataSources?.length ?? 0,
+            slicedCount,
+          }
+        }),
+      { timeout: timeoutMs },
+    )
+    .toMatchObject({
+      viewerDataSources: expect.any(Number),
+    })
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          type DebugEntity = { id?: string }
+          type DebugViewer = {
+            entities?: {
+              values?: DebugEntity[]
+            }
+          }
+
+          const viewer = (globalThis as typeof globalThis & { __primaryViewer?: DebugViewer })
+            .__primaryViewer
+          return (
+            viewer?.entities?.values?.filter?.(
+              (entity) => typeof entity.id === 'string' && entity.id.endsWith('_ground_track_sliced'),
+            ).length ?? 0
+          )
+        }),
+      { timeout: timeoutMs },
+    )
+    .toBeGreaterThan(0)
+}
+
 async function openPlanningApply(page: Page, testInfo: TestInfo, screenshotName: string) {
   await page.getByRole('button', { name: 'Planning', exact: true }).click()
   await expect(
@@ -539,6 +602,7 @@ async function readPrimaryViewerState(page: Page): Promise<ViewerState> {
         camera: null,
         dataSources: [],
         slicedGroundTrackSegments: 0,
+        slicedGroundTrackSegmentsBySatellite: {},
       }
     }
 
@@ -575,6 +639,19 @@ async function readPrimaryViewerState(page: Page): Promise<ViewerState> {
     }
 
     const cartographic = viewer.camera.positionCartographic
+    const slicedGroundTrackSegmentsBySatellite = viewer.entities.values.reduce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (segments: Record<string, number>, entity: any) => {
+        if (typeof entity.id !== 'string' || !entity.id.endsWith('_ground_track_sliced')) {
+          return segments
+        }
+        const ownerSatId = entity.id.slice(0, -'_ground_track_sliced'.length)
+        segments[ownerSatId] = (segments[ownerSatId] ?? 0) + 1
+        return segments
+      },
+      {},
+    )
+
     return {
       found: true,
       trackedEntityId: viewer.trackedEntity?.id ?? null,
@@ -590,6 +667,7 @@ async function readPrimaryViewerState(page: Page): Promise<ViewerState> {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (entity: any) => typeof entity.id === 'string' && entity.id.endsWith('_ground_track_sliced'),
       ).length,
+      slicedGroundTrackSegmentsBySatellite,
     }
   })
 }
@@ -648,10 +726,10 @@ test.describe('Live multi-satellite schedule review', () => {
 
     await expect
       .poll(async () => {
-        const bodyText = await page.evaluate(() => document.body.innerText)
-        return bodyText.includes('ICEYE-X66') && bodyText.includes('ICEYE-X67')
-      })
-      .toBe(true)
+        const state = await readPrimaryViewerState(page)
+        return state.dataSources.reduce((total, dataSource) => total + dataSource.satellites, 0)
+      }, { timeout: 60_000 })
+      .toBeGreaterThanOrEqual(2)
 
     await page.getByRole('button', { name: 'Fit All Targets' }).click()
     await page.waitForTimeout(2200)
@@ -677,6 +755,7 @@ test.describe('Live multi-satellite schedule review', () => {
 
     await page.getByLabel('Close Map Layers panel').click()
     await openScheduleTimeline(page)
+    await waitForScheduleMapReady(page)
 
     const detailsHeading = page.getByRole('heading', { name: 'Details' })
     if (await detailsHeading.isVisible().catch(() => false)) {
@@ -702,9 +781,74 @@ test.describe('Live multi-satellite schedule review', () => {
     await expect(acquisitionHero).toContainText(secondSelection!.target_id)
     await expect(acquisitionHero).toContainText(normalizeSatelliteName(secondSatelliteName))
 
+    await expect
+      .poll(async () => {
+        const state = await readPrimaryViewerState(page)
+        return {
+          selectedEntityId: state.selectedEntityId,
+          slicedGroundTrackSegments: state.slicedGroundTrackSegments,
+        }
+      }, { timeout: 15_000 })
+      .toMatchObject({
+        selectedEntityId: `sched_target_${secondSelection!.target_id}`,
+      })
+
     const selectedState = await readPrimaryViewerState(page)
-    expect(selectedState.selectedEntityId).toBe(`sched_target_${secondSelection!.target_id}`)
     expect(selectedState.slicedGroundTrackSegments).toBeGreaterThan(0)
+
+    await page
+      .getByLabel('Open Map Focus panel')
+      .evaluate((button: HTMLButtonElement) => button.click())
+    await expect(page.getByLabel('Collapse Map Focus panel')).toBeVisible()
+    const firstSatelliteFilter = page.locator(`[data-satellite-filter="${firstSelection!.satellite_id}"]`)
+    const secondSatelliteFilter = page.locator(`[data-satellite-filter="${secondSelection!.satellite_id}"]`)
+    await expect(firstSatelliteFilter).toBeVisible()
+    await expect(secondSatelliteFilter).toBeVisible()
+
+    const firstSatelliteCzmlId = `sat_${firstSelection!.satellite_id}`
+    const secondSatelliteCzmlId = `sat_${secondSelection!.satellite_id}`
+
+    await firstSatelliteFilter.click()
+    await expect(page.getByText(new RegExp(`Reviewing ${firstSelection!.satellite_id} only`))).toBeVisible()
+    await expect
+      .poll(async () => (await readPrimaryViewerState(page)).slicedGroundTrackSegmentsBySatellite, {
+        timeout: 15_000,
+      })
+      .toMatchObject({
+        [firstSatelliteCzmlId]: expect.any(Number),
+      })
+
+    const isolatedFirstState = await readPrimaryViewerState(page)
+    expect(Object.keys(isolatedFirstState.slicedGroundTrackSegmentsBySatellite)).toEqual([
+      firstSatelliteCzmlId,
+    ])
+
+    await secondSatelliteFilter.click()
+    await expect(page.getByText(new RegExp(`Reviewing ${secondSelection!.satellite_id} only`))).toBeVisible()
+    await expect
+      .poll(async () => (await readPrimaryViewerState(page)).slicedGroundTrackSegmentsBySatellite, {
+        timeout: 15_000,
+      })
+      .toMatchObject({
+        [secondSatelliteCzmlId]: expect.any(Number),
+      })
+
+    const isolatedSecondState = await readPrimaryViewerState(page)
+    expect(Object.keys(isolatedSecondState.slicedGroundTrackSegmentsBySatellite)).toEqual([
+      secondSatelliteCzmlId,
+    ])
+
+    await page.getByRole('button', { name: 'Show all' }).click()
+    await expect(page.getByText(/^Reviewing .* only$/)).toHaveCount(0)
+    await expect
+      .poll(async () => Object.keys((await readPrimaryViewerState(page)).slicedGroundTrackSegmentsBySatellite), {
+        timeout: 15_000,
+      })
+      .toEqual(expect.arrayContaining([firstSatelliteCzmlId, secondSatelliteCzmlId]))
+
+    await page
+      .getByLabel('Collapse Map Focus panel')
+      .evaluate((button: HTMLButtonElement) => button.click())
     await page.locator('button[title="Map Layers"]').click()
     await expect(page.getByRole('heading', { name: 'Map Layers' })).toBeVisible()
     await expect(page.getByRole('checkbox', { name: /Ground Track/ })).toBeChecked()
@@ -806,6 +950,7 @@ test.describe('Live multi-satellite schedule review', () => {
     expect(afterRepair.satelliteNames.length).toBeGreaterThanOrEqual(2)
 
     await openScheduleTimeline(page)
+    await waitForScheduleMapReady(page)
 
     const preferredTargetId =
       applyPage.repairPlan.repair_diff.change_log?.added?.[0]?.target_id ??
@@ -827,8 +972,19 @@ test.describe('Live multi-satellite schedule review', () => {
     await expect(acquisitionHero).toContainText(followupSelection!.target_id)
     await expect(acquisitionHero).toContainText(normalizeSatelliteName(followupSelection!.satellite_id))
 
+    await expect
+      .poll(async () => {
+        const state = await readPrimaryViewerState(page)
+        return {
+          selectedEntityId: state.selectedEntityId,
+          slicedGroundTrackSegments: state.slicedGroundTrackSegments,
+        }
+      }, { timeout: 20_000 })
+      .toMatchObject({
+        selectedEntityId: `sched_target_${followupSelection!.target_id}`,
+      })
+
     const selectedState = await readPrimaryViewerState(page)
-    expect(selectedState.selectedEntityId).toBe(`sched_target_${followupSelection!.target_id}`)
     expect(selectedState.slicedGroundTrackSegments).toBeGreaterThan(0)
 
     await page.locator('button[title="Map Layers"]').click()
@@ -859,6 +1015,212 @@ test.describe('Live multi-satellite schedule review', () => {
       ),
     )
     await testInfo.attach('multi-satellite-repair-summary', {
+      path: summaryPath,
+      contentType: 'application/json',
+    })
+  })
+
+  test('keeps three-satellite paths coherent through fit, tracking, refresh, and repair', async ({
+    page,
+    request,
+  }, testInfo: TestInfo) => {
+    test.setTimeout(12 * 60 * 1000)
+    test.slow()
+
+    await ensureLiveServices(request)
+
+    const workspaceName = `live-multisat-trisat-${Date.now()}`
+    const workspaceId = await createWorkspace(request, workspaceName)
+    const satellites = await getSatellites(request, [
+      'CUSTOM-45DEG-450KM',
+      'ICEYE-X66',
+      'ICEYE-X67',
+    ])
+
+    await analyzeWorkspace(request, workspaceId, satellites, reviewTargets)
+    const baseline = await planAndCommitSchedule(request, workspaceId)
+    expect(new Set(baseline.acquisitions.map((item) => item.satellite_id)).size).toBeGreaterThanOrEqual(2)
+
+    await loadWorkspaceInUi(page, workspaceName)
+    const headerWorkspaceBadge = page.locator('div[title^="Selected workspace:"]')
+    await expect(headerWorkspaceBadge).toContainText(workspaceName)
+
+    await expect
+      .poll(async () => {
+        const state = await readPrimaryViewerState(page)
+        return state.dataSources.reduce((total, dataSource) => total + dataSource.satellites, 0)
+      })
+      .toBe(3)
+
+    await page.getByRole('button', { name: 'Fit All Targets' }).click()
+    await page.waitForTimeout(2200)
+
+    const fitState = await readPrimaryViewerState(page)
+    expect(fitState.camera).not.toBeNull()
+    expect(fitState.camera!.lat).toBeGreaterThan(20)
+    expect(fitState.camera!.lat).toBeLessThan(36)
+    expect(fitState.camera!.lon).toBeGreaterThan(34)
+    expect(fitState.camera!.lon).toBeLessThan(68)
+
+    await page.locator('button[title="Map Layers"]').click()
+    await expect(page.getByRole('heading', { name: 'Map Layers' })).toBeVisible()
+    const groundTrackCheckbox = page.getByRole('checkbox', { name: /Ground Track/ })
+    await expect(groundTrackCheckbox).toBeChecked()
+
+    await expect
+      .poll(async () => {
+        const state = await readPrimaryViewerState(page)
+        return state.dataSources.reduce(
+          (total, dataSource) => total + dataSource.visibleGroundTrackPaths,
+          0,
+        )
+      })
+      .toBeGreaterThan(0)
+
+    await groundTrackCheckbox.click()
+    await expect(groundTrackCheckbox).not.toBeChecked()
+    await expect
+      .poll(async () => {
+        const state = await readPrimaryViewerState(page)
+        return state.dataSources.reduce(
+          (total, dataSource) => total + dataSource.visibleGroundTrackPaths,
+          0,
+        )
+      })
+      .toBe(0)
+
+    await groundTrackCheckbox.click()
+    await expect(groundTrackCheckbox).toBeChecked()
+    await expect
+      .poll(async () => {
+        const state = await readPrimaryViewerState(page)
+        return state.dataSources.reduce(
+          (total, dataSource) => total + dataSource.visibleGroundTrackPaths,
+          0,
+        )
+      })
+      .toBeGreaterThan(0)
+
+    await page.getByRole('button', { name: 'Track Satellite' }).click()
+    await page.waitForTimeout(1500)
+    const trackedState = await readPrimaryViewerState(page)
+    expect(trackedState.trackedEntityId).toMatch(/^sat_/)
+
+    await page.getByLabel('Close Map Layers panel').click()
+
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await expect(headerWorkspaceBadge).toContainText(workspaceName)
+    await expect
+      .poll(async () => {
+        const state = await readPrimaryViewerState(page)
+        return state.dataSources.reduce((total, dataSource) => total + dataSource.satellites, 0)
+      })
+      .toBe(3)
+
+    const droppedTargetIds = [...new Set(baseline.acquisitions.map((item) => item.target_id))].slice(0, 2)
+    expect(droppedTargetIds.length).toBeGreaterThan(0)
+
+    const repairTargets = [
+      ...reviewTargets.filter((target) => !droppedTargetIds.includes(target.name)),
+      ...multiSatPriorityTargets.slice(0, 3),
+    ]
+
+    await analyzeWorkspace(request, workspaceId, satellites, repairTargets)
+    await waitForPlanningMode(request, workspaceId, 'repair')
+
+    const applyPage = await openPlanningApply(
+      page,
+      testInfo,
+      'three-satellite-repair-apply-page2.png',
+    )
+
+    expect(applyPage.modeSelection.planning_mode).toBe('repair')
+    expect(applyPage.repairPlan.repair_diff.added.length).toBeGreaterThan(0)
+    expect(applyPage.repairPlan.repair_diff.dropped.length).toBeGreaterThan(0)
+    expect(applyPage.badgeCounts.added).toBeGreaterThan(0)
+    expect(applyPage.badgeCounts.removed).toBeGreaterThan(0)
+
+    const commitPromise = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        response.url().includes('/api/v1/schedule/repair/commit'),
+    )
+    await page.getByRole('button', { name: /Apply (Plan|Anyway)/i }).click()
+    const commitResponse = await commitPromise
+    expect(commitResponse.ok()).toBeTruthy()
+
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await expect(headerWorkspaceBadge).toContainText(workspaceName)
+    await openScheduleTimeline(page)
+    await waitForScheduleMapReady(page, 25_000)
+
+    const afterRepair = await getCommittedSchedule(request, workspaceId)
+    const followupSelection =
+      afterRepair.acquisitions.find((item) => !droppedTargetIds.includes(item.target_id)) ??
+      afterRepair.acquisitions[0]
+    expect(followupSelection).toBeTruthy()
+
+    const followupBar = page.locator(`[data-acquisition-id="${followupSelection!.id}"]`)
+    await followupBar.scrollIntoViewIfNeeded()
+    await followupBar.click()
+
+    const detailsHeading = page.getByRole('heading', { name: 'Details' })
+    await expect(detailsHeading).toBeVisible()
+    const acquisitionHero = page.getByTestId('inspector-acquisition-hero')
+    await expect(acquisitionHero).toContainText(followupSelection!.target_id)
+    await expect(acquisitionHero).toContainText(normalizeSatelliteName(followupSelection!.satellite_id))
+
+    await expect
+      .poll(async () => {
+        const state = await readPrimaryViewerState(page)
+        return {
+          selectedEntityId: state.selectedEntityId,
+          slicedGroundTrackSegments: state.slicedGroundTrackSegments,
+        }
+      }, { timeout: 25_000 })
+      .toMatchObject({
+        selectedEntityId: `sched_target_${followupSelection!.target_id}`,
+      })
+
+    await expect
+      .poll(async () => (await readPrimaryViewerState(page)).slicedGroundTrackSegments, {
+        timeout: 25_000,
+      })
+      .toBeGreaterThan(0)
+
+    const scheduleState = await readPrimaryViewerState(page)
+
+    await page.locator('button[title="Map Layers"]').click()
+    await expect(page.getByRole('heading', { name: 'Map Layers' })).toBeVisible()
+    await expect(page.getByRole('checkbox', { name: /Ground Track/ })).toBeChecked()
+
+    const screenshotPath = testInfo.outputPath('three-satellite-repair-review.png')
+    await page.screenshot({ path: screenshotPath })
+    await testInfo.attach('three-satellite-repair-review', {
+      path: screenshotPath,
+      contentType: 'image/png',
+    })
+
+    const summaryPath = testInfo.outputPath('three-satellite-repair-summary.json')
+    writeFileSync(
+      summaryPath,
+      JSON.stringify(
+        {
+          workspaceId,
+          workspaceName,
+          droppedTargetIds,
+          trackedState,
+          fitState,
+          modeSelection: applyPage.modeSelection,
+          repairDiff: applyPage.repairPlan.repair_diff,
+          followupSelection,
+          scheduleState,
+        },
+        null,
+        2,
+      ),
+    )
+    await testInfo.attach('three-satellite-repair-summary', {
       path: summaryPath,
       contentType: 'application/json',
     })

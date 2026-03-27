@@ -47,6 +47,7 @@ interface ScheduleState {
   focusedTargetCoords: { lat: number; lon: number } | null
   focusedStartTime: string | null
   focusedSatelliteId: string | null
+  isolatedSatelliteId: string | null
 
   // Schedule viewer layer toggles (visual-only, no schedule filtering)
   schedLayerSatellites: boolean
@@ -111,6 +112,9 @@ interface ScheduleActions {
   /** Set the groundtrack polyline sampling cadence (dev-only). */
   setGroundtrackSampleStep: (step: 60 | 120 | 300) => void
 
+  /** Isolate a single satellite in the schedule map review. */
+  setIsolatedSatellite: (satelliteId: string | null) => void
+
   /** Clear all data */
   reset: () => void
 }
@@ -137,6 +141,7 @@ const INITIAL_STATE: ScheduleState = {
   focusedTargetCoords: null,
   focusedStartTime: null,
   focusedSatelliteId: null,
+  isolatedSatelliteId: null,
   schedLayerSatellites: true,
   schedLayerGroundtracks: true,
   schedLayerHighlight: true,
@@ -188,6 +193,10 @@ export const useScheduleStore = create<ScheduleStore>()(
           const { focusedAcquisitionId: currentFocusId } = get()
           const focusedStillExists =
             currentFocusId != null ? res.items.some((i) => i.id === currentFocusId) : false
+          const isolatedSatelliteStillExists =
+            get().isolatedSatelliteId != null
+              ? res.items.some((item) => item.satellite_id === get().isolatedSatelliteId)
+              : false
           const staleFields =
             currentFocusId != null && !focusedStillExists
               ? {
@@ -197,6 +206,10 @@ export const useScheduleStore = create<ScheduleStore>()(
                   focusedStartTime: null as string | null,
                   focusedSatelliteId: null as string | null,
                 }
+              : {}
+          const staleIsolation =
+            get().isolatedSatelliteId != null && !isolatedSatelliteStillExists
+              ? { isolatedSatelliteId: null as string | null }
               : {}
 
           set(
@@ -211,6 +224,7 @@ export const useScheduleStore = create<ScheduleStore>()(
               loading: false,
               lastFetchedAt: Date.now(),
               ...staleFields,
+              ...staleIsolation,
             },
             false,
             'fetchMaster/success',
@@ -253,6 +267,10 @@ export const useScheduleStore = create<ScheduleStore>()(
         const coords = lat != null && lon != null ? { lat, lon } : null
         const satelliteId = overrides?.satelliteId ?? item?.satellite_id ?? null
         const targetId = overrides?.targetId ?? item?.target_id ?? null
+        const shouldFollowIsolation =
+          satelliteId != null &&
+          get().isolatedSatelliteId != null &&
+          get().isolatedSatelliteId !== satelliteId
 
         set(
           {
@@ -261,6 +279,7 @@ export const useScheduleStore = create<ScheduleStore>()(
             focusedTargetCoords: coords,
             focusedStartTime: startTime,
             focusedSatelliteId: satelliteId,
+            ...(shouldFollowIsolation ? { isolatedSatelliteId: satelliteId } : {}),
           },
           false,
           'focusAcquisition',
@@ -278,6 +297,10 @@ export const useScheduleStore = create<ScheduleStore>()(
 
       setGroundtrackSampleStep: (step) => {
         set({ groundtrackSampleStep: step }, false, 'setGroundtrackSampleStep')
+      },
+
+      setIsolatedSatellite: (satelliteId) => {
+        set({ isolatedSatelliteId: satelliteId }, false, 'setIsolatedSatellite')
       },
 
       startPolling: (workspaceId, intervalMs = 15000) => {

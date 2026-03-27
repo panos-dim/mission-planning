@@ -55,6 +55,7 @@ import { useSelectionStore } from '../../store/selectionStore'
 import debug from '../../utils/debug'
 import { registerSatellites, getSatColor, getSatColorWithAlpha } from '../../utils/satelliteColors'
 import { buildScheduleTargetStatus, collectScheduleTargetGeo } from '../../utils/scheduleTargets'
+import * as workspacesApi from '../../api/workspaces'
 
 function getScheduleLockLabelOffset(targetName: string): number {
   return Math.min(12 + targetName.length * 3.8, 88)
@@ -173,6 +174,42 @@ function findTargetEntityByName(
   return null
 }
 
+function isMissionLikeDataSource(dataSource: DataSource | null | undefined): dataSource is DataSource {
+  if (!dataSource?.entities?.values) return false
+
+  return dataSource.entities.values.some((entity: Entity) => {
+    const id = entity.id ?? ''
+    return (
+      id.startsWith('sat_') ||
+      id.startsWith('target_') ||
+      id.startsWith('sched_target_') ||
+      id.includes('ground_track')
+    )
+  })
+}
+
+function resolveMissionDataSourceFromViewer(
+  viewer: {
+    dataSources?: {
+      length: number
+      get: (index: number) => DataSource
+    }
+  } | null,
+  preferred: DataSource | null,
+): DataSource | null {
+  if (isMissionLikeDataSource(preferred)) return preferred
+  if (!viewer?.dataSources || viewer.dataSources.length === 0) return null
+
+  for (let index = 0; index < viewer.dataSources.length; index += 1) {
+    const candidate = viewer.dataSources.get(index)
+    if (isMissionLikeDataSource(candidate)) {
+      return candidate
+    }
+  }
+
+  return null
+}
+
 interface GlobeViewportProps {
   mode: SceneMode
   viewportId: 'primary' | 'secondary'
@@ -180,7 +217,7 @@ interface GlobeViewportProps {
 }
 
 const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedCzml }) => {
-  const { state, addSceneObject, selectObject, setCesiumViewer } = useMission()
+  const { state, dispatch, addSceneObject, selectObject, setCesiumViewer } = useMission()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Cesium Viewer type stubs are incomplete (morphTo, bloom, timeline APIs)
   const viewerRef = useRef<any>(null)
   const eventHandlerRef = useRef<ScreenSpaceEventHandler | null>(null)
@@ -188,6 +225,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
   const lightingInitializedRef = useRef<string | null>(null)
   const [isUsingFallback, setIsUsingFallback] = useState(false)
   const imageryReplacedRef = useRef(false)
+  const workspaceCzmlRestoreRef = useRef<string | null>(null)
   // Loaded CZML DataSource — set from onLoad callback to guarantee availability
   const [loadedDataSource, setLoadedDataSource] = useState<DataSource | null>(null)
 
@@ -294,6 +332,115 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
   const czmlData = sharedCzml || state.czmlData
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- resium CzmlDataSource ref accessed directly (not via cesiumElement)
   const czmlDataSourceRef = useRef<any>(null)
+
+  useEffect(() => {
+    const activeWorkspaceId = state.activeWorkspace
+    const hasCzmlPackets = !!czmlData && czmlData.length > 0
+
+    if (!activeWorkspaceId || activeWorkspaceId === 'default' || hasCzmlPackets || loadedDataSource) {
+      return
+    }
+
+    if (workspaceCzmlRestoreRef.current === activeWorkspaceId) return
+    workspaceCzmlRestoreRef.current = activeWorkspaceId
+
+    let cancelled = false
+
+    const restoreWorkspaceMission = async () => {
+      try {
+        const workspaceData = await workspacesApi.getWorkspace(activeWorkspaceId, true)
+        if (cancelled) return
+
+        const missionData = workspaceData.analysis_state?.mission_data
+        const restoredCzmlData = workspaceData.czml_data
+
+        if (missionData && restoredCzmlData && restoredCzmlData.length > 0) {
+          debug.info(`[${viewportId}] Restoring workspace CZML directly in viewport`, {
+            workspaceId: activeWorkspaceId,
+            packets: restoredCzmlData.length,
+          })
+          dispatch({
+            type: 'SET_MISSION_DATA',
+            payload: {
+              missionData,
+              czmlData: restoredCzmlData,
+            },
+          })
+        }
+      } catch (error) {
+        console.warn(`[${viewportId}] Failed viewport-level workspace CZML restore`, error)
+      }
+    }
+
+    void restoreWorkspaceMission()
+
+    return () => {
+      cancelled = true
+    }
+  }, [czmlData, dispatch, loadedDataSource, state.activeWorkspace, viewportId])
+
+  useEffect(() => {
+    if (!czmlData || czmlData.length === 0) {
+      if (loadedDataSource !== null) {
+        setLoadedDataSource(null)
+      }
+      return
+    }
+
+    if (isMissionLikeDataSource(loadedDataSource)) return
+
+    let cancelled = false
+    let attempts = 0
+    let retryTimer: number | null = null
+
+    const syncLoadedDataSource = () => {
+      if (cancelled) return
+
+      const viewer = viewerRef.current?.cesiumElement ?? null
+      const resolved = resolveMissionDataSourceFromViewer(viewer, loadedDataSource)
+
+      if (resolved) {
+        debug.verbose(`[${viewportId}] Backfilled CZML datasource from viewer registry`)
+        setLoadedDataSource(resolved)
+        return
+      }
+
+      if (attempts >= 20) return
+      attempts += 1
+      retryTimer = window.setTimeout(syncLoadedDataSource, 150)
+    }
+
+    syncLoadedDataSource()
+
+    return () => {
+      cancelled = true
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer)
+      }
+    }
+  }, [czmlData, loadedDataSource, viewportId])
+
+  useEffect(() => {
+    if (!import.meta.env.DEV || viewportId !== 'primary') return
+
+    const viewer = viewerRef.current?.cesiumElement ?? null
+    const globalScope = globalThis as typeof globalThis & {
+      __primaryViewer?: unknown
+      __primaryGlobeDebug?: unknown
+    }
+
+    globalScope.__primaryViewer = viewer
+    globalScope.__primaryGlobeDebug = {
+      activeWorkspace: state.activeWorkspace,
+      missionTargets: state.missionData?.targets?.length ?? 0,
+      missionSatellites: state.missionData?.satellites?.length ?? 0,
+      stateCzmlLength: state.czmlData?.length ?? 0,
+      sharedCzmlLength: czmlData?.length ?? 0,
+      loadedDataSourceEntityCount: loadedDataSource?.entities?.values?.length ?? 0,
+      loadedDataSourceName: (loadedDataSource as { name?: string } | null)?.name ?? null,
+      viewerDataSources: viewer?.dataSources?.length ?? 0,
+    }
+  }, [czmlData, loadedDataSource, state.activeWorkspace, state.czmlData, state.missionData, viewportId])
 
   // Render preview targets on the map before mission analysis
   useEffect(() => {
