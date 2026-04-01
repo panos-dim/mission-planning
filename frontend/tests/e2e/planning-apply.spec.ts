@@ -1318,4 +1318,135 @@ test.describe('Planning apply confirmation UI', () => {
       await operatorBContext.close().catch(() => undefined)
     }
   })
+
+  test('fails closed when a delayed apply returns stale after another operator commits', async ({
+    browser,
+  }, testInfo) => {
+    test.setTimeout(180000)
+
+    const targets = [
+      { name: 'Alpha', latitude: 24.7136, longitude: 46.6753 },
+      { name: 'Bravo', latitude: 21.4858, longitude: 39.1925 },
+    ]
+
+    let successfulCommitCount = 0
+    let releaseDelayedCommit: (() => void) | null = null
+    const delayedCommitStarted = new Promise<void>((resolve) => {
+      releaseDelayedCommit = resolve
+    })
+    let delayedRouteRelease: (() => void) | null = null
+    const delayedRouteReady = new Promise<void>((resolve) => {
+      delayedRouteRelease = resolve
+    })
+
+    const operatorAContext = await browser.newContext()
+    const operatorBContext = await browser.newContext()
+    const operatorAPage = await operatorAContext.newPage()
+    const operatorBPage = await operatorBContext.newPage()
+
+    const mockSharedOperatorApis = async (page: Page, requestHash: string) => {
+      await mockCommonApis(page, targets)
+      await page.route('**/api/v1/schedule/horizon**', async (route) => {
+        await route.fulfill({ json: noScheduleHorizon })
+      })
+      await page.route('**/api/v1/schedule/mode-selection**', async (route) => {
+        await route.fulfill({
+          json: {
+            success: true,
+            planning_mode: 'from_scratch',
+            reason: 'No existing schedule found for workspace. Building new optimized schedule.',
+            workspace_id: 'default',
+            existing_acquisition_count: 0,
+            new_target_count: 2,
+            conflict_count: 0,
+            current_target_ids: [],
+            existing_target_ids: [],
+            request_payload_hash: requestHash,
+          },
+        })
+      })
+      await page.route('**/api/v1/planning/schedule**', async (route) => {
+        await route.fulfill({ json: fromScratchPlanningResponse })
+      })
+    }
+
+    try {
+      await Promise.all([
+        mockSharedOperatorApis(operatorAPage, 'delayed-race-operator-a-hash'),
+        mockSharedOperatorApis(operatorBPage, 'delayed-race-operator-b-hash'),
+      ])
+
+      await operatorAPage.route('**/api/v1/schedule/commit/direct', async (route) => {
+        delayedRouteRelease?.()
+        await delayedCommitStarted
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          json: {
+            detail: {
+              message:
+                'Schedule state changed before apply. Refresh conflicts and review the latest plan.',
+            },
+          },
+        })
+      })
+
+      await operatorBPage.route('**/api/v1/schedule/commit/direct', async (route) => {
+        successfulCommitCount += 1
+        await route.fulfill({
+          json: {
+            success: true,
+            message: 'Competing operator committed while delayed request was in flight',
+            plan_id: 'operator-b-plan',
+            committed: 2,
+            acquisition_ids: ['acq-alpha-1', 'acq-bravo-1'],
+            conflicts_detected: 0,
+            conflict_ids: [],
+          },
+        })
+      })
+
+      await openPlanningApplyStep(
+        operatorAPage,
+        targets,
+        testInfo,
+        'planning-apply-delayed-race-operator-a.png',
+      )
+      await openPlanningApplyStep(
+        operatorBPage,
+        targets,
+        testInfo,
+        'planning-apply-delayed-race-operator-b.png',
+      )
+
+      const operatorACommitResponse = operatorAPage.waitForResponse((response) =>
+        response.url().includes('/api/v1/schedule/commit/direct'),
+      )
+      await operatorAPage.getByRole('button', { name: 'Apply Plan' }).click()
+      await delayedRouteReady
+      await expect(operatorAPage.getByRole('button', { name: 'Applying…' })).toBeVisible()
+
+      const operatorBCommitResponse = operatorBPage.waitForResponse((response) =>
+        response.url().includes('/api/v1/schedule/commit/direct'),
+      )
+      await operatorBPage.getByRole('button', { name: 'Apply Plan' }).click()
+      expect((await operatorBCommitResponse).ok()).toBeTruthy()
+      await expect.poll(() => successfulCommitCount, { timeout: 5000 }).toBe(1)
+
+      releaseDelayedCommit?.()
+      expect((await operatorACommitResponse).status()).toBe(409)
+
+      await expect(operatorAPage.getByRole('heading', { name: 'Ready to Apply' })).toBeVisible()
+      await expect(
+        operatorAPage.getByText(
+          'Schedule state changed before apply. Refresh conflicts and review the latest plan.',
+          { exact: true },
+        ),
+      ).toBeVisible()
+      await expect(operatorAPage.getByRole('button', { name: 'Apply Plan' })).toBeVisible()
+    } finally {
+      await operatorAContext.close().catch(() => undefined)
+      await operatorBContext.close().catch(() => undefined)
+    }
+  })
 })
