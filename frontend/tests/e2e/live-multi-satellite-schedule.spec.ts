@@ -838,7 +838,7 @@ test.describe('Live multi-satellite schedule review', () => {
       secondSatelliteCzmlId,
     ])
 
-    await page.getByRole('button', { name: 'Show all' }).click()
+    await page.getByRole('button', { name: 'Show all', exact: true }).click()
     await expect(page.getByText(/^Reviewing .* only$/)).toHaveCount(0)
     await expect
       .poll(async () => Object.keys((await readPrimaryViewerState(page)).slicedGroundTrackSegmentsBySatellite), {

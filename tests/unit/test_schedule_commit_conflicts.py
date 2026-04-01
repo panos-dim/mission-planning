@@ -674,6 +674,62 @@ class TestScheduleCommitConflictDetection:
         assert conflicts.status_code == 200, conflicts.json()
         assert len(conflicts.json()["conflicts"]) >= 1, conflicts.json()
 
+    def test_direct_commit_rechecks_conflicts_after_preview_when_state_changes(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Commit must fail closed if schedule state changes after a clean preview."""
+        client, db, workspace_id = isolated_schedule_api
+
+        base_start = datetime.now(timezone.utc) + timedelta(days=22)
+        candidate_item = {
+            "opportunity_id": "stale-preview-1",
+            "satellite_id": "SAT-1",
+            "target_id": "RACE-TARGET",
+            "start_time": _iso(base_start),
+            "end_time": _iso(base_start + timedelta(minutes=5)),
+            "roll_angle_deg": 0.0,
+            "pitch_angle_deg": 0.0,
+        }
+
+        preview = client.post(
+            "/api/v1/schedule/commit/direct/preview",
+            json={
+                "workspace_id": workspace_id,
+                "items": [candidate_item],
+            },
+        )
+        assert preview.status_code == 200, preview.json()
+        assert preview.json()["conflicts_count"] == 0, preview.json()
+
+        # Simulate another operator or process committing a conflicting acquisition
+        # after preview but before the original operator applies.
+        db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="OTHER-OPERATOR",
+            start_time=_iso(base_start + timedelta(minutes=1)),
+            end_time=_iso(base_start + timedelta(minutes=6)),
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="committed",
+            workspace_id=workspace_id,
+        )
+
+        direct_commit = client.post(
+            "/api/v1/schedule/commit/direct",
+            json={
+                "workspace_id": workspace_id,
+                "algorithm": "regression_test",
+                "lock_level": "none",
+                "items": [candidate_item],
+            },
+        )
+
+        assert direct_commit.status_code == 409, direct_commit.json()
+        detail = direct_commit.json()["detail"]
+        assert "predicted_conflicts" in detail, detail
+        assert detail["predicted_conflicts"], detail
+        assert detail["predicted_conflicts"][0]["type"] == "temporal_overlap", detail
+
     def test_schedule_plan_accepts_future_aware_opportunities(
         self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
     ) -> None:
