@@ -787,6 +787,148 @@ class TestScheduleCommitConflictDetection:
         assert detail["predicted_conflicts"], detail
         assert detail["predicted_conflicts"][0]["type"] == "temporal_overlap", detail
 
+    def test_second_operator_commit_is_blocked_after_first_operator_applies_overlap(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Two clean previews must not allow overlapping commits in the same workspace."""
+        client, _db, workspace_id = isolated_schedule_api
+
+        base_start = datetime.now(timezone.utc) + timedelta(days=23)
+        operator_a_item = {
+            "opportunity_id": "operator-a-1",
+            "satellite_id": "SAT-1",
+            "target_id": "A-TARGET",
+            "start_time": _iso(base_start),
+            "end_time": _iso(base_start + timedelta(minutes=5)),
+            "roll_angle_deg": 0.0,
+            "pitch_angle_deg": 0.0,
+        }
+        operator_b_item = {
+            "opportunity_id": "operator-b-1",
+            "satellite_id": "SAT-1",
+            "target_id": "B-TARGET",
+            "start_time": _iso(base_start + timedelta(minutes=2)),
+            "end_time": _iso(base_start + timedelta(minutes=7)),
+            "roll_angle_deg": 0.0,
+            "pitch_angle_deg": 0.0,
+        }
+
+        preview_a = client.post(
+            "/api/v1/schedule/commit/direct/preview",
+            json={"workspace_id": workspace_id, "items": [operator_a_item]},
+        )
+        assert preview_a.status_code == 200, preview_a.json()
+        assert preview_a.json()["conflicts_count"] == 0, preview_a.json()
+
+        preview_b = client.post(
+            "/api/v1/schedule/commit/direct/preview",
+            json={"workspace_id": workspace_id, "items": [operator_b_item]},
+        )
+        assert preview_b.status_code == 200, preview_b.json()
+        assert preview_b.json()["conflicts_count"] == 0, preview_b.json()
+
+        commit_a = client.post(
+            "/api/v1/schedule/commit/direct",
+            json={
+                "workspace_id": workspace_id,
+                "algorithm": "operator_a",
+                "lock_level": "none",
+                "items": [operator_a_item],
+            },
+        )
+        assert commit_a.status_code == 200, commit_a.json()
+        assert commit_a.json()["committed"] == 1, commit_a.json()
+
+        commit_b = client.post(
+            "/api/v1/schedule/commit/direct",
+            json={
+                "workspace_id": workspace_id,
+                "algorithm": "operator_b",
+                "lock_level": "none",
+                "items": [operator_b_item],
+            },
+        )
+        assert commit_b.status_code == 409, commit_b.json()
+        detail = commit_b.json()["detail"]
+        assert detail["predicted_conflicts"], detail
+        assert any(
+            conflict["type"] == "temporal_overlap"
+            for conflict in detail["predicted_conflicts"]
+        ), detail
+
+        state = client.get(
+            "/api/v1/schedule/state",
+            params={"workspace_id": workspace_id},
+        )
+        assert state.status_code == 200, state.json()
+        acquisitions = state.json()["state"]["acquisitions"]
+        assert len(acquisitions) == 1, state.json()
+        assert acquisitions[0]["target_id"] == "A-TARGET", state.json()
+
+    def test_second_operator_force_commit_persists_conflicts_after_overlap_race(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """A forced second operator commit should persist the overlap conflict for review."""
+        client, _db, workspace_id = isolated_schedule_api
+
+        base_start = datetime.now(timezone.utc) + timedelta(days=24)
+        operator_a_item = {
+            "opportunity_id": "operator-a-force-1",
+            "satellite_id": "SAT-1",
+            "target_id": "A-FORCE",
+            "start_time": _iso(base_start),
+            "end_time": _iso(base_start + timedelta(minutes=5)),
+            "roll_angle_deg": 0.0,
+            "pitch_angle_deg": 0.0,
+        }
+        operator_b_item = {
+            "opportunity_id": "operator-b-force-1",
+            "satellite_id": "SAT-1",
+            "target_id": "B-FORCE",
+            "start_time": _iso(base_start + timedelta(minutes=2)),
+            "end_time": _iso(base_start + timedelta(minutes=7)),
+            "roll_angle_deg": 0.0,
+            "pitch_angle_deg": 0.0,
+        }
+
+        commit_a = client.post(
+            "/api/v1/schedule/commit/direct",
+            json={
+                "workspace_id": workspace_id,
+                "algorithm": "operator_a_force",
+                "lock_level": "none",
+                "items": [operator_a_item],
+            },
+        )
+        assert commit_a.status_code == 200, commit_a.json()
+
+        commit_b = client.post(
+            "/api/v1/schedule/commit/direct",
+            json={
+                "workspace_id": workspace_id,
+                "algorithm": "operator_b_force",
+                "lock_level": "none",
+                "force": True,
+                "items": [operator_b_item],
+            },
+        )
+        assert commit_b.status_code == 200, commit_b.json()
+        payload = commit_b.json()
+        assert payload["conflicts_detected"] >= 1, payload
+        assert payload["conflict_ids"], payload
+
+        conflicts = client.get(
+            "/api/v1/schedule/conflicts",
+            params={"workspace_id": workspace_id},
+        )
+        assert conflicts.status_code == 200, conflicts.json()
+        conflict_payload = conflicts.json()
+        assert len(conflict_payload["conflicts"]) >= 1, conflict_payload
+        assert any(
+            conflict["type"] == "temporal_overlap"
+            for conflict in conflict_payload["conflicts"]
+        ), conflict_payload
+
     def test_schedule_plan_accepts_future_aware_opportunities(
         self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
     ) -> None:
