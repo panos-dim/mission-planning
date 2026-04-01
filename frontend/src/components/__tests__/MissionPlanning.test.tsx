@@ -16,6 +16,7 @@ const {
   useScheduleContextMock,
   getPlanningModeSelectionMock,
   createRepairPlanMock,
+  previewDirectCommitMock,
   planningScheduleMock,
   invalidateQueriesMock,
 } = vi.hoisted(() => ({
@@ -24,6 +25,7 @@ const {
   useScheduleContextMock: vi.fn(),
   getPlanningModeSelectionMock: vi.fn(),
   createRepairPlanMock: vi.fn(),
+  previewDirectCommitMock: vi.fn(),
   planningScheduleMock: vi.fn(),
   invalidateQueriesMock: vi.fn(),
 }))
@@ -40,6 +42,7 @@ vi.mock('../../hooks/queries', () => ({
 vi.mock('../../api/scheduleApi', () => ({
   getPlanningModeSelection: getPlanningModeSelectionMock,
   createRepairPlan: createRepairPlanMock,
+  previewDirectCommit: previewDirectCommitMock,
 }))
 
 vi.mock('../../api', () => ({
@@ -302,10 +305,19 @@ describe('MissionPlanning', () => {
     useScheduleContextMock.mockReset()
     getPlanningModeSelectionMock.mockReset()
     createRepairPlanMock.mockReset()
+    previewDirectCommitMock.mockReset()
     planningScheduleMock.mockReset()
     invalidateQueriesMock.mockReset()
 
     invalidateQueriesMock.mockResolvedValue(undefined)
+    previewDirectCommitMock.mockResolvedValue({
+      success: true,
+      message: 'Preview ready',
+      new_items_count: 1,
+      conflicts_count: 0,
+      conflicts: [],
+      warnings: [],
+    })
 
     useMissionMock.mockReturnValue({
       state: {

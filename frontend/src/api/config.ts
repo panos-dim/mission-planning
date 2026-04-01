@@ -37,6 +37,7 @@ export const API_ENDPOINTS = {
 
   // Schedule endpoints
   SCHEDULE_COMMIT_DIRECT: '/api/v1/schedule/commit/direct',
+  SCHEDULE_COMMIT_DIRECT_PREVIEW: '/api/v1/schedule/commit/direct/preview',
   SCHEDULE_HORIZON: '/api/v1/schedule/horizon',
   SCHEDULE_STATE: '/api/v1/schedule/state',
   SCHEDULE_CONFLICTS: '/api/v1/schedule/conflicts',

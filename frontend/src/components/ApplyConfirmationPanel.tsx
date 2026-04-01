@@ -15,7 +15,7 @@ import {
 import type { CommitPreview, ConflictInfo } from './ConflictWarningModal'
 import type { AddedEntry, DroppedEntry, MovedEntry, RepairDiff } from '../api/scheduleApi'
 import { cn } from './ui/utils'
-import { normalizeRepairDiffForDisplay } from '../utils/repairDisplay'
+import { getRepairDisplayCounts, normalizeRepairDiffForDisplay } from '../utils/repairDisplay'
 
 interface TargetStatistics {
   total_targets: number
@@ -155,6 +155,7 @@ export default function ApplyConfirmationPanel({
   const totalScheduled = scheduleData?.schedule.length ?? preview.new_items_count
   const summaryStats = scheduleData?.summaryStats
   const isRepairMode = !!rd
+  const repairDisplayCounts = rd ? getRepairDisplayCounts(rd) : null
   const assignmentRows: AssignmentRow[] = useMemo(
     () =>
       isRepairMode
@@ -257,6 +258,15 @@ export default function ApplyConfirmationPanel({
 
       {/* Scrollable Content */}
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+        <div className="space-y-1">
+          <h4 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+            Operations Snapshot
+          </h4>
+          <div className="text-[11px] text-gray-500">
+            Review the exact changes and any conflicts before committing.
+          </div>
+        </div>
+
         {/* ── Stats Row ── */}
         <div className="grid grid-cols-3 gap-2">
           <div className="bg-gray-800/60 rounded-lg p-2.5 text-center border border-gray-700/40">
@@ -282,6 +292,25 @@ export default function ApplyConfirmationPanel({
             <div className="text-[10px] text-gray-500 uppercase tracking-wide mt-0.5">Targets</div>
           </div>
         </div>
+
+        {repairDisplayCounts ? (
+          <div className="flex flex-wrap gap-1.5">
+            <SummaryChip label={`${repairDisplayCounts.kept} kept`} tone="neutral" />
+            {repairDisplayCounts.added > 0 && (
+              <SummaryChip label={`${repairDisplayCounts.added} added`} tone="added" />
+            )}
+            {repairDisplayCounts.moved > 0 && (
+              <SummaryChip label={`${repairDisplayCounts.moved} moved`} tone="moved" />
+            )}
+            {repairDisplayCounts.dropped > 0 && (
+              <SummaryChip label={`${repairDisplayCounts.dropped} dropped`} tone="removed" />
+            )}
+          </div>
+        ) : assignmentCounts.added > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            <SummaryChip label={`${assignmentCounts.added} new`} tone="added" />
+          </div>
+        ) : null}
 
         {/* ── Target Assignments ── */}
         {assignmentRows.length > 0 && (
@@ -541,6 +570,28 @@ export default function ApplyConfirmationPanel({
 }
 
 // ── Conflict row sub-component ──
+
+function SummaryChip({
+  label,
+  tone,
+}: {
+  label: string
+  tone: 'neutral' | 'added' | 'moved' | 'removed'
+}): JSX.Element {
+  return (
+    <div
+      className={cn(
+        'rounded-full border px-2.5 py-1 text-[11px] font-medium',
+        tone === 'neutral' && 'border-gray-700/70 bg-gray-900/70 text-gray-300',
+        tone === 'added' && 'border-blue-500/30 bg-blue-950/30 text-blue-200',
+        tone === 'moved' && 'border-orange-500/30 bg-orange-950/30 text-orange-200',
+        tone === 'removed' && 'border-red-500/30 bg-red-950/30 text-red-200',
+      )}
+    >
+      {label}
+    </div>
+  )
+}
 
 function ConflictItem({ conflict }: { conflict: ConflictInfo }): JSX.Element {
   const isError = conflict.severity === 'error'

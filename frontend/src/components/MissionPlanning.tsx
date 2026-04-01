@@ -14,6 +14,7 @@ import { ApiError, NetworkError, TimeoutError } from '../api/errors'
 import {
   createRepairPlan,
   getPlanningModeSelection,
+  previewDirectCommit,
   type PlanningMode,
   type RepairPlanResponse,
 } from '../api/scheduleApi'
@@ -23,11 +24,16 @@ import { queryClient, queryKeys } from '../lib/queryClient'
 import { type CommitPreview, type ConflictInfo } from './ConflictWarningModal'
 import ApplyConfirmationPanel from './ApplyConfirmationPanel'
 import { RepairDiffPanel } from './RepairDiffPanel'
+import { scheduleToDirectCommitItems } from '../utils/commitItems'
 
 import { isDebugMode } from '../constants/simpleMode'
 
 interface MissionPlanningProps {
-  onPromoteToOrders?: (algorithm: string, result: AlgorithmResult) => void | Promise<void>
+  onPromoteToOrders?: (
+    algorithm: string,
+    result: AlgorithmResult,
+    options?: { force?: boolean },
+  ) => void | Promise<void>
 }
 
 export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningProps): JSX.Element {
@@ -72,6 +78,7 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
   const [showCommitModal, setShowCommitModal] = useState(false)
   const [commitPreview, setCommitPreview] = useState<CommitPreview | null>(null)
   const [isCommitting, setIsCommitting] = useState(false)
+  const [isPreparingCommitPreview, setIsPreparingCommitPreview] = useState(false)
   const [pendingCommitAlgorithm, setPendingCommitAlgorithm] = useState<string | null>(null)
   const commitGuardRef = useRef(false)
   const planningGuardRef = useRef(false)
@@ -460,7 +467,7 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
     usePlanningStore.getState().clearResults()
   }
 
-  const handleAcceptPlan = () => {
+  const handleAcceptPlan = async () => {
     if (!results || !results[activeTab]) return
 
     // Build commit preview based on planning mode
@@ -491,51 +498,50 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
     }
 
     // ── From-scratch mode: client-side temporal overlap detection ──
-    if (schedulingReasoning?.mode !== 'repair' && result.schedule.length > 1) {
-      const bySat: Record<string, typeof result.schedule> = {}
-      for (const s of result.schedule) {
-        if (!bySat[s.satellite_id]) bySat[s.satellite_id] = []
-        bySat[s.satellite_id].push(s)
-      }
-      for (const [satId, items] of Object.entries(bySat)) {
-        const sorted = [...items].sort((a, b) => a.start_time.localeCompare(b.start_time))
-        for (let i = 0; i < sorted.length - 1; i++) {
-          const cur = sorted[i]
-          const nxt = sorted[i + 1]
-          const endMs = new Date(cur.end_time).getTime()
-          const startMs = new Date(nxt.start_time).getTime()
-          const gapS = (startMs - endMs) / 1000
-          if (gapS < 0) {
-            const overlapS = Math.abs(gapS)
-            conflicts.push({
-              type: 'temporal_overlap',
-              severity: 'error',
-              description: `${satId}: ${cur.target_id} and ${nxt.target_id} overlap by ${overlapS.toFixed(1)}s`,
-              satellite_id: satId,
-              reason:
-                'Two acquisitions on the same satellite overlap in time. The satellite cannot image two targets simultaneously.',
-              details: {
-                overlap_seconds: overlapS,
-                acq1_target: cur.target_id,
-                acq2_target: nxt.target_id,
-              },
-            })
-          } else if (gapS < 10) {
-            conflicts.push({
-              type: 'slew_infeasible',
-              severity: 'warning',
-              description: `${satId}: only ${gapS.toFixed(1)}s gap between ${cur.target_id} and ${nxt.target_id} — slew may be infeasible`,
-              satellite_id: satId,
-              reason:
-                'The gap between consecutive acquisitions may be too short for the satellite to repoint safely.',
-              details: {
-                available_time_s: gapS,
-                acq1_target: cur.target_id,
-                acq2_target: nxt.target_id,
-              },
-            })
-          }
+    const previewWarnings: string[] = []
+
+    if (schedulingReasoning?.mode !== 'repair') {
+      setIsPreparingCommitPreview(true)
+      try {
+        const backendPreview = await previewDirectCommit({
+          items: scheduleToDirectCommitItems(result.schedule),
+          workspace_id: workspaceId,
+        })
+        const backendConflicts = Array.isArray(backendPreview.conflicts)
+          ? backendPreview.conflicts
+          : []
+        const backendWarnings = Array.isArray(backendPreview.warnings)
+          ? backendPreview.warnings
+          : []
+
+        for (const conflict of backendConflicts) {
+          const details = conflict.details as ConflictInfo['details']
+          conflicts.push({
+            type: conflict.type,
+            severity:
+              conflict.severity === 'error' || conflict.severity === 'warning'
+                ? conflict.severity
+                : 'info',
+            description: conflict.description,
+            affected_acquisitions: conflict.acquisition_ids,
+            satellite_id: (details?.satellite_id as string) ?? undefined,
+            reason: conflict.reason,
+            details,
+          })
         }
+        previewWarnings.push(...backendWarnings)
+      } catch (err) {
+        let message = 'Failed to prepare apply preview'
+        if (err instanceof ApiError) {
+          const detail = (err.data as Record<string, unknown>)?.detail
+          message = typeof detail === 'string' ? detail : err.message
+        } else if (err instanceof Error) {
+          message = err.message
+        }
+        setError(message)
+        return
+      } finally {
+        setIsPreparingCommitPreview(false)
       }
     }
 
@@ -543,7 +549,7 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
       new_items_count: result.schedule.length,
       conflicts_count: conflicts.length,
       conflicts,
-      warnings: [],
+      warnings: previewWarnings,
     }
 
     // Note: repair mode with 0 drops is just incremental addition — no warning needed.
@@ -579,7 +585,9 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
       setIsCommitting(true)
       try {
         // Await the async handler so the guard holds until the commit completes
-        await onPromoteToOrders(pendingCommitAlgorithm, results[pendingCommitAlgorithm])
+        await onPromoteToOrders(pendingCommitAlgorithm, results[pendingCommitAlgorithm], {
+          force: !!commitPreview?.conflicts.some((conflict) => conflict.severity === 'error'),
+        })
       } finally {
         setIsCommitting(false)
         setShowCommitModal(false)
@@ -1500,10 +1508,11 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
             <>
               <button
                 onClick={handleAcceptPlan}
-                className="w-full px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm font-semibold text-white"
+                disabled={isPreparingCommitPreview}
+                className="w-full px-3 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-semibold text-white"
                 title="Proceed to apply confirmation"
               >
-                Next
+                {isPreparingCommitPreview ? 'Preparing Review...' : 'Next'}
               </button>
               <button
                 onClick={handleClearResults}

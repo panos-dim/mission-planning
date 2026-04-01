@@ -695,7 +695,8 @@ async function applyPlan(page: Page, planKind: 'direct' | 'repair') {
   const commitResponsePromise = page.waitForResponse((response) =>
     planKind === 'repair'
       ? response.url().includes('/api/v1/schedule/repair/commit')
-      : response.url().includes('/api/v1/schedule/commit/direct'),
+      : response.url().includes('/api/v1/schedule/commit/direct') &&
+        !response.url().includes('/api/v1/schedule/commit/direct/preview'),
   )
   await page.getByRole('button', { name: /Apply (Plan|Anyway)/i }).click()
   const commitResponse = await commitResponsePromise
@@ -718,6 +719,8 @@ async function expectApplyStats(
 }
 
 async function mockSimulationApis(page: Page, state: SimulationState, pool: SimTarget[]) {
+  const appliedCommitSignatures = new Set<string>()
+
   await page.route('**/api/v1/workspaces?**', async (route) => {
     await route.fulfill({
       json: {
@@ -741,6 +744,29 @@ async function mockSimulationApis(page: Page, state: SimulationState, pool: SimT
     await route.fulfill({ json: managedSatellitesResponse })
   })
 
+  await page.route('**/api/v1/config/sar-modes**', async (route) => {
+    await route.fulfill({
+      json: {
+        success: true,
+        modes: {},
+      },
+    })
+  })
+
+  await page.route('**/api/v1/schedule/conflicts**', async (route) => {
+    await route.fulfill({
+      json: {
+        success: true,
+        conflicts: [],
+        summary: {
+          total: 0,
+          by_type: {},
+          by_severity: {},
+        },
+      },
+    })
+  })
+
   await page.route('**/api/v1/planning/opportunities**', async (route) => {
     await route.fulfill({ json: buildOpportunitiesResponse(state.currentTargets) })
   })
@@ -760,6 +786,30 @@ async function mockSimulationApis(page: Page, state: SimulationState, pool: SimT
           by_state: state.committed.length > 0 ? { committed: state.committed.length } : {},
           by_satellite: state.committed.length > 0 ? { 'SAT-1': state.committed.length } : {},
         },
+      },
+    })
+  })
+
+  await page.route('**/api/v1/schedule/master**', async (route) => {
+    await route.fulfill({
+      json: {
+        success: true,
+        zoom: 'detail',
+        total: state.committed.length,
+        items: state.committed.map((item) => ({
+          id: item.id,
+          satellite_id: item.satellite_id,
+          target_id: item.target_id,
+          start_time: item.start_time,
+          end_time: item.end_time,
+          state: item.state,
+          lock_level: item.lock_level,
+          workspace_id: workspaceId,
+          mode: 'Optical',
+        })),
+        buckets: [],
+        t_start: '2026-03-24T00:00:00Z',
+        t_end: '2026-03-31T00:00:00Z',
       },
     })
   })
@@ -807,13 +857,40 @@ async function mockSimulationApis(page: Page, state: SimulationState, pool: SimT
     await route.fulfill({ json: buildRepairResponse(state, plan) })
   })
 
+  await page.route('**/api/v1/schedule/commit/direct/preview**', async (route) => {
+    const requestBody = route.request().postDataJSON() as { items?: unknown[] }
+    const itemCount = Array.isArray(requestBody.items) ? requestBody.items.length : 0
+    await route.fulfill({
+      json: {
+        success: true,
+        message: 'Preview ready',
+        new_items_count: itemCount,
+        conflicts_count: 0,
+        conflicts: [],
+        warnings: [],
+      },
+    })
+  })
+
   await page.route('**/api/v1/schedule/commit/direct**', async (route) => {
     const plan = state.pendingPlan
     if (!plan) {
-      await route.fulfill({ status: 500, json: { detail: 'No pending plan to commit' } })
+      await route.fulfill({
+        json: {
+          success: true,
+          message: 'Duplicate commit ignored',
+          plan_id: `weekly-direct-noop-${state.iteration + 1}`,
+          committed: 0,
+          acquisition_ids: [],
+        },
+      })
       return
     }
-    applyPlanToState(state, plan)
+    const signature = route.request().postData() ?? `direct-${state.iteration}`
+    if (!appliedCommitSignatures.has(signature)) {
+      appliedCommitSignatures.add(signature)
+      applyPlanToState(state, plan)
+    }
     await route.fulfill({
       json: {
         success: true,
@@ -828,10 +905,26 @@ async function mockSimulationApis(page: Page, state: SimulationState, pool: SimT
   await page.route('**/api/v1/schedule/repair/commit**', async (route) => {
     const plan = state.pendingPlan
     if (!plan) {
-      await route.fulfill({ status: 500, json: { detail: 'No pending repair plan to commit' } })
+      await route.fulfill({
+        json: {
+          success: true,
+          message: 'Duplicate repair commit ignored',
+          plan_id: `weekly-repair-noop-${state.iteration + 1}`,
+          committed: 0,
+          dropped: 0,
+          audit_log_id: `audit-weekly-noop-${state.iteration + 1}`,
+          conflicts_after: 0,
+          warnings: [],
+          acquisition_ids: [],
+        },
+      })
       return
     }
-    applyPlanToState(state, plan)
+    const signature = route.request().postData() ?? `repair-${state.iteration}`
+    if (!appliedCommitSignatures.has(signature)) {
+      appliedCommitSignatures.add(signature)
+      applyPlanToState(state, plan)
+    }
     await route.fulfill({
       json: {
         success: true,

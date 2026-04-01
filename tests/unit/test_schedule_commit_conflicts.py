@@ -7,13 +7,77 @@ verify the full plan -> commit workflow without needing a live server.
 
 import hashlib
 import os
+import sys
 import tempfile
+import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Generator, Optional, Tuple
 
 import pytest
 from fastapi.testclient import TestClient
+
+
+def _install_orbit_predictor_stub() -> None:
+    """Provide a lightweight orbit_predictor stub for import-only test coverage.
+
+    These API tests exercise schedule commit endpoints and do not rely on real
+    orbit propagation. Importing backend.main pulls in mission_planner modules
+    that import orbit_predictor, which fails in this local environment due to a
+    numba/scipy binary mismatch. A minimal stub keeps the schedule stack
+    importable without changing production code paths.
+    """
+
+    if "orbit_predictor" in sys.modules:
+        return
+
+    orbit_predictor = types.ModuleType("orbit_predictor")
+    sources = types.ModuleType("orbit_predictor.sources")
+    predictors = types.ModuleType("orbit_predictor.predictors")
+    locations = types.ModuleType("orbit_predictor.locations")
+
+    class _DummyPosition:
+        position_llh = (0.0, 0.0, 500.0)
+        altitude_km = 500.0
+
+    class _DummyPredictor:
+        period = 90.0
+
+        def get_position(self, _timestamp):
+            return _DummyPosition()
+
+    class MemoryTLESource:
+        pass
+
+    class TLEPredictor(_DummyPredictor):
+        pass
+
+    class Location:
+        def __init__(self, name: str = "stub", latitude_deg: float = 0.0, longitude_deg: float = 0.0, elevation_m: float = 0.0):
+            self.name = name
+            self.latitude_deg = latitude_deg
+            self.longitude_deg = longitude_deg
+            self.elevation_m = elevation_m
+
+    def get_predictor_from_tle_lines(_tle_lines):
+        return _DummyPredictor()
+
+    sources.get_predictor_from_tle_lines = get_predictor_from_tle_lines
+    sources.MemoryTLESource = MemoryTLESource
+    predictors.TLEPredictor = TLEPredictor
+    locations.Location = Location
+
+    orbit_predictor.sources = sources
+    orbit_predictor.predictors = predictors
+    orbit_predictor.locations = locations
+
+    sys.modules["orbit_predictor"] = orbit_predictor
+    sys.modules["orbit_predictor.sources"] = sources
+    sys.modules["orbit_predictor.predictors"] = predictors
+    sys.modules["orbit_predictor.locations"] = locations
+
+
+_install_orbit_predictor_stub()
 
 from backend.main import (
     app,
@@ -61,6 +125,11 @@ def isolated_schedule_api() -> Generator[Tuple[TestClient, ScheduleDB, str], Non
 def _iso(dt: datetime) -> str:
     """Format a UTC datetime with a trailing Z."""
     return dt.isoformat().replace("+00:00", "Z")
+
+
+def _state_iso(dt: datetime) -> str:
+    """Format a UTC datetime for app-state fixtures that parse via fromisoformat."""
+    return dt.isoformat()
 
 
 def _create_plan(
@@ -504,6 +573,106 @@ class TestScheduleCommitConflictDetection:
         )
         assert placeholder_workspace is not None
         assert placeholder_workspace.id == requested_workspace_id
+
+    def test_direct_commit_preview_reports_conflicts_before_apply(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Preview should expose enriched conflict metadata for the exact commit payload."""
+        client, db, workspace_id = isolated_schedule_api
+
+        base_start = datetime.now(timezone.utc) + timedelta(days=20)
+        db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="EXISTING",
+            start_time=_iso(base_start),
+            end_time=_iso(base_start + timedelta(minutes=5)),
+            roll_angle_deg=0.0,
+            workspace_id=workspace_id,
+            state="committed",
+        )
+
+        preview = client.post(
+            "/api/v1/schedule/commit/direct/preview",
+            json={
+                "workspace_id": workspace_id,
+                "items": [
+                    {
+                        "opportunity_id": "preview-overlap-1",
+                        "satellite_id": "SAT-1",
+                        "target_id": "NEW-TARGET",
+                        "start_time": _iso(base_start + timedelta(minutes=2)),
+                        "end_time": _iso(base_start + timedelta(minutes=7)),
+                        "roll_angle_deg": 0.0,
+                        "pitch_angle_deg": 0.0,
+                    }
+                ],
+            },
+        )
+
+        assert preview.status_code == 200, preview.json()
+        payload = preview.json()
+        assert payload["conflicts_count"] >= 1, payload
+        overlap = next(
+            (
+                conflict
+                for conflict in payload["conflicts"]
+                if conflict["type"] == "temporal_overlap"
+            ),
+            None,
+        )
+        assert overlap is not None, payload
+        assert overlap["details"]["satellite_id"] == "SAT-1"
+        assert overlap["details"]["acq1_target"] == "EXISTING"
+        assert overlap["details"]["acq2_target"] == "NEW-TARGET"
+
+    def test_force_direct_commit_recomputes_and_persists_conflicts(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Forced direct commits should still refresh persisted conflict state for the UI."""
+        client, db, workspace_id = isolated_schedule_api
+
+        base_start = datetime.now(timezone.utc) + timedelta(days=21)
+        db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="EXISTING",
+            start_time=_iso(base_start),
+            end_time=_iso(base_start + timedelta(minutes=5)),
+            roll_angle_deg=0.0,
+            workspace_id=workspace_id,
+            state="committed",
+        )
+
+        direct_commit = client.post(
+            "/api/v1/schedule/commit/direct",
+            json={
+                "workspace_id": workspace_id,
+                "algorithm": "regression_test",
+                "lock_level": "none",
+                "force": True,
+                "items": [
+                    {
+                        "opportunity_id": "forced-overlap-1",
+                        "satellite_id": "SAT-1",
+                        "target_id": "NEW-TARGET",
+                        "start_time": _iso(base_start + timedelta(minutes=2)),
+                        "end_time": _iso(base_start + timedelta(minutes=7)),
+                        "roll_angle_deg": 0.0,
+                        "pitch_angle_deg": 0.0,
+                    }
+                ],
+            },
+        )
+        assert direct_commit.status_code == 200, direct_commit.json()
+        payload = direct_commit.json()
+        assert payload["conflicts_detected"] >= 1, payload
+        assert payload["conflict_ids"], payload
+
+        conflicts = client.get(
+            "/api/v1/schedule/conflicts",
+            params={"workspace_id": workspace_id},
+        )
+        assert conflicts.status_code == 200, conflicts.json()
+        assert len(conflicts.json()["conflicts"]) >= 1, conflicts.json()
 
     def test_schedule_plan_accepts_future_aware_opportunities(
         self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
@@ -1380,18 +1549,22 @@ class TestPlanningModeSelection:
                     {
                         "satellite_name": "SAT-1",
                         "target_name": "TGT-1",
-                        "start_time": alternate_existing_slot,
-                        "end_time": alternate_existing_slot,
-                        "max_elevation_time": alternate_existing_slot,
+                        "start_time": _state_iso(existing_start + timedelta(minutes=20)),
+                        "end_time": _state_iso(existing_start + timedelta(minutes=20)),
+                        "max_elevation_time": _state_iso(
+                            existing_start + timedelta(minutes=20)
+                        ),
                         "max_elevation": 42.0,
                         "start_azimuth": 180.0,
                     },
                     {
                         "satellite_name": "SAT-1",
                         "target_name": "TGT-2",
-                        "start_time": new_target_slot,
-                        "end_time": new_target_slot,
-                        "max_elevation_time": new_target_slot,
+                        "start_time": _state_iso(existing_start + timedelta(minutes=30)),
+                        "end_time": _state_iso(existing_start + timedelta(minutes=30)),
+                        "max_elevation_time": _state_iso(
+                            existing_start + timedelta(minutes=30)
+                        ),
                         "max_elevation": 40.0,
                         "start_azimuth": 182.0,
                     },
@@ -1401,8 +1574,8 @@ class TestPlanningModeSelection:
                     TargetData(name="TGT-2", latitude=25.5, longitude=55.5, priority=1),
                 ],
                 "mission_data": {
-                    "start_time": _iso(existing_start),
-                    "end_time": _iso(existing_start + timedelta(hours=1)),
+                    "start_time": _state_iso(existing_start),
+                    "end_time": _state_iso(existing_start + timedelta(hours=1)),
                     "max_spacecraft_pitch_deg": 45.0,
                 },
                 "satellites_dict": {},
@@ -1658,7 +1831,7 @@ class TestPlanningModeSelection:
         original_state = _snapshot_analysis_state()
 
         existing_start = datetime.now(timezone.utc) + timedelta(days=1)
-        added_slot = _iso(existing_start + timedelta(minutes=30))
+        added_slot = _state_iso(existing_start + timedelta(minutes=30))
         set_cached_opportunities([], workspace_id)
         set_current_mission_data(
             {
@@ -1678,8 +1851,8 @@ class TestPlanningModeSelection:
                     TargetData(name="TGT-2", latitude=25.5, longitude=55.5, priority=1),
                 ],
                 "mission_data": {
-                    "start_time": _iso(existing_start),
-                    "end_time": _iso(existing_start + timedelta(hours=1)),
+                    "start_time": _state_iso(existing_start),
+                    "end_time": _state_iso(existing_start + timedelta(hours=1)),
                     "max_spacecraft_pitch_deg": 45.0,
                 },
                 "satellites_dict": {},
@@ -1748,10 +1921,11 @@ class TestPlanningModeSelection:
                     {
                         "satellite_name": "SAT-1",
                         "target_name": "ScopedTarget",
-                        "start_time": _iso(datetime.now(timezone.utc) + timedelta(days=2)),
-                        "end_time": _iso(
-                            datetime.now(timezone.utc)
-                            + timedelta(days=2, minutes=5)
+                        "start_time": _state_iso(
+                            datetime.now(timezone.utc) + timedelta(days=2)
+                        ),
+                        "end_time": _state_iso(
+                            datetime.now(timezone.utc) + timedelta(days=2, minutes=5)
                         ),
                         "max_elevation": 42.0,
                         "start_azimuth": 180.0,
@@ -1802,18 +1976,20 @@ class TestPlanningModeSelection:
                     {
                         "satellite_name": "SAT-1",
                         "target_name": "TGT-1",
-                        "start_time": exact_slot,
-                        "end_time": exact_slot,
-                        "max_elevation_time": exact_slot,
+                        "start_time": _state_iso(base_start),
+                        "end_time": _state_iso(base_start),
+                        "max_elevation_time": _state_iso(base_start),
                         "max_elevation": 42.0,
                         "start_azimuth": 180.0,
                     },
                     {
                         "satellite_name": "SAT-1",
                         "target_name": "TGT-2",
-                        "start_time": later_slot,
-                        "end_time": later_slot,
-                        "max_elevation_time": later_slot,
+                        "start_time": _state_iso(base_start + timedelta(minutes=10)),
+                        "end_time": _state_iso(base_start + timedelta(minutes=10)),
+                        "max_elevation_time": _state_iso(
+                            base_start + timedelta(minutes=10)
+                        ),
                         "max_elevation": 40.0,
                         "start_azimuth": 182.0,
                     },
@@ -1823,8 +1999,8 @@ class TestPlanningModeSelection:
                     TargetData(name="TGT-2", latitude=25.5, longitude=55.5, priority=1),
                 ],
                 "mission_data": {
-                    "start_time": exact_slot,
-                    "end_time": _iso(base_start + timedelta(hours=1)),
+                    "start_time": _state_iso(base_start),
+                    "end_time": _state_iso(base_start + timedelta(hours=1)),
                     "max_spacecraft_pitch_deg": 45.0,
                 },
                 "satellites_dict": {},

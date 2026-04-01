@@ -48,6 +48,15 @@ const noScheduleHorizon = {
   },
 }
 
+const cleanDirectPreviewResponse = {
+  success: true,
+  message: 'Preview ready',
+  new_items_count: 0,
+  conflicts_count: 0,
+  conflicts: [],
+  warnings: [],
+}
+
 const repairScheduleHorizon = {
   success: true,
   horizon: {
@@ -527,6 +536,15 @@ async function mockCommonApis(page: Page, targets: ScenarioTarget[]) {
     await route.fulfill({ json: managedSatellitesResponse })
   })
 
+  await page.route('**/api/v1/config/sar-modes**', async (route) => {
+    await route.fulfill({
+      json: {
+        success: true,
+        modes: {},
+      },
+    })
+  })
+
   await page.route('**/api/v1/mission/analyze**', async (route) => {
     const requestBody = route.request().postDataJSON() as Record<string, unknown>
     await route.fulfill({ json: buildAnalyzeResponse(requestBody) })
@@ -534,6 +552,31 @@ async function mockCommonApis(page: Page, targets: ScenarioTarget[]) {
 
   await page.route('**/api/v1/planning/opportunities**', async (route) => {
     await route.fulfill({ json: buildOpportunitiesResponse(targets) })
+  })
+
+  await page.route('**/api/v1/schedule/conflicts**', async (route) => {
+    await route.fulfill({
+      json: {
+        success: true,
+        conflicts: [],
+        summary: {
+          total: 0,
+          by_type: {},
+          by_severity: {},
+        },
+      },
+    })
+  })
+
+  await page.route('**/api/v1/schedule/commit/direct/preview**', async (route) => {
+    const requestBody = route.request().postDataJSON() as { items?: unknown[] }
+    const itemCount = Array.isArray(requestBody.items) ? requestBody.items.length : 0
+    await route.fulfill({
+      json: {
+        ...cleanDirectPreviewResponse,
+        new_items_count: itemCount,
+      },
+    })
   })
 }
 
@@ -631,7 +674,12 @@ async function openPlanningApplyStep(
   await openLeftPanel(page, 'Planning', page.getByRole('button', { name: /Generate Mission Plan/i }))
   const generateButton = page.getByRole('button', { name: /Generate Mission Plan/i })
   await expect(generateButton).toBeEnabled()
-  await generateButton.click()
+  try {
+    await generateButton.click({ timeout: 5000 })
+  } catch {
+    await dismissCesiumErrorIfPresent(page)
+    await generateButton.click({ force: true })
+  }
 
   await expect(page.getByRole('button', { name: /^Next$/i })).toBeVisible()
   await page.getByRole('button', { name: /^Next$/i }).click()
@@ -858,5 +906,169 @@ test.describe('Planning apply confirmation UI', () => {
     await expect(page.getByText('Slew Infeasible', { exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Apply Plan' })).toBeVisible()
     await expect(page.getByText(/Mar 24, 03:45.*→.*Mar 24, 04:15/)).toBeVisible()
+  })
+
+  test('persists and surfaces backend conflicts after a forced direct apply', async ({
+    page,
+  }, testInfo) => {
+    const targets = [
+      { name: 'Alpha', latitude: 24.7136, longitude: 46.6753 },
+      { name: 'Bravo', latitude: 21.4858, longitude: 39.1925 },
+    ]
+
+    const overlappingPlanningResponse = {
+      ...fromScratchPlanningResponse,
+      results: {
+        roll_pitch_best_fit: {
+          ...fromScratchPlanningResponse.results.roll_pitch_best_fit,
+          schedule: [
+            fromScratchPlanningResponse.results.roll_pitch_best_fit.schedule[0],
+            {
+              ...fromScratchPlanningResponse.results.roll_pitch_best_fit.schedule[1],
+              start_time: '2026-03-24T02:04:00Z',
+              end_time: '2026-03-24T02:08:00Z',
+            },
+          ],
+        },
+      },
+    }
+
+    let commitBody: Record<string, unknown> | null = null
+    let commitApplied = false
+
+    await mockCommonApis(page, targets)
+    await page.route('**/api/v1/schedule/master**', async (route) => {
+      await route.fulfill({
+        json: {
+          success: true,
+          zoom: 'detail',
+          total: 0,
+          items: [],
+          buckets: [],
+          t_start: '2026-03-24T00:00:00Z',
+          t_end: '2026-03-31T00:00:00Z',
+        },
+      })
+    })
+    await page.route('**/api/v1/schedule/target-locations**', async (route) => {
+      await route.fulfill({ json: { success: true, targets: [] } })
+    })
+    await page.route('**/api/v1/schedule/horizon**', async (route) => {
+      await route.fulfill({ json: noScheduleHorizon })
+    })
+    await page.route('**/api/v1/schedule/mode-selection**', async (route) => {
+      await route.fulfill({
+        json: {
+          success: true,
+          planning_mode: 'from_scratch',
+          reason: 'No existing schedule found for workspace. Building new optimized schedule.',
+          workspace_id: 'default',
+          existing_acquisition_count: 0,
+          new_target_count: 2,
+          conflict_count: 0,
+          current_target_ids: [],
+          existing_target_ids: [],
+          request_payload_hash: 'forced-direct-apply-hash',
+        },
+      })
+    })
+    await page.route('**/api/v1/planning/schedule**', async (route) => {
+      await route.fulfill({ json: overlappingPlanningResponse })
+    })
+    await page.route('**/api/v1/schedule/commit/direct/preview**', async (route) => {
+      await route.fulfill({
+        json: {
+          success: true,
+          message: 'Preview found 1 conflict',
+          new_items_count: 2,
+          conflicts_count: 1,
+          conflicts: [
+            {
+              type: 'temporal_overlap',
+              severity: 'error',
+              description: 'SAT-1: Alpha and Bravo overlap by 60.0s',
+              acquisition_ids: ['new:opp-alpha-1', 'new:opp-bravo-1'],
+              reason:
+                'Two acquisitions on the same satellite overlap in time. The satellite cannot image two targets simultaneously.',
+              details: {
+                overlap_seconds: 60,
+                satellite_id: 'SAT-1',
+                acq1_target: 'Alpha',
+                acq2_target: 'Bravo',
+              },
+            },
+          ],
+          warnings: [],
+        },
+      })
+    })
+    await page.route('**/api/v1/schedule/commit/direct', async (route) => {
+      commitBody = route.request().postDataJSON() as Record<string, unknown>
+      commitApplied = true
+      await route.fulfill({
+        json: {
+          success: true,
+          message: 'Committed with persisted conflicts',
+          plan_id: 'forced-conflict-plan',
+          committed: 2,
+          acquisition_ids: ['acq-alpha-1', 'acq-bravo-1'],
+          conflicts_detected: 1,
+          conflict_ids: ['conflict-1'],
+        },
+      })
+    })
+    await page.route('**/api/v1/schedule/conflicts**', async (route) => {
+      await route.fulfill({
+        json: {
+          success: true,
+          conflicts: commitApplied
+            ? [
+                {
+                  id: 'conflict-1',
+                  detected_at: '2026-03-24T02:09:00Z',
+                  type: 'temporal_overlap',
+                  severity: 'error',
+                  description: 'SAT-1: Alpha and Bravo overlap by 60.0s',
+                  acquisition_ids: ['acq-alpha-1', 'acq-bravo-1'],
+                  details: {
+                    overlap_seconds: 60,
+                    satellite_id: 'SAT-1',
+                    acq1_target: 'Alpha',
+                    acq2_target: 'Bravo',
+                  },
+                },
+              ]
+            : [],
+          summary: {
+            total: commitApplied ? 1 : 0,
+            by_type: commitApplied ? { temporal_overlap: 1 } : {},
+            by_severity: commitApplied ? { error: 1 } : {},
+          },
+        },
+      })
+    })
+
+    await openPlanningApplyStep(page, targets, testInfo, 'planning-apply-forced-conflict.png')
+
+    await expect(page.getByRole('heading', { name: 'Conflicts Detected' })).toBeVisible()
+    await expect(page.getByText('Time Overlap', { exact: true })).toBeVisible()
+
+    const commitResponsePromise = page.waitForResponse((response) =>
+      response.url().includes('/api/v1/schedule/commit/direct'),
+    )
+    await page.getByRole('button', { name: 'Apply Anyway' }).click()
+    const commitResponse = await commitResponsePromise
+    expect(commitResponse.ok()).toBeTruthy()
+
+    expect(commitBody).toMatchObject({
+      workspace_id: 'default',
+      algorithm: 'roll_pitch_best_fit',
+      force: true,
+    })
+
+    await openLeftPanel(page, 'Conflicts', page.getByText('1 errors', { exact: true }))
+    await expect(page.getByText('1 errors', { exact: true })).toBeVisible()
+    await expect(page.getByText('Time Overlap', { exact: true })).toBeVisible()
+    await expect(page.getByText(/Alpha and Bravo overlap by 60.0s/)).toBeVisible()
   })
 })

@@ -5,6 +5,7 @@ import {
   Shield,
   Calendar,
   CheckSquare,
+  AlertTriangle,
   FolderOpen,
   GitBranch,
   FlaskConical,
@@ -13,6 +14,7 @@ import MissionControls from './MissionControls'
 import MissionPlanning from './MissionPlanning'
 import DemoScenarioRunner from './DemoScenarioRunner'
 import SchedulePanel from './SchedulePanel'
+import ConflictsPanel from './ConflictsPanel'
 import WorkspacePanel from './WorkspacePanel'
 import { ObjectExplorerTree } from './ObjectExplorer'
 import ResizeHandle from './ResizeHandle'
@@ -24,9 +26,11 @@ import { usePreviewTargetsStore } from '../store/previewTargetsStore'
 import { useOrdersStore } from '../store/ordersStore'
 import { usePlanningStore } from '../store/planningStore'
 import { useSlewVisStore } from '../store/slewVisStore'
+import { useConflictStore } from '../store/conflictStore'
 import { AlgorithmResult, AcceptedOrder, WorkspaceData, SceneObject, TargetData } from '../types'
-import { commitScheduleDirect, commitRepairPlan, DirectCommitItem } from '../api/scheduleApi'
+import { commitScheduleDirect, commitRepairPlan } from '../api/scheduleApi'
 import { queryClient, queryKeys } from '../lib/queryClient'
+import { scheduleToDirectCommitItems } from '../utils/commitItems'
 import { LEFT_SIDEBAR_PANELS, SIMPLE_MODE_LEFT_PANELS, isDebugMode } from '../constants/simpleMode'
 import { LABELS } from '../constants/labels'
 import {
@@ -70,6 +74,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
   const setOrdersInStore = useOrdersStore((s) => s.setOrders)
   const setPlanningResults = usePlanningStore((s) => s.setResults)
   const setActiveAlgorithm = usePlanningStore((s) => s.setActiveAlgorithm)
+  const conflictCount = useConflictStore((s) => s.summary.total)
   const ordersHydratingRef = useRef(true)
   const missionDataRef = useRef(state.missionData)
   const autoRestoredWorkspaceRef = useRef<string | null>(null)
@@ -301,7 +306,11 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
   // Handler for promoting schedule to orders
   // Now calls backend API to persist acquisitions to the database
   const handlePromoteToOrders = useCallback(
-    async (algorithm: string, result: AlgorithmResult) => {
+    async (
+      algorithm: string,
+      result: AlgorithmResult,
+      options?: { force?: boolean },
+    ) => {
       const timestamp = new Date().toISOString()
       // Get existing order count for sequential naming
       const existingCount = orders.length + 1
@@ -315,26 +324,14 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
       const targets = [...new Set(result.schedule.map((s) => s.target_id))]
 
       // Build items for direct commit API
-      const commitItems: DirectCommitItem[] = result.schedule.map((s) => ({
-        opportunity_id: s.opportunity_id,
-        satellite_id: s.satellite_id,
-        target_id: s.target_id,
-        start_time: s.start_time,
-        end_time: s.end_time,
-        roll_angle_deg: s.roll_angle || s.delta_roll || 0,
-        pitch_angle_deg: s.pitch_angle || 0,
-        value: s.value,
-        incidence_angle_deg: s.incidence_angle,
-        sar_mode: s.sar_mode,
-        look_side: s.look_side,
-        pass_direction: s.pass_direction,
-      }))
+      const commitItems = scheduleToDirectCommitItems(result.schedule)
 
       // Try to commit to backend first
       let backendCommitSuccess = false
       let planId: string | undefined
       let backendAcqIds: string[] = []
       const isRepairMode = !!result.repair_plan_id
+      let nextPanel = LEFT_SIDEBAR_PANELS.SCHEDULE
 
       try {
         if (isRepairMode) {
@@ -356,6 +353,9 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
           if (repairResponse.success) {
             backendCommitSuccess = true
             planId = repairResponse.plan_id
+            if (repairResponse.conflicts_after > 0) {
+              nextPanel = LEFT_SIDEBAR_PANELS.CONFLICTS
+            }
             // Only store NEWLY CREATED acquisition IDs — NOT kept ones from previous orders.
             // Kept acquisitions belong to their original orders; storing them here would
             // cause them to be deleted if THIS order is deleted later.
@@ -380,12 +380,15 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
             mode: result.schedule[0]?.sar_mode ? 'SAR' : 'OPTICAL',
             lock_level: 'none',
             workspace_id: state.activeWorkspace || 'default',
-            force: true,
+            force: options?.force ?? false,
           })
 
           if (commitResponse.success) {
             backendCommitSuccess = true
             planId = commitResponse.plan_id
+            if ((commitResponse.conflicts_detected ?? 0) > 0) {
+              nextPanel = LEFT_SIDEBAR_PANELS.CONFLICTS
+            }
             backendAcqIds = commitResponse.acquisition_ids || []
             console.log('[PromoteToOrders] Backend commit successful:', {
               planId,
@@ -469,7 +472,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
       setPreviewTargets([])
       setHidePreview(true)
 
-      setActivePanel(LEFT_SIDEBAR_PANELS.SCHEDULE)
+      setActivePanel(nextPanel)
       console.log(
         `[PromoteToOrders] ✓ Schedule committed to database (plan: ${planId}). Schedule review kept mission context active.`,
       )
@@ -510,6 +513,14 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
             showHistoryTab={isDeveloperMode}
           />
         ),
+      },
+      {
+        id: LEFT_SIDEBAR_PANELS.CONFLICTS,
+        title: 'Conflicts',
+        icon: AlertTriangle,
+        badge: conflictCount > 0 ? conflictCount : undefined,
+        badgeColor: 'red',
+        component: <ConflictsPanel />,
       },
       // Object Explorer
       {
@@ -580,6 +591,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
     handlePromoteToOrders,
     setOrders,
     isDeveloperMode,
+    conflictCount,
   ])
 
   const handlePanelClick = (panelId: string) => {

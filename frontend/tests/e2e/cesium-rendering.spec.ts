@@ -21,6 +21,95 @@ test.describe('Cesium globe rendering', () => {
       runtimeErrors.push(`[pageerror] ${error.message}`)
     })
 
+    await page.route('**/api/v1/workspaces?**', async (route) => {
+      await route.fulfill({
+        json: {
+          success: true,
+          workspaces: [
+            {
+              id: 'default',
+              name: 'Default Workspace',
+              satellites_count: 1,
+              targets_count: 0,
+            },
+          ],
+          total: 1,
+        },
+      })
+    })
+
+    await page.route('**/api/v1/workspaces/default?**', async (route) => {
+      await route.fulfill({
+        json: {
+          success: true,
+          workspace: {
+            id: 'default',
+            name: 'Default Workspace',
+            mission_mode: 'OPTICAL',
+            satellites: [],
+            targets: [],
+          },
+        },
+      })
+    })
+
+    await page.route('**/api/v1/satellites**', async (route) => {
+      await route.fulfill({
+        json: {
+          success: true,
+          satellites: [
+            {
+              id: 'SAT-1',
+              name: 'ICEYE-X53',
+              color: '#3B82F6',
+            },
+          ],
+        },
+      })
+    })
+
+    await page.route('**/api/v1/config/sar-modes**', async (route) => {
+      await route.fulfill({
+        json: {
+          success: true,
+          modes: {},
+        },
+      })
+    })
+
+    await page.route('**/api/v1/schedule/horizon**', async (route) => {
+      await route.fulfill({
+        json: {
+          success: true,
+          horizon: {
+            start: '2026-04-01T00:00:00Z',
+            end: '2026-04-08T00:00:00Z',
+            freeze_cutoff: '2026-04-01T00:00:00Z',
+          },
+          acquisitions: [],
+          statistics: {
+            total_acquisitions: 0,
+            by_state: {},
+            by_satellite: {},
+          },
+        },
+      })
+    })
+
+    await page.route('**/api/v1/schedule/conflicts**', async (route) => {
+      await route.fulfill({
+        json: {
+          success: true,
+          conflicts: [],
+          summary: {
+            total: 0,
+            by_type: {},
+            by_severity: {},
+          },
+        },
+      })
+    })
+
     await page.goto('/', { waitUntil: 'networkidle' })
     await expect(page.locator('canvas').first()).toBeVisible()
     await page.waitForTimeout(5000)

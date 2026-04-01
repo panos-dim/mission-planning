@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { useConflictStore } from "../store/conflictStore";
 import { useSelectionStore } from "../store/selectionStore";
+import { useVisStore } from "../store/visStore";
 import { useMission } from "../context/MissionContext";
 import { getConflicts, recomputeConflicts, Conflict } from "../api/scheduleApi";
 
@@ -165,12 +166,13 @@ const ConflictsPanel: React.FC<ConflictsPanelProps> = ({ className = "" }) => {
     selectedConflictId: unifiedSelectedConflictId,
     clearSelection,
   } = useSelectionStore();
+  const activeLeftPanel = useVisStore((s) => s.activeLeftPanel);
 
   // Use unified selection if available, fall back to local
   const selectedConflictId =
     unifiedSelectedConflictId ?? localSelectedConflictId;
 
-  const workspaceId = state.activeWorkspace;
+  const workspaceId = state.activeWorkspace || "default";
 
   const fetchConflicts = useCallback(async () => {
     if (!workspaceId) return;
@@ -206,6 +208,11 @@ const ConflictsPanel: React.FC<ConflictsPanelProps> = ({ className = "" }) => {
   useEffect(() => {
     fetchConflicts();
   }, [fetchConflicts]);
+
+  useEffect(() => {
+    if (activeLeftPanel !== "conflicts") return;
+    void fetchConflicts();
+  }, [activeLeftPanel, fetchConflicts]);
 
   const handleConflictClick = useCallback(
     (conflict: Conflict) => {
@@ -256,7 +263,7 @@ const ConflictsPanel: React.FC<ConflictsPanelProps> = ({ className = "" }) => {
             )}
             {summary.total === 0 && !isLoading && (
               <div className="flex items-center space-x-1 px-2 py-1 bg-green-900/30 rounded text-xs text-green-400">
-                <span>No conflicts</span>
+                <span>No active conflicts</span>
               </div>
             )}
           </div>
@@ -280,15 +287,9 @@ const ConflictsPanel: React.FC<ConflictsPanelProps> = ({ className = "" }) => {
       )}
 
       {/* No workspace selected */}
-      {!workspaceId && (
-        <div className="p-4 text-center text-gray-500 text-sm">
-          Select a workspace to view conflicts
-        </div>
-      )}
-
       {/* Conflicts list */}
       <div className="flex-1 overflow-y-auto">
-        {!workspaceId ? null : isLoading ? (
+        {isLoading ? (
           <div className="p-4 text-center text-gray-500 text-sm">
             Loading conflicts...
           </div>

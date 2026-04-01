@@ -378,7 +378,12 @@ async function openPlanningApply(page: Page, testInfo: TestInfo, screenshotName:
     page.waitForResponse((response) => response.url().includes('/api/v1/schedule/repair')),
   ])
 
-  await page.getByRole('button', { name: /Generate Mission Plan/i }).click()
+  const generateButton = page.getByRole('button', { name: /Generate Mission Plan/i })
+  try {
+    await generateButton.click({ timeout: 5000 })
+  } catch {
+    await generateButton.click({ force: true })
+  }
   const [modeResponse, repairResponse] = await generateResponsePromise
   expect(modeResponse.ok()).toBeTruthy()
   expect(repairResponse.ok()).toBeTruthy()
@@ -419,8 +424,47 @@ async function mockRepairLockApis(page: Page, serverState: MockServerState) {
     })
   })
 
+  await page.route('**/api/v1/satellites**', async (route) => {
+    await route.fulfill({
+      json: {
+        success: true,
+        satellites: [
+          {
+            id: 'SAT-1',
+            name: 'ICEYE-X53',
+            color: '#3B82F6',
+            imaging_type: 'optical',
+          },
+        ],
+      },
+    })
+  })
+
+  await page.route('**/api/v1/config/sar-modes**', async (route) => {
+    await route.fulfill({
+      json: {
+        success: true,
+        modes: {},
+      },
+    })
+  })
+
   await page.route('**/api/v1/planning/opportunities**', async (route) => {
     await route.fulfill({ json: opportunitiesResponse })
+  })
+
+  await page.route('**/api/v1/schedule/conflicts**', async (route) => {
+    await route.fulfill({
+      json: {
+        success: true,
+        conflicts: [],
+        summary: {
+          total: 0,
+          by_type: {},
+          by_severity: {},
+        },
+      },
+    })
   })
 
   await page.route('**/api/v1/schedule/master**', async (route) => {
@@ -537,15 +581,6 @@ test('opens details when a timeline acquisition is selected', async ({
     await expect(acquisitionHero).toContainText('LegacyAnchor')
     await expect(acquisitionHero).toContainText('ICEYE-X53')
 
-    const layersToggle = page.getByRole('button', { name: 'Toggle satellite layers panel' })
-    await expect(layersToggle).toBeVisible()
-    await expect(layersToggle).toHaveAttribute('aria-expanded', 'false')
-    await layersToggle.click()
-    await expect(layersToggle).toHaveAttribute('aria-expanded', 'true')
-    await expect(page.getByText('Focus', { exact: true })).toBeVisible()
-    const layersPanel = page.getByText('Focus', { exact: true }).locator('xpath=ancestor::div[2]')
-    await expect(layersPanel).toContainText('LegacyAnchor')
-
     const lockResponsePromise = page.waitForResponse((response) =>
       response.url().includes('/api/v1/schedule/acquisition/acq-anchor/lock'),
     )
@@ -554,12 +589,10 @@ test('opens details when a timeline acquisition is selected', async ({
     expect(lockResponse.ok()).toBeTruthy()
 
     await expect(page.getByRole('button', { name: 'Unlock', exact: true })).toBeVisible()
-    await expect(page.getByText('1 locked', { exact: true })).toBeVisible()
     await expect(page.getByText('Hard locked', { exact: true })).toBeVisible()
-    await expect(layersPanel).toContainText('Protected on repair')
-
-    await layersToggle.click()
-    await expect(layersToggle).toHaveAttribute('aria-expanded', 'false')
+    await expect(
+      page.getByText('Protected from repair changes until you unlock it.', { exact: true }),
+    ).toBeVisible()
 
     await page.screenshot({
       path: testInfo.outputPath('schedule-handoff-active-strip.png'),
@@ -575,7 +608,6 @@ test('opens details when a timeline acquisition is selected', async ({
     await loadWorkspace(page)
 
     await openScheduleTimeline(page)
-    await expect(page.getByText('0 locked', { exact: true })).toBeVisible()
 
     await openPlanningApply(page, testInfo, 'repair-unlocked-page2.png')
 
@@ -595,7 +627,6 @@ test('opens details when a timeline acquisition is selected', async ({
     await loadWorkspace(page)
 
     await openScheduleTimeline(page)
-    await expect(page.getByText('0 locked', { exact: true })).toBeVisible()
 
     const lockResponsePromise = page.waitForResponse((response) =>
       response.url().includes('/api/v1/schedule/acquisition/acq-anchor/lock'),

@@ -55,6 +55,31 @@ export interface DirectCommitResponse {
   plan_id: string
   committed: number
   acquisition_ids: string[]
+  conflicts_detected?: number
+  conflict_ids?: string[]
+}
+
+export interface DirectCommitPreviewRequest {
+  items: DirectCommitItem[]
+  workspace_id?: string
+}
+
+export interface DirectCommitPreviewConflict {
+  type: string
+  severity: 'error' | 'warning' | 'info'
+  description: string
+  acquisition_ids: string[]
+  reason?: string
+  details?: Record<string, unknown>
+}
+
+export interface DirectCommitPreviewResponse {
+  success: boolean
+  message: string
+  new_items_count: number
+  conflicts_count: number
+  conflicts: DirectCommitPreviewConflict[]
+  warnings: string[]
 }
 
 export interface AcquisitionSummary {
@@ -119,6 +144,21 @@ export async function commitScheduleDirect(
   return apiClient.post<DirectCommitResponse>(API_ENDPOINTS.SCHEDULE_COMMIT_DIRECT, request, {
     retries: 0, // Write operation — never retry to avoid duplicate commits
   })
+}
+
+/**
+ * Preview a direct commit using backend conflict rules without mutating persistence.
+ */
+export async function previewDirectCommit(
+  request: DirectCommitPreviewRequest,
+): Promise<DirectCommitPreviewResponse> {
+  return apiClient.post<DirectCommitPreviewResponse>(
+    API_ENDPOINTS.SCHEDULE_COMMIT_DIRECT_PREVIEW,
+    request,
+    {
+      retries: 0,
+    },
+  )
 }
 
 /**

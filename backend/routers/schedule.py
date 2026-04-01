@@ -11,6 +11,7 @@ Endpoints:
 - GET /api/v1/schedule/conflicts - Get scheduling conflicts
 """
 
+import hashlib
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -1950,134 +1951,95 @@ async def commit_plan(request: CommitPlanRequest) -> CommitPlanResponse:
 # =============================================================================
 
 
-def _check_commit_conflicts(
+def _compute_direct_commit_input_hash(items: List["DirectCommitItem"]) -> str:
+    """Build a deterministic fingerprint for a direct-commit payload."""
+    item_fingerprints = sorted(
+        f"{item.satellite_id}|{item.target_id}|{item.start_time}|{item.end_time}"
+        for item in items
+    )
+    content_hash = hashlib.sha256("|".join(item_fingerprints).encode()).hexdigest()[:24]
+    return f"sha256:{content_hash}"
+
+
+def _find_existing_direct_commit_plan(
+    db: ScheduleDB,
+    input_hash: str,
+) -> Optional[str]:
+    """Return a previously committed plan with the same direct-commit payload."""
+    with db._get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id FROM plans WHERE input_hash = ? AND status = 'committed' LIMIT 1",
+            (input_hash,),
+        )
+        row = cursor.fetchone()
+    return row["id"] if row else None
+
+
+def _predict_direct_commit_conflicts(
     db: ScheduleDB,
     items: List["DirectCommitItem"],
     workspace_id: Optional[str],
-) -> List[str]:
-    """
-    Check if new items would conflict with existing committed acquisitions.
+) -> List[Dict[str, Any]]:
+    """Predict conflicts for direct-commit items using the same backend detector as commit."""
+    from backend.incremental_planning import predict_commit_conflicts
 
-    Returns a list of conflict descriptions (empty if no conflicts).
-    """
-    from datetime import datetime as dt
-
-    conflicts: List[str] = []
     effective_workspace_id = workspace_id or DEFAULT_WORKSPACE_ID
-
-    # Get time range for the new items
     if not items:
-        return conflicts
+        return []
 
-    parsed_windows = []
-    for item in items:
-        try:
-            start_dt = dt.fromisoformat(item.start_time.replace("Z", "+00:00"))
-            end_dt = dt.fromisoformat(item.end_time.replace("Z", "+00:00"))
-        except (ValueError, AttributeError):
-            continue
-        parsed_windows.append((start_dt, end_dt))
-
-    if parsed_windows:
-        min_dt = min(start for start, _ in parsed_windows)
-        max_dt = max(end for _, end in parsed_windows)
-        if min_dt == max_dt:
-            min_dt = min_dt - timedelta(seconds=1)
-            max_dt = max_dt + timedelta(seconds=1)
-        min_time = min_dt.isoformat().replace("+00:00", "Z")
-        max_time = max_dt.isoformat().replace("+00:00", "Z")
-    else:
-        start_times = [item.start_time for item in items]
-        end_times = [item.end_time for item in items]
-        min_time = min(start_times)
-        max_time = max(end_times)
-
-    # Get existing committed acquisitions in this time range
-    existing = db.get_acquisitions_in_horizon(
-        start_time=min_time,
-        end_time=max_time,
-        workspace_id=effective_workspace_id,
-        include_tentative=False,  # Only check against committed acquisitions
+    now = datetime.now(timezone.utc)
+    horizon_start, horizon_end = _derive_horizon_from_timestamps(
+        [(item.start_time, item.end_time) for item in items],
+        fallback_start=now,
+        fallback_end=now + timedelta(days=7),
     )
 
-    # Filter to only committed state
-    existing = [a for a in existing if a.state == "committed"]
+    new_items = [
+        {
+            "satellite_id": item.satellite_id,
+            "target_id": item.target_id,
+            "start_time": item.start_time,
+            "end_time": item.end_time,
+            "roll_angle_deg": item.roll_angle_deg,
+            "pitch_angle_deg": item.pitch_angle_deg,
+        }
+        for item in items
+    ]
 
-    if not existing:
-        return conflicts
+    predicted_conflicts, _ = predict_commit_conflicts(
+        db=db,
+        workspace_id=effective_workspace_id,
+        new_items=new_items,
+        horizon_start=horizon_start,
+        horizon_end=horizon_end,
+    )
 
-    # Group existing by satellite
-    existing_by_sat: Dict[str, List] = {}
-    for acq in existing:
-        if acq.satellite_id not in existing_by_sat:
-            existing_by_sat[acq.satellite_id] = []
-        existing_by_sat[acq.satellite_id].append(acq)
-
-    # Check each new item against existing committed acquisitions
-    for item in items:
-        sat_existing = existing_by_sat.get(item.satellite_id, [])
-
-        for existing_acq in sat_existing:
-            # Parse times
-            try:
-                new_start = dt.fromisoformat(item.start_time.replace("Z", "+00:00"))
-                new_end = dt.fromisoformat(item.end_time.replace("Z", "+00:00"))
-                exist_start = dt.fromisoformat(
-                    existing_acq.start_time.replace("Z", "+00:00")
-                )
-                exist_end = dt.fromisoformat(
-                    existing_acq.end_time.replace("Z", "+00:00")
-                )
-            except (ValueError, AttributeError):
-                continue
-
-            new_is_point = new_start == new_end
-            existing_is_point = exist_start == exist_end
-            if new_is_point and existing_is_point:
-                overlaps = new_start == exist_start
-            elif new_is_point:
-                overlaps = exist_start <= new_start <= exist_end
-            elif existing_is_point:
-                overlaps = new_start <= exist_start <= new_end
+    normalized_conflicts: List[Dict[str, Any]] = []
+    for conflict in predicted_conflicts:
+        normalized_ids: List[str] = []
+        for acquisition_id in conflict.get("acquisition_ids", []):
+            if isinstance(acquisition_id, str) and acquisition_id.startswith("pseudo_"):
+                try:
+                    pseudo_index = int(acquisition_id.split("_", 1)[1])
+                except (IndexError, ValueError):
+                    normalized_ids.append(acquisition_id)
+                    continue
+                if 0 <= pseudo_index < len(items):
+                    normalized_ids.append(f"new:{items[pseudo_index].opportunity_id}")
+                else:
+                    normalized_ids.append(acquisition_id)
             else:
-                overlaps = new_start < exist_end and exist_start < new_end
-            if overlaps:
-                conflicts.append(
-                    f"{item.satellite_id}/{item.target_id} overlaps with "
-                    f"existing {existing_acq.target_id} at {item.start_time[:19]}"
-                )
+                normalized_ids.append(acquisition_id)
 
-    # H2-FIX: Also check new items against each other (intra-batch conflicts).
-    # Without this, two overlapping items in a single commit would both be created.
-    for i in range(len(items)):
-        for j in range(i + 1, len(items)):
-            if items[i].satellite_id != items[j].satellite_id:
-                continue
-            try:
-                s1 = dt.fromisoformat(items[i].start_time.replace("Z", "+00:00"))
-                e1 = dt.fromisoformat(items[i].end_time.replace("Z", "+00:00"))
-                s2 = dt.fromisoformat(items[j].start_time.replace("Z", "+00:00"))
-                e2 = dt.fromisoformat(items[j].end_time.replace("Z", "+00:00"))
-            except (ValueError, AttributeError):
-                continue
-            item1_is_point = s1 == e1
-            item2_is_point = s2 == e2
-            if item1_is_point and item2_is_point:
-                overlaps = s1 == s2
-            elif item1_is_point:
-                overlaps = s2 <= s1 <= e2
-            elif item2_is_point:
-                overlaps = s1 <= s2 <= e1
-            else:
-                overlaps = s1 < e2 and s2 < e1
-            if overlaps:
-                conflicts.append(
-                    f"{items[i].satellite_id}/{items[i].target_id} overlaps with "
-                    f"new {items[j].target_id} at {items[i].start_time[:19]} "
-                    f"(intra-batch conflict)"
-                )
+        normalized_conflicts.append(
+            {
+                **conflict,
+                "acquisition_ids": normalized_ids,
+            }
+        )
 
-    return conflicts
+    return normalized_conflicts
 
 
 class DirectCommitItem(BaseModel):
@@ -2096,6 +2058,24 @@ class DirectCommitItem(BaseModel):
     sar_mode: Optional[str] = None
     look_side: Optional[str] = None
     pass_direction: Optional[str] = None
+
+
+class DirectCommitPreviewRequest(BaseModel):
+    """Request to preview a direct commit without mutating persistence."""
+
+    items: List[DirectCommitItem]
+    workspace_id: Optional[str] = None
+
+
+class DirectCommitPreviewResponse(BaseModel):
+    """Response from direct-commit preview."""
+
+    success: bool
+    message: str
+    new_items_count: int
+    conflicts_count: int
+    conflicts: List[Dict[str, Any]] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
 
 
 class DirectCommitRequest(BaseModel):
@@ -2123,6 +2103,69 @@ class DirectCommitResponse(BaseModel):
     plan_id: str
     committed: int
     acquisition_ids: List[str]
+    conflicts_detected: int = 0
+    conflict_ids: List[str] = Field(default_factory=list)
+
+
+@router.post("/commit/direct/preview", response_model=DirectCommitPreviewResponse)
+async def preview_commit_direct(
+    request: DirectCommitPreviewRequest,
+) -> DirectCommitPreviewResponse:
+    """Preview direct-commit conflicts using the same backend rules as the actual commit."""
+    db = get_schedule_db()
+    effective_workspace_id = request.workspace_id or DEFAULT_WORKSPACE_ID
+    _bind_schedule_log_context(workspace_id=effective_workspace_id)
+
+    if not request.items:
+        raise HTTPException(status_code=400, detail="No items to preview")
+
+    conflicts = _predict_direct_commit_conflicts(
+        db,
+        request.items,
+        effective_workspace_id,
+    )
+
+    duplicate_plan_id = _find_existing_direct_commit_plan(
+        db,
+        _compute_direct_commit_input_hash(request.items),
+    )
+    if duplicate_plan_id:
+        conflicts.append(
+            {
+                "type": "duplicate_commit",
+                "severity": "error",
+                "description": (
+                    "This exact schedule was already committed earlier. "
+                    "Applying again would create a duplicate schedule."
+                ),
+                "acquisition_ids": [],
+                "reason": (
+                    "The direct-commit payload matches a previously committed plan. "
+                    "This usually means the operator retried an already applied schedule."
+                ),
+                "details": {"existing_plan_id": duplicate_plan_id},
+            }
+        )
+
+    error_count = sum(1 for conflict in conflicts if conflict.get("severity") == "error")
+    message = (
+        f"Preview found {len(conflicts)} conflict(s)"
+        if conflicts
+        else f"Preview ready for {len(request.items)} new item(s)"
+    )
+    if duplicate_plan_id:
+        message += f" (duplicate of {duplicate_plan_id})"
+    if error_count:
+        message += f"; {error_count} require force to apply"
+
+    return DirectCommitPreviewResponse(
+        success=True,
+        message=message,
+        new_items_count=len(request.items),
+        conflicts_count=len(conflicts),
+        conflicts=conflicts,
+        warnings=[],
+    )
 
 
 @router.post("/commit/direct", response_model=DirectCommitResponse)
@@ -2138,8 +2181,9 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
 
     This is a convenience endpoint that wraps plan creation + commit in one call.
     """
-    import hashlib
     import uuid
+
+    from backend.conflict_detection import detect_and_persist_conflicts
 
     db = get_schedule_db()
     effective_workspace_id = request.workspace_id or DEFAULT_WORKSPACE_ID
@@ -2154,55 +2198,48 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
     if not request.items:
         raise HTTPException(status_code=400, detail="No items to commit")
 
-    # Check for conflicts with existing committed acquisitions
-    conflicts = _check_commit_conflicts(db, request.items, effective_workspace_id)
-    if conflicts and not request.force:
-        conflict_details = "; ".join(conflicts[:3])  # Show first 3 conflicts
-        more = f" (+{len(conflicts) - 3} more)" if len(conflicts) > 3 else ""
+    predicted_conflicts = _predict_direct_commit_conflicts(
+        db,
+        request.items,
+        effective_workspace_id,
+    )
+    duplicate_plan_id = _find_existing_direct_commit_plan(
+        db,
+        _compute_direct_commit_input_hash(request.items),
+    )
+
+    if duplicate_plan_id:
         raise HTTPException(
             status_code=409,
-            detail=f"Cannot commit: {len(conflicts)} conflict(s) detected. {conflict_details}{more}",
+            detail={
+                "message": (
+                    "Duplicate commit detected. This exact schedule was already applied."
+                ),
+                "duplicate_plan_id": duplicate_plan_id,
+            },
         )
-    if conflicts and request.force:
+
+    error_predicted = [
+        conflict for conflict in predicted_conflicts if conflict.get("severity") == "error"
+    ]
+    if error_predicted and not request.force:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": (
+                    f"Commit would introduce {len(error_predicted)} error-severity conflict(s)"
+                ),
+                "predicted_conflicts": error_predicted,
+                "hint": "Set force=true to commit anyway, or adjust your plan",
+            },
+        )
+    if predicted_conflicts and request.force:
         logger.warning(
-            f"[Direct Commit] Force-committing with {len(conflicts)} conflict(s)"
+            f"[Direct Commit] Force-committing with {len(predicted_conflicts)} predicted conflict(s)"
         )
 
     try:
-        # H1-FIX: Idempotency via content-hash deduplication.
-        # Build a deterministic hash from the actual item content so that
-        # identical payloads (e.g. network retries) are rejected.
-        item_fingerprints = sorted(
-            f"{i.satellite_id}|{i.target_id}|{i.start_time}|{i.end_time}"
-            for i in request.items
-        )
-        content_hash = hashlib.sha256("|".join(item_fingerprints).encode()).hexdigest()[
-            :24
-        ]
-        input_hash = f"sha256:{content_hash}"
-
-        # Check if this exact payload was already committed (dedup guard)
-        # force=True bypasses dedup (user explicitly wants to recommit)
-        if not request.force:
-            with db._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT id FROM plans WHERE input_hash = ? AND status = 'committed' LIMIT 1",
-                    (input_hash,),
-                )
-                dup_row = cursor.fetchone()
-                if dup_row:
-                    dup_plan_id = dup_row["id"]
-                    logger.warning(
-                        f"[Direct Commit] Duplicate detected: input_hash={input_hash}, "
-                        f"existing plan={dup_plan_id}"
-                    )
-                    raise HTTPException(
-                        status_code=409,
-                        detail=f"Duplicate commit detected. A plan with identical "
-                        f"items was already committed (plan_id={dup_plan_id}). "
-                        f"This may be a network retry.",
-                    )
+        input_hash = _compute_direct_commit_input_hash(request.items)
 
         # Generate run_id
         run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
@@ -2259,12 +2296,32 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
             f"{result['committed']} acquisitions"
         )
 
+        conflicts_detected = 0
+        conflict_ids: List[str] = []
+        now = datetime.now(timezone.utc)
+        recompute_start, recompute_end = _derive_workspace_conflict_horizon(
+            db,
+            effective_workspace_id,
+            fallback_start=now,
+            fallback_end=now + timedelta(days=7),
+        )
+        detected_conflicts, new_conflict_ids = detect_and_persist_conflicts(
+            db=db,
+            workspace_id=effective_workspace_id,
+            start_time=_isoformat_z(recompute_start),
+            end_time=_isoformat_z(recompute_end),
+        )
+        conflicts_detected = len(detected_conflicts)
+        conflict_ids = new_conflict_ids
+
         return DirectCommitResponse(
             success=True,
             message=f"Created {result['committed']} acquisitions",
             plan_id=plan.id,
             committed=result["committed"],
             acquisition_ids=[a["id"] for a in result["acquisitions_created"]],
+            conflicts_detected=conflicts_detected,
+            conflict_ids=conflict_ids,
         )
 
     except HTTPException:
