@@ -1200,4 +1200,122 @@ test.describe('Planning apply confirmation UI', () => {
     ).toBeVisible()
     await expect(page.getByRole('button', { name: 'Apply Plan' })).toBeVisible()
   })
+
+  test('blocks a second operator after another session commits first', async ({ browser }, testInfo) => {
+    test.setTimeout(180000)
+
+    const targets = [
+      { name: 'Alpha', latitude: 24.7136, longitude: 46.6753 },
+      { name: 'Bravo', latitude: 21.4858, longitude: 39.1925 },
+    ]
+
+    let scheduleCommitted = false
+    let successfulCommitCount = 0
+
+    const operatorAContext = await browser.newContext()
+    const operatorBContext = await browser.newContext()
+    const operatorAPage = await operatorAContext.newPage()
+    const operatorBPage = await operatorBContext.newPage()
+
+    const mockOperatorApis = async (page: Page) => {
+      await mockCommonApis(page, targets)
+      await page.route('**/api/v1/schedule/horizon**', async (route) => {
+        await route.fulfill({ json: noScheduleHorizon })
+      })
+      await page.route('**/api/v1/schedule/mode-selection**', async (route) => {
+        await route.fulfill({
+          json: {
+            success: true,
+            planning_mode: 'from_scratch',
+            reason: 'No existing schedule found for workspace. Building new optimized schedule.',
+            workspace_id: 'default',
+            existing_acquisition_count: 0,
+            new_target_count: 2,
+            conflict_count: 0,
+            current_target_ids: [],
+            existing_target_ids: [],
+            request_payload_hash: 'two-operator-race-hash',
+          },
+        })
+      })
+      await page.route('**/api/v1/planning/schedule**', async (route) => {
+        await route.fulfill({ json: fromScratchPlanningResponse })
+      })
+      await page.route('**/api/v1/schedule/commit/direct', async (route) => {
+        if (!scheduleCommitted) {
+          scheduleCommitted = true
+          successfulCommitCount += 1
+          await route.fulfill({
+            json: {
+              success: true,
+              message: 'Committed before competing operator apply',
+              plan_id: 'operator-a-plan',
+              committed: 2,
+              acquisition_ids: ['acq-alpha-1', 'acq-bravo-1'],
+              conflicts_detected: 0,
+              conflict_ids: [],
+            },
+          })
+          return
+        }
+
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          json: {
+            detail: {
+              message:
+                'Schedule state changed before apply. Refresh conflicts and review the latest plan.',
+            },
+          },
+        })
+      })
+    }
+
+    try {
+      await Promise.all([mockOperatorApis(operatorAPage), mockOperatorApis(operatorBPage)])
+
+      await openPlanningApplyStep(
+        operatorAPage,
+        targets,
+        testInfo,
+        'planning-apply-two-operator-a.png',
+      )
+      await openPlanningApplyStep(
+        operatorBPage,
+        targets,
+        testInfo,
+        'planning-apply-two-operator-b.png',
+      )
+
+      await expect(operatorAPage.getByRole('heading', { name: 'Ready to Apply' })).toBeVisible()
+      await expect(operatorBPage.getByRole('heading', { name: 'Ready to Apply' })).toBeVisible()
+
+      const operatorACommitResponse = operatorAPage.waitForResponse((response) =>
+        response.url().includes('/api/v1/schedule/commit/direct'),
+      )
+      await operatorAPage.getByRole('button', { name: 'Apply Plan' }).click()
+      expect((await operatorACommitResponse).ok()).toBeTruthy()
+
+      await expect.poll(() => successfulCommitCount, { timeout: 5000 }).toBe(1)
+
+      const operatorBCommitResponse = operatorBPage.waitForResponse((response) =>
+        response.url().includes('/api/v1/schedule/commit/direct'),
+      )
+      await operatorBPage.getByRole('button', { name: 'Apply Plan' }).click()
+      expect((await operatorBCommitResponse).status()).toBe(409)
+
+      await expect(
+        operatorBPage.getByText(
+          'Schedule state changed before apply. Refresh conflicts and review the latest plan.',
+          { exact: true },
+        ),
+      ).toBeVisible()
+      await expect(operatorBPage.getByRole('heading', { name: 'Ready to Apply' })).toBeVisible()
+      await expect(operatorBPage.getByRole('button', { name: 'Apply Plan' })).toBeVisible()
+    } finally {
+      await operatorAContext.close().catch(() => undefined)
+      await operatorBContext.close().catch(() => undefined)
+    }
+  })
 })
