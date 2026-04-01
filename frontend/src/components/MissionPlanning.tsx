@@ -286,23 +286,12 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
             : `❌ ${repairResponse.message}`,
         })
 
-        // Fallback: if repair fails or produces 0 items, retry with from_scratch
-        const repairUsable = repairResponse.success && repairResponse.new_plan_items.length > 0
-
-        if (!repairUsable) {
-          console.log(
-            `[Planning] Repair produced ${repairResponse.new_plan_items?.length ?? 0} items — falling back to from_scratch`,
-          )
-          setSchedulingReasoning({
-            mode: 'from_scratch',
-            reason:
-              'Repair mode produced no usable results. Building a new schedule from all available opportunities.',
-            existingCount,
-          })
-          // Fall through to from_scratch path below
+        if (!repairResponse.success) {
+          setError(repairResponse.message || 'Repair planning failed')
+          return
         }
 
-        if (repairUsable) {
+        if (repairResponse.success) {
           setRepairResult(repairResponse)
 
           const algoResult: AlgorithmResult = {
@@ -387,19 +376,9 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
       }
 
       // ── Full planner path: backend-selected from_scratch or incremental ──
-      // Also used as a fallback when repair produces no usable result.
       if (autoMode !== 'repair' || !gotResults) {
         const plannerMode: PlanningRequest['mode'] =
           autoMode === 'repair' ? 'from_scratch' : autoMode
-
-        if (autoMode === 'repair' && !gotResults) {
-          setSchedulingReasoning({
-            mode: 'from_scratch',
-            reason:
-              'Repair mode produced no usable results. Building a new schedule from all available opportunities.',
-            existingCount,
-          })
-        }
 
         const request: PlanningRequest = {
           algorithms: ['roll_pitch_best_fit'],
@@ -472,6 +451,24 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
 
     // Build commit preview based on planning mode
     const result = results[activeTab]
+    const repairDiff = repairResult?.repair_diff
+    const hasRepairChanges =
+      !!repairDiff &&
+      (repairDiff.added.length > 0 ||
+        repairDiff.dropped.length > 0 ||
+        repairDiff.moved.length > 0)
+    const hasCommittableItems =
+      schedulingReasoning?.mode === 'repair' ? hasRepairChanges : result.schedule.length > 0
+
+    if (!hasCommittableItems) {
+      setError(
+        schedulingReasoning?.mode === 'repair'
+          ? 'No repair changes are pending, so there is nothing to apply.'
+          : 'Planning finished without any feasible acquisitions to apply.',
+      )
+      return
+    }
+
     const conflicts: ConflictInfo[] = []
 
     // ── Repair mode: use backend-predicted conflicts with full metadata ──
@@ -644,6 +641,22 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
     repairResult,
     scheduleContext.count,
   ])
+
+  const hasCommittablePlan = useMemo(() => {
+    if (!activeResult) return false
+
+    if (schedulingReasoning?.mode === 'repair') {
+      const repairDiff = repairResult?.repair_diff
+      if (!repairDiff) return false
+      return (
+        repairDiff.added.length > 0 ||
+        repairDiff.dropped.length > 0 ||
+        repairDiff.moved.length > 0
+      )
+    }
+
+    return activeResult.schedule.length > 0
+  }, [activeResult, repairResult, schedulingReasoning?.mode])
 
   const exportToCsv = (algorithm: string) => {
     if (!results || !results[algorithm]) return
@@ -971,22 +984,28 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
                           )
                         ) : (
                           <p>
-                            New schedule with{' '}
-                            <span className="text-white font-medium">{scheduled}</span> acquisition
-                            {scheduled !== 1 ? 's' : ''}
-                            {ts ? (
+                            {scheduled > 0 ? (
                               <>
-                                {' '}
-                                covering{' '}
-                                <span className="text-white font-medium">
-                                  {ts.targets_acquired}
-                                </span>{' '}
-                                of {ts.total_targets} target{ts.total_targets !== 1 ? 's' : ''}
+                                New schedule with{' '}
+                                <span className="text-white font-medium">{scheduled}</span>{' '}
+                                acquisition{scheduled !== 1 ? 's' : ''}
+                                {ts ? (
+                                  <>
+                                    {' '}
+                                    covering{' '}
+                                    <span className="text-white font-medium">
+                                      {ts.targets_acquired}
+                                    </span>{' '}
+                                    of {ts.total_targets} target{ts.total_targets !== 1 ? 's' : ''}
+                                  </>
+                                ) : (
+                                  ''
+                                )}
+                                .
                               </>
                             ) : (
-                              ''
+                              'No feasible acquisitions were found for the current targets and horizon.'
                             )}
-                            .
                           </p>
                         )}
                       </div>
@@ -1508,11 +1527,19 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
             <>
               <button
                 onClick={handleAcceptPlan}
-                disabled={isPreparingCommitPreview}
+                disabled={isPreparingCommitPreview || !hasCommittablePlan}
                 className="w-full px-3 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-semibold text-white"
-                title="Proceed to apply confirmation"
+                title={
+                  hasCommittablePlan
+                    ? 'Proceed to apply confirmation'
+                    : 'No changes are available to apply'
+                }
               >
-                {isPreparingCommitPreview ? 'Preparing Review...' : 'Next'}
+                {isPreparingCommitPreview
+                  ? 'Preparing Review...'
+                  : hasCommittablePlan
+                    ? 'Next'
+                    : 'No Changes to Apply'}
               </button>
               <button
                 onClick={handleClearResults}

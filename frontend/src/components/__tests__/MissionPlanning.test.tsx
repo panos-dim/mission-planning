@@ -203,6 +203,41 @@ function buildPlanningResponse(targetId: string, opportunityId: string): Plannin
   }
 }
 
+function buildEmptyPlanningResponse(): PlanningResponse {
+  return {
+    success: true,
+    message: 'Planning complete',
+    results: {
+      roll_pitch_best_fit: {
+        ...buildAlgorithmResult('Alpha', 'opp-empty'),
+        schedule: [],
+        target_statistics: {
+          total_targets: 3,
+          targets_acquired: 0,
+          targets_missing: 3,
+          coverage_percentage: 0,
+          acquired_target_ids: [],
+          missing_target_ids: ['Alpha', 'Bravo', 'Charlie'],
+        },
+        planner_summary: {
+          target_acquisitions: [],
+          targets_not_scheduled: ['Alpha', 'Bravo', 'Charlie'].map((name) => ({
+            target_id: name,
+            reason: 'No feasible opportunity in current horizon',
+          })),
+          horizon: {
+            start: '2026-03-23T00:00:00Z',
+            end: '2026-03-30T00:00:00Z',
+          },
+          satellites_used: [],
+          total_targets_with_opportunities: 3,
+          total_targets_covered: 0,
+        },
+      },
+    },
+  }
+}
+
 function buildRepairResponse() {
   return {
     success: true,
@@ -292,6 +327,29 @@ function buildRepairResponse() {
       satellites_used: ['SAT-1'],
       total_targets_with_opportunities: 3,
       total_targets_covered: 1,
+    },
+  }
+}
+
+function buildNoOpRepairResponse() {
+  const response = buildRepairResponse()
+  return {
+    ...response,
+    fixed_count: 0,
+    new_plan_items: [],
+    repair_diff: {
+      ...response.repair_diff,
+      dropped: [],
+      added: [],
+      moved: [],
+      change_score: {
+        num_changes: 0,
+        percent_changed: 0,
+      },
+    },
+    planner_summary: {
+      ...response.planner_summary,
+      target_acquisitions: [],
     },
   }
 }
@@ -540,5 +598,72 @@ describe('MissionPlanning', () => {
     expect(screen.getByText(/require schedule repair/i)).toBeInTheDocument()
     expect(screen.getByTestId('repair-diff-panel-stub')).toBeInTheDocument()
     expect(await screen.findByRole('button', { name: /^Next$/i })).toBeInTheDocument()
+  })
+
+  it('blocks apply review when incremental planning returns no feasible acquisitions', async () => {
+    const user = userEvent.setup()
+
+    getPlanningModeSelectionMock.mockResolvedValue({
+      success: true,
+      planning_mode: 'incremental',
+      reason: 'Current scoring weights favor additive scheduling without disturbing the baseline.',
+      workspace_id: 'ws-proof',
+      existing_acquisition_count: 2,
+      new_target_count: 2,
+      conflict_count: 0,
+      current_target_ids: ['Alpha', 'Bravo', 'Charlie'],
+      existing_target_ids: ['Legacy-1'],
+      request_payload_hash: 'hash-incremental-empty',
+    })
+    planningScheduleMock.mockResolvedValue(buildEmptyPlanningResponse())
+    useVisStore.setState({
+      uiMode: 'operator',
+      clockTime: null,
+      requestedRightPanel: null,
+    })
+
+    render(<MissionPlanning />)
+
+    await user.click(screen.getByRole('button', { name: /generate mission plan/i }))
+
+    expect(
+      await screen.findByText(/No feasible acquisitions were found for the current targets and horizon/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /No Changes to Apply/i }),
+    ).toBeDisabled()
+    expect(previewDirectCommitMock).not.toHaveBeenCalled()
+  })
+
+  it('blocks apply review when repair finds no net schedule changes', async () => {
+    const user = userEvent.setup()
+
+    getPlanningModeSelectionMock.mockResolvedValue({
+      success: true,
+      planning_mode: 'repair',
+      reason: 'Existing schedule already satisfies the protected constraints.',
+      workspace_id: 'ws-proof',
+      existing_acquisition_count: 2,
+      new_target_count: 0,
+      conflict_count: 0,
+      current_target_ids: ['Alpha', 'Bravo', 'Charlie'],
+      existing_target_ids: ['Legacy-1'],
+      request_payload_hash: 'hash-repair-noop',
+    })
+    createRepairPlanMock.mockResolvedValue(buildNoOpRepairResponse())
+    useVisStore.setState({
+      uiMode: 'operator',
+      clockTime: null,
+      requestedRightPanel: null,
+    })
+
+    render(<MissionPlanning />)
+
+    await user.click(screen.getByRole('button', { name: /generate mission plan/i }))
+
+    expect(await screen.findByText(/No changes needed\. The current schedule is already optimal\./i)).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /No Changes to Apply/i }),
+    ).toBeDisabled()
   })
 })

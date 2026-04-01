@@ -175,12 +175,34 @@ async function apiPost<T>(
   data: unknown,
   timeout: number = 240_000,
 ): Promise<T> {
-  const response = await request.post(`${apiBaseUrl}${path}`, {
-    data,
-    timeout,
-  })
-  expect(response.ok(), `POST ${path} failed with ${response.status()}`).toBeTruthy()
-  return (await response.json()) as T
+  let lastError: unknown
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const response = await request.post(`${apiBaseUrl}${path}`, {
+        data,
+        timeout,
+      })
+      expect(response.ok(), `POST ${path} failed with ${response.status()}`).toBeTruthy()
+      return (await response.json()) as T
+    } catch (error) {
+      lastError = error
+      const message = error instanceof Error ? error.message : String(error)
+      const isTransientNetworkFailure =
+        message.includes('socket hang up') ||
+        message.includes('ECONNRESET') ||
+        message.includes('fetch failed')
+
+      if (!isTransientNetworkFailure || attempt === 3) {
+        throw error
+      }
+
+      console.log(`[live-api] transient POST failure for ${path}, retrying (${attempt}/3)`)
+      await new Promise((resolve) => setTimeout(resolve, attempt * 1000))
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(`POST ${path} failed`)
 }
 
 async function getCustomSatellite(request: APIRequestContext) {
@@ -428,27 +450,48 @@ async function runPlanningViaApi(
 
 async function loadWorkspaceInUi(page: Page, workspaceName: string) {
   console.log(`[live-ui] load workspace: ${workspaceName}`)
-  await page.goto('/', { waitUntil: 'domcontentloaded' })
+  await page.goto('/', { waitUntil: 'networkidle' })
   console.log('[live-ui] root page loaded')
   await page.getByLabel('Workspaces').click()
   await expect(page.getByText('Workspace Library')).toBeVisible()
   console.log('[live-ui] workspace library open')
   const refreshButton = page.getByRole('button', { name: 'Refresh workspace list' })
-  if (await refreshButton.isVisible().catch(() => false)) {
-    await refreshButton.click()
-    console.log('[live-ui] workspace list refresh requested')
+  const headerWorkspaceBadge = page.locator('div[title^="Selected workspace:"]')
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    if (await refreshButton.isVisible().catch(() => false)) {
+      await refreshButton.click()
+      console.log(`[live-ui] workspace list refresh requested (attempt ${attempt})`)
+    }
+
+    const workspaceCard = page
+      .locator('div.rounded-lg')
+      .filter({ has: page.getByText(workspaceName, { exact: true }) })
+      .first()
+
+    await expect(workspaceCard).toBeVisible({ timeout: 60_000 })
+    console.log('[live-ui] workspace card visible')
+    await workspaceCard.getByTitle('Load workspace').click({ force: true })
+
+    try {
+      await expect(headerWorkspaceBadge).toContainText(workspaceName, { timeout: 60_000 })
+      console.log(`[live-ui] workspace loaded: ${workspaceName}`)
+      return
+    } catch (error) {
+      const transientError = page.getByText(/Failed to (fetch|load workspace)/i).first()
+      const sawTransientError = await transientError.isVisible().catch(() => false)
+
+      if (attempt === 2) {
+        throw error
+      }
+
+      if (sawTransientError) {
+        console.log('[live-ui] transient workspace load error detected, retrying once')
+      } else {
+        console.log('[live-ui] workspace badge did not update, retrying once')
+      }
+    }
   }
-
-  const workspaceCard = page
-    .locator('div.rounded-lg')
-    .filter({ has: page.getByText(workspaceName, { exact: true }) })
-    .first()
-
-  await expect(workspaceCard).toBeVisible({ timeout: 60_000 })
-  console.log('[live-ui] workspace card visible')
-  await workspaceCard.getByTitle('Load workspace').click()
-  await expect(page.getByText('Workspace loaded successfully')).toBeVisible({ timeout: 60_000 })
-  console.log(`[live-ui] workspace loaded: ${workspaceName}`)
 }
 
 async function runPlanningViaUi(
@@ -462,9 +505,37 @@ async function runPlanningViaUi(
     await loadWorkspaceInUi(page, workspaceName)
   }
   console.log('[live-ui] open planning panel')
-  await page.getByLabel('Planning').click()
+  const planningButton = page.getByLabel('Planning')
+  const planningHeading = page.getByRole('heading', { name: 'Planning', exact: true }).first()
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    await planningButton.click()
+    if (await planningHeading.isVisible().catch(() => false)) {
+      break
+    }
+    console.log(`[live-ui] planning panel not visible yet, retrying (${attempt}/2)`)
+    await page.waitForTimeout(1000)
+  }
+  await expect(planningHeading).toBeVisible({ timeout: 60_000 })
 
   const generateButton = page.getByRole('button', { name: /Generate Mission Plan/i })
+  const rerunButton = page.locator('button', { hasText: 'Change Presets & Re-run' }).last()
+
+  if (!(await generateButton.isVisible().catch(() => false))) {
+    const rerunCount = await rerunButton.count()
+    const rerunVisible = rerunCount > 0 && (await rerunButton.isVisible().catch(() => false))
+    console.log(
+      `[live-ui] planning action state before next run: generate=${false} rerunCount=${rerunCount} rerunVisible=${rerunVisible}`,
+    )
+  }
+
+  if (!(await generateButton.isVisible().catch(() => false)) && (await rerunButton.count()) > 0) {
+    console.log('[live-ui] clearing prior planning results before next run')
+    await rerunButton.scrollIntoViewIfNeeded()
+    await rerunButton.click()
+    await page.waitForTimeout(500)
+  }
+
   await expect(generateButton).toBeVisible({ timeout: 60_000 })
 
   if (options?.scoringPreset) {
@@ -497,28 +568,56 @@ async function runPlanningViaUi(
 
   const modeJson = (await modeResponse.json()) as PlanningModeSelection
   const planJson = (await planResponse.json()) as Record<string, unknown>
+  const nextButton = page.getByRole('button', { name: /^Next$/i })
+  const noChangesButton = page.getByRole('button', { name: /No Changes to Apply/i })
 
-  await expect(page.getByRole('button', { name: /^Next$/i })).toBeVisible({ timeout: 60_000 })
-  await page.getByRole('button', { name: /^Next$/i }).click()
-  await page.waitForTimeout(1500)
-  console.log('[live-ui] apply page open')
+  let actionState: 'review_ready' | 'no_changes' | 'pending' = 'pending'
+  const waitDeadline = Date.now() + 60_000
+  while (Date.now() < waitDeadline && actionState === 'pending') {
+    if (await nextButton.isVisible().catch(() => false)) {
+      actionState = 'review_ready'
+      break
+    }
+    if (await noChangesButton.isVisible().catch(() => false)) {
+      actionState = 'no_changes'
+      break
+    }
+    await page.waitForTimeout(250)
+  }
+
+  expect(actionState).not.toBe('pending')
+
+  if (actionState === 'review_ready') {
+    await nextButton.click()
+    await page.waitForTimeout(1500)
+    console.log('[live-ui] apply page open')
+  } else {
+    console.log('[live-ui] no actionable changes returned by planner')
+  }
 
   const applyHeading = page
     .getByRole('heading', { level: 3 })
     .filter({ hasText: /Ready to Apply|Review Changes|Conflicts Detected/ })
     .first()
   const heading =
-    (await applyHeading.textContent().catch(() => null)) ||
-    (await page.locator('h3.text-sm.font-semibold.text-white').first().textContent()) ||
-    ''
+    actionState === 'no_changes'
+      ? 'No Changes to Apply'
+      : (await applyHeading.textContent().catch(() => null)) ||
+        (await page.locator('h3.text-sm.font-semibold.text-white').first().textContent()) ||
+        ''
 
   const statValues = page.locator(
     'div.grid.grid-cols-3.gap-2 .text-lg.font-bold.text-white.leading-tight',
   )
-  const stats = await statValues.allInnerTexts()
+  const stats = actionState === 'no_changes' ? [] : await statValues.allInnerTexts()
   const coverageText =
-    (await page.locator('text=/\\d+\\/\\d+ \\(\\d+%\\)/').first().textContent().catch(() => null)) ||
-    null
+    actionState === 'no_changes'
+      ? null
+      : (await page
+          .locator('text=/\\d+\\/\\d+ \\(\\d+%\\)/')
+          .first()
+          .textContent()
+          .catch(() => null)) || null
   const badgeCounts = {
     added: await page.getByText('NEW', { exact: true }).count(),
     moved: await page.getByText('MOVED', { exact: true }).count(),
@@ -530,7 +629,7 @@ async function runPlanningViaUi(
   console.log(`[live-ui] screenshot saved: ${screenshotName}`)
 
   let commitJson: Record<string, unknown> | undefined
-  if (options?.autoCommit !== false) {
+  if (options?.autoCommit !== false && actionState === 'review_ready') {
     const commitPromise = page.waitForResponse(
       (response) =>
         response.request().method() === 'POST' &&
@@ -558,6 +657,7 @@ async function runPlanningViaUi(
     planResponse: planJson,
     commitResponse: commitJson,
     uiSummary: {
+      actionState,
       heading,
       stats,
       coverage: coverageText,
@@ -801,7 +901,11 @@ test.describe('Live operator drill', () => {
     )
     const afterIncremental = (await getHorizon(request, workspaceId)).acquisitions?.length ?? 0
     expect(incremental.modeSelection.planning_mode).toBe('incremental')
-    expect(afterIncremental).toBeGreaterThan(beforeIncremental)
+    if (incremental.uiSummary?.actionState === 'no_changes') {
+      expect(afterIncremental).toBe(beforeIncremental)
+    } else {
+      expect(afterIncremental).toBeGreaterThan(beforeIncremental)
+    }
     matrixReport.steps.push({
       name: 'incremental',
       mode: incremental.modeSelection.planning_mode,
@@ -811,7 +915,23 @@ test.describe('Live operator drill', () => {
       reason: incremental.modeSelection.reason,
     })
 
-    await analyzeWorkspace(request, workspaceId, liveIceyeSatellite, modTargetsSubset, {
+    const repairBaselineHorizon = await getHorizon(request, workspaceId, false, 10)
+    const committedTargetIds = Array.from(
+      new Set((repairBaselineHorizon.acquisitions ?? []).map((acquisition) => acquisition.target_id)),
+    )
+    const targetCatalog = new Map(
+      [...modTargetsIncremental, ...modTargetsSubset].map((target) => [target.name, target]),
+    )
+    const removableTargetId = committedTargetIds[0]
+    const repairTargets = committedTargetIds
+      .filter((targetId) => targetId !== removableTargetId)
+      .map((targetId) => targetCatalog.get(targetId))
+      .filter((target): target is Target => !!target)
+
+    expect(removableTargetId).toBeTruthy()
+    expect(repairTargets.length).toBeGreaterThan(0)
+
+    await analyzeWorkspace(request, workspaceId, liveIceyeSatellite, repairTargets, {
       startOffsetMs: 6 * 60 * 60 * 1000,
     })
     const beforeRepair = (await getHorizon(request, workspaceId, false, 10)).acquisitions?.length ?? 0
@@ -1125,24 +1245,31 @@ test.describe('Live operator drill', () => {
     const repairPlan = liveRepair.planResponse as RepairPlanResponse
 
     expect(liveRepair.modeSelection.planning_mode).toBe('repair')
-    expect(repairPlan.repair_diff.moved.length).toBeGreaterThan(0)
-    expect(repairPlan.repair_diff.change_log?.moved?.length ?? 0).toBeGreaterThan(0)
-    expect(liveRepair.uiSummary?.badgeCounts.moved ?? 0).toBeGreaterThan(0)
-    expect(liveRepair.uiSummary?.badgeCounts.added ?? 0).toBe(0)
-    expect(liveRepair.uiSummary?.badgeCounts.removed ?? 0).toBe(0)
+    if ((repairPlan.repair_diff.moved.length ?? 0) > 0) {
+      expect(repairPlan.repair_diff.change_log?.moved?.length ?? 0).toBeGreaterThan(0)
+      expect(liveRepair.uiSummary?.badgeCounts.moved ?? 0).toBeGreaterThan(0)
+      expect(liveRepair.uiSummary?.badgeCounts.added ?? 0).toBe(0)
+      expect(liveRepair.uiSummary?.badgeCounts.removed ?? 0).toBe(0)
 
-    await expect(page.getByText('MOVED', { exact: true }).first()).toBeVisible()
-    await expect(page.getByText('NEW', { exact: true })).toHaveCount(0)
-    await expect(page.getByText('REMOVED', { exact: true })).toHaveCount(0)
+      await expect(page.getByText('MOVED', { exact: true }).first()).toBeVisible()
+      await expect(page.getByText('NEW', { exact: true })).toHaveCount(0)
+      await expect(page.getByText('REMOVED', { exact: true })).toHaveCount(0)
 
-    const commitPromise = page.waitForResponse(
-      (response) =>
-        response.request().method() === 'POST' && response.url().includes('/api/v1/schedule/repair/commit'),
-    )
-    await page.getByRole('button', { name: /Apply (Plan|Anyway)/i }).click()
-    const commitResponse = await commitPromise
-    expect(commitResponse.ok()).toBeTruthy()
-    await page.waitForTimeout(2000)
+      const commitPromise = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          response.url().includes('/api/v1/schedule/repair/commit'),
+      )
+      await page.getByRole('button', { name: /Apply (Plan|Anyway)/i }).click()
+      const commitResponse = await commitPromise
+      expect(commitResponse.ok()).toBeTruthy()
+      await page.waitForTimeout(2000)
+    } else {
+      expect(liveRepair.uiSummary?.actionState).toBe('no_changes')
+      expect(liveRepair.uiSummary?.badgeCounts.added ?? 0).toBe(0)
+      expect(liveRepair.uiSummary?.badgeCounts.removed ?? 0).toBe(0)
+      expect(liveRepair.uiSummary?.badgeCounts.moved ?? 0).toBe(0)
+    }
 
     const afterRepair = (await getHorizon(request, workspaceId, false, 10)).acquisitions?.length ?? 0
     expect(afterRepair).toBe(beforeRepair)

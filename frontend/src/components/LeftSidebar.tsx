@@ -27,6 +27,7 @@ import { useOrdersStore } from '../store/ordersStore'
 import { usePlanningStore } from '../store/planningStore'
 import { useSlewVisStore } from '../store/slewVisStore'
 import { useConflictStore } from '../store/conflictStore'
+import { useSessionStore } from '../store/sessionStore'
 import { AlgorithmResult, AcceptedOrder, WorkspaceData, SceneObject, TargetData } from '../types'
 import { commitScheduleDirect, commitRepairPlan } from '../api/scheduleApi'
 import { queryClient, queryKeys } from '../lib/queryClient'
@@ -252,7 +253,13 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
 
   useEffect(() => {
     const activeWorkspaceId = state.activeWorkspace
-    if (!activeWorkspaceId || missionDataRef.current) return
+    const sessionWorkspaceId = useSessionStore.getState().workspaceId
+    const hasMatchingWorkspaceSession =
+      !!missionDataRef.current &&
+      (sessionWorkspaceId === activeWorkspaceId ||
+        (!sessionWorkspaceId && activeWorkspaceId === 'default'))
+
+    if (!activeWorkspaceId || hasMatchingWorkspaceSession) return
     if (autoRestoredWorkspaceRef.current === activeWorkspaceId) return
 
     autoRestoredWorkspaceRef.current = activeWorkspaceId

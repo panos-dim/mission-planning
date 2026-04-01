@@ -49,6 +49,7 @@ import { useLockStore } from '../../store/lockStore'
 import { useOrdersStore } from '../../store/ordersStore'
 import { usePreFeasibilityOrdersStore } from '../../store/preFeasibilityOrdersStore'
 import { usePlanningStore } from '../../store/planningStore'
+import { useSessionStore } from '../../store/sessionStore'
 import { getScheduleTargetLocations } from '../../api/scheduleApi'
 import { useScheduleStore } from '../../store/scheduleStore'
 import { useSelectionStore } from '../../store/selectionStore'
@@ -336,8 +337,18 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
   useEffect(() => {
     const activeWorkspaceId = state.activeWorkspace
     const hasCzmlPackets = !!czmlData && czmlData.length > 0
+    const sessionWorkspaceId = useSessionStore.getState().workspaceId
+    const hasMatchingWorkspaceSession =
+      hasCzmlPackets &&
+      (sessionWorkspaceId === activeWorkspaceId ||
+        (!sessionWorkspaceId && activeWorkspaceId === 'default'))
 
-    if (!activeWorkspaceId || activeWorkspaceId === 'default' || hasCzmlPackets || loadedDataSource) {
+    if (
+      !activeWorkspaceId ||
+      activeWorkspaceId === 'default' ||
+      hasMatchingWorkspaceSession ||
+      loadedDataSource
+    ) {
       return
     }
 
