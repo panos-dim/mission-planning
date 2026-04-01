@@ -1071,4 +1071,69 @@ test.describe('Planning apply confirmation UI', () => {
     await expect(page.getByText('Time Overlap', { exact: true })).toBeVisible()
     await expect(page.getByText(/Alpha and Bravo overlap by 60.0s/)).toBeVisible()
   })
+
+  test('submits only one direct commit when apply is triggered twice quickly', async ({
+    page,
+  }, testInfo) => {
+    const targets = [
+      { name: 'Alpha', latitude: 24.7136, longitude: 46.6753 },
+      { name: 'Bravo', latitude: 21.4858, longitude: 39.1925 },
+    ]
+
+    let commitRequestCount = 0
+
+    await mockCommonApis(page, targets)
+    await page.route('**/api/v1/schedule/horizon**', async (route) => {
+      await route.fulfill({ json: noScheduleHorizon })
+    })
+    await page.route('**/api/v1/schedule/mode-selection**', async (route) => {
+      await route.fulfill({
+        json: {
+          success: true,
+          planning_mode: 'from_scratch',
+          reason: 'No existing schedule found for workspace. Building new optimized schedule.',
+          workspace_id: 'default',
+          existing_acquisition_count: 0,
+          new_target_count: 2,
+          conflict_count: 0,
+          current_target_ids: [],
+          existing_target_ids: [],
+          request_payload_hash: 'double-apply-guard-hash',
+        },
+      })
+    })
+    await page.route('**/api/v1/planning/schedule**', async (route) => {
+      await route.fulfill({ json: fromScratchPlanningResponse })
+    })
+    await page.route('**/api/v1/schedule/commit/direct', async (route) => {
+      commitRequestCount += 1
+      await page.waitForTimeout(750)
+      await route.fulfill({
+        json: {
+          success: true,
+          message: 'Committed once',
+          plan_id: 'single-apply-plan',
+          committed: 2,
+          acquisition_ids: ['acq-alpha-1', 'acq-bravo-1'],
+          conflicts_detected: 0,
+          conflict_ids: [],
+        },
+      })
+    })
+
+    await openPlanningApplyStep(page, targets, testInfo, 'planning-apply-double-submit-guard.png')
+
+    const applyButton = page.getByRole('button', { name: 'Apply Plan' })
+    await expect(applyButton).toBeVisible()
+
+    await applyButton.evaluate((button) => {
+      ;(button as HTMLButtonElement).click()
+      ;(button as HTMLButtonElement).click()
+    })
+
+    await expect
+      .poll(() => commitRequestCount, { timeout: 5000 })
+      .toBe(1)
+    await expect(page.getByRole('button', { name: /Apply Plan/i })).toHaveCount(0)
+  })
 })

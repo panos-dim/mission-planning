@@ -524,12 +524,69 @@ class TestScheduleCommitConflictDetection:
         assert default_state.status_code == 200, default_state.json()
         assert len(default_state.json()["state"]["acquisitions"]) == 1, default_state.json()
 
-        other_state = client.get(
+    def test_direct_commit_rejects_identical_retry_after_success(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """A repeated direct-commit payload should be rejected as a duplicate retry."""
+        client, _db, workspace_id = isolated_schedule_api
+
+        base_start = datetime.now(timezone.utc) + timedelta(days=19)
+        request_body = {
+            "workspace_id": workspace_id,
+            "algorithm": "regression_test",
+            "lock_level": "none",
+            "items": [
+                {
+                    "opportunity_id": "retry-direct-1",
+                    "satellite_id": "SAT-1",
+                    "target_id": "RETRY-A",
+                    "start_time": _iso(base_start),
+                    "end_time": _iso(base_start + timedelta(minutes=5)),
+                    "roll_angle_deg": 0.0,
+                    "pitch_angle_deg": 0.0,
+                },
+                {
+                    "opportunity_id": "retry-direct-2",
+                    "satellite_id": "SAT-1",
+                    "target_id": "RETRY-B",
+                    "start_time": _iso(base_start + timedelta(minutes=10)),
+                    "end_time": _iso(base_start + timedelta(minutes=15)),
+                    "roll_angle_deg": 0.0,
+                    "pitch_angle_deg": 0.0,
+                },
+            ],
+        }
+
+        first_commit = client.post("/api/v1/schedule/commit/direct", json=request_body)
+        assert first_commit.status_code == 200, first_commit.json()
+        assert first_commit.json()["committed"] == 2, first_commit.json()
+
+        duplicate_preview = client.post(
+            "/api/v1/schedule/commit/direct/preview",
+            json={
+                "workspace_id": workspace_id,
+                "items": request_body["items"],
+            },
+        )
+        assert duplicate_preview.status_code == 200, duplicate_preview.json()
+        preview_payload = duplicate_preview.json()
+        assert preview_payload["conflicts_count"] >= 1, preview_payload
+        assert any(
+            conflict["type"] == "duplicate_commit"
+            for conflict in preview_payload["conflicts"]
+        ), preview_payload
+
+        second_commit = client.post("/api/v1/schedule/commit/direct", json=request_body)
+        assert second_commit.status_code == 409, second_commit.json()
+        detail = second_commit.json()["detail"]
+        assert "Duplicate commit detected" in detail["message"], detail
+
+        state = client.get(
             "/api/v1/schedule/state",
             params={"workspace_id": workspace_id},
         )
-        assert other_state.status_code == 200, other_state.json()
-        assert len(other_state.json()["state"]["acquisitions"]) == 1, other_state.json()
+        assert state.status_code == 200, state.json()
+        assert len(state.json()["state"]["acquisitions"]) == 2, state.json()
 
     def test_direct_commit_materializes_missing_workspace_scope(
         self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
