@@ -1529,4 +1529,97 @@ test.describe('Planning apply confirmation UI', () => {
       .toBe(2)
     await expect(page.getByRole('button', { name: /Apply Plan/i })).toHaveCount(0)
   })
+
+  test('fails closed on retry when the first dropped apply may already have committed', async ({
+    page,
+  }, testInfo) => {
+    const targets = [
+      { name: 'Alpha', latitude: 24.7136, longitude: 46.6753 },
+      { name: 'Bravo', latitude: 21.4858, longitude: 39.1925 },
+    ]
+
+    let commitAttempts = 0
+    let unknownOutcomeCommitted = false
+
+    await mockCommonApis(page, targets)
+    await page.route('**/api/v1/schedule/horizon**', async (route) => {
+      await route.fulfill({ json: noScheduleHorizon })
+    })
+    await page.route('**/api/v1/schedule/mode-selection**', async (route) => {
+      await route.fulfill({
+        json: {
+          success: true,
+          planning_mode: 'from_scratch',
+          reason: 'No existing schedule found for workspace. Building new optimized schedule.',
+          workspace_id: 'default',
+          existing_acquisition_count: 0,
+          new_target_count: 2,
+          conflict_count: 0,
+          current_target_ids: [],
+          existing_target_ids: [],
+          request_payload_hash: 'transport-unknown-outcome-hash',
+        },
+      })
+    })
+    await page.route('**/api/v1/planning/schedule**', async (route) => {
+      await route.fulfill({ json: fromScratchPlanningResponse })
+    })
+    await page.route('**/api/v1/schedule/commit/direct', async (route) => {
+      commitAttempts += 1
+      if (commitAttempts === 1) {
+        unknownOutcomeCommitted = true
+        await route.abort('failed')
+        return
+      }
+
+      await route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        json: {
+          detail: {
+            message: unknownOutcomeCommitted
+              ? 'Schedule state changed before apply. Refresh conflicts and review the latest plan.'
+              : 'Expected committed state was missing.',
+          },
+        },
+      })
+    })
+
+    await openPlanningApplyStep(
+      page,
+      targets,
+      testInfo,
+      'planning-apply-transport-unknown-outcome.png',
+    )
+
+    await page.getByRole('button', { name: 'Apply Plan' }).click()
+
+    await expect
+      .poll(() => commitAttempts, { timeout: 5000 })
+      .toBe(1)
+    await expect(
+      page.getByText('Apply request did not complete. Verify schedule state before retrying.', {
+        exact: true,
+      }),
+    ).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Apply Plan' })).toBeVisible()
+
+    const retryCommitResponse = page.waitForResponse((response) =>
+      response.url().includes('/api/v1/schedule/commit/direct'),
+    )
+    await page.getByRole('button', { name: 'Apply Plan' }).click()
+    expect((await retryCommitResponse).status()).toBe(409)
+
+    await expect
+      .poll(() => commitAttempts, { timeout: 5000 })
+      .toBe(2)
+    await expect(
+      page.getByText(
+        'Schedule state changed before apply. Refresh conflicts and review the latest plan.',
+        { exact: true },
+      ),
+    ).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Ready to Apply' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Apply Plan' })).toBeVisible()
+  })
 })
