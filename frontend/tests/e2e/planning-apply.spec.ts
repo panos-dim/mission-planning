@@ -1136,4 +1136,68 @@ test.describe('Planning apply confirmation UI', () => {
       .toBe(1)
     await expect(page.getByRole('button', { name: /Apply Plan/i })).toHaveCount(0)
   })
+
+  test('keeps the review flow open when backend apply fails with a stale schedule conflict', async ({
+    page,
+  }, testInfo) => {
+    const targets = [
+      { name: 'Alpha', latitude: 24.7136, longitude: 46.6753 },
+      { name: 'Bravo', latitude: 21.4858, longitude: 39.1925 },
+    ]
+
+    await mockCommonApis(page, targets)
+    await page.route('**/api/v1/schedule/horizon**', async (route) => {
+      await route.fulfill({ json: noScheduleHorizon })
+    })
+    await page.route('**/api/v1/schedule/mode-selection**', async (route) => {
+      await route.fulfill({
+        json: {
+          success: true,
+          planning_mode: 'from_scratch',
+          reason: 'No existing schedule found for workspace. Building new optimized schedule.',
+          workspace_id: 'default',
+          existing_acquisition_count: 0,
+          new_target_count: 2,
+          conflict_count: 0,
+          current_target_ids: [],
+          existing_target_ids: [],
+          request_payload_hash: 'stale-apply-review-hash',
+        },
+      })
+    })
+    await page.route('**/api/v1/planning/schedule**', async (route) => {
+      await route.fulfill({ json: fromScratchPlanningResponse })
+    })
+    await page.route('**/api/v1/schedule/commit/direct', async (route) => {
+      await route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        json: {
+          detail: {
+            message: 'Schedule state changed before apply. Refresh conflicts and review the latest plan.',
+          },
+        },
+      })
+    })
+
+    await openPlanningApplyStep(page, targets, testInfo, 'planning-apply-stale-conflict.png')
+
+    await expect(page.getByRole('heading', { name: 'Ready to Apply' })).toBeVisible()
+
+    const commitResponsePromise = page.waitForResponse((response) =>
+      response.url().includes('/api/v1/schedule/commit/direct'),
+    )
+    await page.getByRole('button', { name: 'Apply Plan' }).click()
+    const commitResponse = await commitResponsePromise
+    expect(commitResponse.status()).toBe(409)
+
+    await expect(page.getByRole('heading', { name: 'Ready to Apply' })).toBeVisible()
+    await expect(
+      page.getByText(
+        'Schedule state changed before apply. Refresh conflicts and review the latest plan.',
+        { exact: true },
+      ),
+    ).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Apply Plan' })).toBeVisible()
+  })
 })

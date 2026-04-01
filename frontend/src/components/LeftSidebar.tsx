@@ -405,14 +405,30 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
           }
         }
       } catch (error) {
-        const apiErr = error as { status?: number; data?: { detail?: string } }
+        const apiErr = error as {
+          status?: number
+          data?: { detail?: string | { message?: string } }
+          message?: string
+        }
+        const detail = apiErr.data?.detail
+        const detailMessage =
+          typeof detail === 'string'
+            ? detail
+            : detail && typeof detail === 'object' && typeof detail.message === 'string'
+              ? detail.message
+              : undefined
+        const message =
+          detailMessage ||
+          (apiErr.status === 409
+            ? 'Schedule state changed before apply. Refresh conflicts and review the latest plan.'
+            : apiErr.message || 'Failed to apply schedule changes.')
         console.warn('[PromoteToOrders] Backend commit failed:', {
           status: apiErr.status,
-          detail: apiErr.data?.detail,
+          detail,
           error,
         })
         // Don't create local order if backend rejected (e.g. 409 Conflict = duplicate)
-        return
+        throw new Error(message)
       }
 
       if (!backendCommitSuccess) return

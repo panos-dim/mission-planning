@@ -63,6 +63,7 @@ export interface ScheduleDataForApply {
 interface ApplyConfirmationPanelProps {
   preview: CommitPreview
   isCommitting: boolean
+  commitError?: string | null
   onConfirm: () => void
   onBack: () => void
   scheduleData?: ScheduleDataForApply
@@ -138,6 +139,7 @@ function fmtShort(iso: string): string {
 export default function ApplyConfirmationPanel({
   preview,
   isCommitting,
+  commitError,
   onConfirm,
   onBack,
   scheduleData,
@@ -258,6 +260,12 @@ export default function ApplyConfirmationPanel({
 
       {/* Scrollable Content */}
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+        {commitError && (
+          <div className="rounded-lg border border-red-700/60 bg-red-950/35 px-3 py-2.5">
+            <p className="text-sm text-red-200">{commitError}</p>
+          </div>
+        )}
+
         <div className="space-y-1">
           <h4 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
             Operations Snapshot

@@ -580,16 +580,23 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
     commitGuardRef.current = true
     if (results && pendingCommitAlgorithm && results[pendingCommitAlgorithm] && onPromoteToOrders) {
       setIsCommitting(true)
+      let commitSucceeded = false
       try {
         // Await the async handler so the guard holds until the commit completes
         await onPromoteToOrders(pendingCommitAlgorithm, results[pendingCommitAlgorithm], {
           force: !!commitPreview?.conflicts.some((conflict) => conflict.severity === 'error'),
         })
+        commitSucceeded = true
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to apply schedule changes.'
+        setError(message)
       } finally {
         setIsCommitting(false)
-        setShowCommitModal(false)
-        setPendingCommitAlgorithm(null)
-        setCommitPreview(null)
+        if (commitSucceeded) {
+          setShowCommitModal(false)
+          setPendingCommitAlgorithm(null)
+          setCommitPreview(null)
+        }
         commitGuardRef.current = false
       }
     } else {
@@ -778,6 +785,7 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
         <ApplyConfirmationPanel
           preview={commitPreview}
           isCommitting={isCommitting}
+          commitError={error}
           onConfirm={handleConfirmCommit}
           onBack={handleCancelCommit}
           scheduleData={
@@ -797,7 +805,7 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
       {/* Main Content (hidden during confirmation) */}
       <div className={`flex-1 overflow-auto p-4 space-y-4 ${showCommitModal ? 'hidden' : ''}`}>
         {/* Error Display */}
-        {error && (
+        {error && !showCommitModal && (
           <div className="bg-red-900/50 border border-red-700 rounded-lg p-4">
             <p className="text-red-200">{error}</p>
           </div>
