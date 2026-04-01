@@ -1449,4 +1449,84 @@ test.describe('Planning apply confirmation UI', () => {
       await operatorBContext.close().catch(() => undefined)
     }
   })
+
+  test('keeps review open and allows safe retry after a dropped apply request', async ({
+    page,
+  }, testInfo) => {
+    const targets = [
+      { name: 'Alpha', latitude: 24.7136, longitude: 46.6753 },
+      { name: 'Bravo', latitude: 21.4858, longitude: 39.1925 },
+    ]
+
+    let commitAttempts = 0
+
+    await mockCommonApis(page, targets)
+    await page.route('**/api/v1/schedule/horizon**', async (route) => {
+      await route.fulfill({ json: noScheduleHorizon })
+    })
+    await page.route('**/api/v1/schedule/mode-selection**', async (route) => {
+      await route.fulfill({
+        json: {
+          success: true,
+          planning_mode: 'from_scratch',
+          reason: 'No existing schedule found for workspace. Building new optimized schedule.',
+          workspace_id: 'default',
+          existing_acquisition_count: 0,
+          new_target_count: 2,
+          conflict_count: 0,
+          current_target_ids: [],
+          existing_target_ids: [],
+          request_payload_hash: 'transport-retry-hash',
+        },
+      })
+    })
+    await page.route('**/api/v1/planning/schedule**', async (route) => {
+      await route.fulfill({ json: fromScratchPlanningResponse })
+    })
+    await page.route('**/api/v1/schedule/commit/direct', async (route) => {
+      commitAttempts += 1
+      if (commitAttempts === 1) {
+        await route.abort('failed')
+        return
+      }
+
+      await route.fulfill({
+        json: {
+          success: true,
+          message: 'Committed after retry',
+          plan_id: 'transport-retry-plan',
+          committed: 2,
+          acquisition_ids: ['acq-alpha-1', 'acq-bravo-1'],
+          conflicts_detected: 0,
+          conflict_ids: [],
+        },
+      })
+    })
+
+    await openPlanningApplyStep(page, targets, testInfo, 'planning-apply-transport-retry.png')
+
+    await page.getByRole('button', { name: 'Apply Plan' }).click()
+
+    await expect
+      .poll(() => commitAttempts, { timeout: 5000 })
+      .toBe(1)
+    await expect(
+      page.getByText('Apply request did not complete. Verify schedule state before retrying.', {
+        exact: true,
+      }),
+    ).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Ready to Apply' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Apply Plan' })).toBeVisible()
+
+    const retryCommitResponse = page.waitForResponse((response) =>
+      response.url().includes('/api/v1/schedule/commit/direct'),
+    )
+    await page.getByRole('button', { name: 'Apply Plan' }).click()
+    expect((await retryCommitResponse).ok()).toBeTruthy()
+
+    await expect
+      .poll(() => commitAttempts, { timeout: 5000 })
+      .toBe(2)
+    await expect(page.getByRole('button', { name: /Apply Plan/i })).toHaveCount(0)
+  })
 })

@@ -417,8 +417,12 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
             : detail && typeof detail === 'object' && typeof detail.message === 'string'
               ? detail.message
               : undefined
+        const isTransportFailure = apiErr.status == null && !detailMessage
         const message =
           detailMessage ||
+          (isTransportFailure
+            ? 'Apply request did not complete. Verify schedule state before retrying.'
+            : undefined) ||
           (apiErr.status === 409
             ? 'Schedule state changed before apply. Refresh conflicts and review the latest plan.'
             : apiErr.message || 'Failed to apply schedule changes.')
