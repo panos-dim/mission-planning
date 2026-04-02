@@ -5,7 +5,7 @@
  */
 
 import React, { useState, useMemo, useCallback, useEffect } from 'react'
-import { CheckSquare, History, Clock } from 'lucide-react'
+import { CheckSquare, History, Clock, RefreshCw, AlertTriangle } from 'lucide-react'
 import AcceptedOrders from './AcceptedOrders'
 import ScheduleTimeline from './ScheduleTimeline'
 import { useLockStore } from '../store/lockStore'
@@ -16,6 +16,7 @@ import { useMission } from '../context/MissionContext'
 import { useScheduleStore } from '../store/scheduleStore'
 import { useVisStore } from '../store/visStore'
 import { useSelectionStore } from '../store/selectionStore'
+import { AuditLogEntry, getCommitHistory } from '../api/scheduleApi'
 import {
   buildRecoveredOrdersFromScheduleItems,
   getAcceptedOrderAcquisitionCount,
@@ -45,6 +46,9 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
   showHistoryTab = false,
 }) => {
   const [activeTab, setActiveTab] = useState<TabId>(SCHEDULE_TABS.COMMITTED)
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState<string | null>(null)
   // PR-LOCK-OPS-01: Lock store for merging lock levels into timeline acquisitions
   const lockLevels = useLockStore((s) => s.levels)
   const toggleLock = useLockStore((s) => s.toggleLock)
@@ -203,6 +207,21 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
     () => getAcceptedOrderAcquisitionCount(committedOrders),
     [committedOrders],
   )
+  const historyCount = auditLogs.length
+
+  const fetchCommitHistory = useCallback(async () => {
+    if (!workspaceId) return
+    setHistoryLoading(true)
+    setHistoryError(null)
+    try {
+      const response = await getCommitHistory({ workspace_id: workspaceId, limit: 20 })
+      setAuditLogs(response.audit_logs)
+    } catch (error) {
+      setHistoryError(error instanceof Error ? error.message : 'Failed to load commit history')
+    } finally {
+      setHistoryLoading(false)
+    }
+  }, [workspaceId])
 
   // Selection persistence: if polling removes the focused acquisition, clear both stores
   useEffect(() => {
@@ -213,6 +232,16 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
       clearAcquisitionSelection(null)
     }
   }, [masterAcquisitions, focusedAcquisitionId, focusAcquisition, clearAcquisitionSelection])
+
+  useEffect(() => {
+    if (activeLeftPanel !== 'schedule' || !workspaceId) return
+    void fetchCommitHistory()
+  }, [activeLeftPanel, workspaceId, fetchCommitHistory])
+
+  useEffect(() => {
+    if (activeLeftPanel !== 'schedule' || activeTab !== SCHEDULE_TABS.HISTORY) return
+    void fetchCommitHistory()
+  }, [activeLeftPanel, activeTab, fetchCommitHistory])
 
   const tabs: Tab[] = [
     {
@@ -230,16 +259,14 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
       badge: masterAcquisitions.length > 0 ? masterAcquisitions.length : undefined,
       badgeColor: 'green',
     },
-  ]
-
-  // Add History tab for admins only
-  if (showHistoryTab) {
-    tabs.push({
+    {
       id: SCHEDULE_TABS.HISTORY,
       label: 'History',
       icon: History,
-    })
-  }
+      badge: historyCount > 0 ? historyCount : undefined,
+      badgeColor: 'green',
+    },
+  ]
 
   // Filter tabs based on Simple Mode config
   const visibleTabs = showHistoryTab
@@ -313,12 +340,109 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
         )}
 
         {activeTab === SCHEDULE_TABS.HISTORY && showHistoryTab && (
-          <div className="p-4 text-center text-gray-500">
-            <History className="w-12 h-12 mx-auto mb-3 opacity-50" />
-            <h3 className="text-sm font-medium text-gray-400 mb-1">Schedule History</h3>
-            <p className="text-xs text-gray-500">
-              Audit log of schedule changes. Available in future release.
-            </p>
+          <div className="h-full flex flex-col bg-gray-900">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
+              <div>
+                <h3 className="text-sm font-medium text-gray-100">Schedule History</h3>
+                <p className="text-xs text-gray-500">
+                  Recent committed schedule changes for this workspace
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void fetchCommitHistory()}
+                className="inline-flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-xs text-gray-300 hover:bg-gray-800"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${historyLoading ? 'animate-spin' : ''}`} />
+                <span>Refresh</span>
+              </button>
+            </div>
+
+            {historyError && (
+              <div className="m-4 rounded border border-red-900 bg-red-950/40 p-3 text-xs text-red-200">
+                <div className="flex items-center gap-2 font-medium">
+                  <AlertTriangle className="h-4 w-4" />
+                  <span>Unable to load schedule history</span>
+                </div>
+                <p className="mt-1 text-red-200/80">{historyError}</p>
+              </div>
+            )}
+
+            {!historyError && historyLoading && auditLogs.length === 0 && (
+              <div className="flex-1 flex items-center justify-center text-sm text-gray-400">
+                Loading schedule history...
+              </div>
+            )}
+
+            {!historyError && !historyLoading && auditLogs.length === 0 && (
+              <div className="flex-1 flex flex-col items-center justify-center px-6 text-center text-gray-500">
+                <History className="w-10 h-10 mb-3 opacity-50" />
+                <h4 className="text-sm font-medium text-gray-300">No schedule history yet</h4>
+                <p className="mt-1 text-xs text-gray-500">
+                  Committed schedule changes will appear here for operator review.
+                </p>
+              </div>
+            )}
+
+            {auditLogs.length > 0 && (
+              <div className="flex-1 overflow-y-auto">
+                {auditLogs.map((log) => (
+                  <article
+                    key={log.id}
+                    className="border-b border-gray-800 px-4 py-3"
+                    data-history-entry={log.id}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-gray-100">
+                            {log.commit_type === 'force'
+                              ? 'Forced Apply'
+                              : log.commit_type === 'repair'
+                                ? 'Repair Apply'
+                                : 'Schedule Apply'}
+                          </span>
+                          <span className="rounded bg-gray-800 px-2 py-0.5 text-[11px] uppercase tracking-wide text-gray-300">
+                            {log.commit_type}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-xs text-gray-400">
+                          {new Date(log.created_at).toLocaleString()}
+                        </p>
+                      </div>
+                      <div className="text-right text-xs text-gray-400">
+                        <div>{log.acquisitions_created} created</div>
+                        {log.acquisitions_dropped > 0 && <div>{log.acquisitions_dropped} dropped</div>}
+                        {log.conflicts_after > 0 && (
+                          <div className="text-yellow-400">{log.conflicts_after} conflicts remain</div>
+                        )}
+                      </div>
+                    </div>
+
+                    <dl className="mt-3 grid grid-cols-2 gap-2 text-xs text-gray-400">
+                      <div>
+                        <dt className="text-gray-500">Plan</dt>
+                        <dd className="font-mono text-gray-300">{log.plan_id}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-gray-500">Audit</dt>
+                        <dd className="font-mono text-gray-300">{log.id}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-gray-500">Conflicts Before</dt>
+                        <dd className="text-gray-300">{log.conflicts_before}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-gray-500">Conflicts After</dt>
+                        <dd className="text-gray-300">{log.conflicts_after}</dd>
+                      </div>
+                    </dl>
+
+                    {log.notes && <p className="mt-3 text-xs text-gray-300">{log.notes}</p>}
+                  </article>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>

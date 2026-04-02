@@ -568,6 +568,16 @@ async function mockCommonApis(page: Page, targets: ScenarioTarget[]) {
     })
   })
 
+  await page.route('**/api/v1/schedule/commit-history**', async (route) => {
+    await route.fulfill({
+      json: {
+        success: true,
+        audit_logs: [],
+        total: 0,
+      },
+    })
+  })
+
   await page.route('**/api/v1/schedule/commit/direct/preview**', async (route) => {
     const requestBody = route.request().postDataJSON() as { items?: unknown[] }
     const itemCount = Array.isArray(requestBody.items) ? requestBody.items.length : 0
@@ -1634,6 +1644,23 @@ test.describe('Planning apply confirmation UI', () => {
     ]
 
     let unknownOutcomeCommitted = false
+    const recoveredAuditLog = {
+      id: 'audit-recovered-1',
+      created_at: '2026-03-24T02:06:00Z',
+      plan_id: 'recovered-plan-1',
+      workspace_id: 'default',
+      committed_by: null,
+      commit_type: 'normal',
+      config_hash: 'sha256:recovered-plan-hash',
+      repair_diff: null,
+      acquisitions_created: 2,
+      acquisitions_dropped: 0,
+      score_before: null,
+      score_after: null,
+      conflicts_before: 0,
+      conflicts_after: 0,
+      notes: 'Recovered after transport interruption',
+    }
 
     const committedItems = [
       {
@@ -1734,6 +1761,15 @@ test.describe('Planning apply confirmation UI', () => {
         },
       })
     })
+    await page.route('**/api/v1/schedule/commit-history**', async (route) => {
+      await route.fulfill({
+        json: {
+          success: true,
+          audit_logs: unknownOutcomeCommitted ? [recoveredAuditLog] : [],
+          total: unknownOutcomeCommitted ? 1 : 0,
+        },
+      })
+    })
     await page.route('**/api/v1/planning/schedule**', async (route) => {
       await route.fulfill({ json: fromScratchPlanningResponse })
     })
@@ -1760,7 +1796,12 @@ test.describe('Planning apply confirmation UI', () => {
     ).toHaveCount(0)
     await expect(page.getByRole('heading', { name: 'Ready to Apply' })).toHaveCount(0)
 
-    await openLeftPanel(page, 'Schedule', page.getByText('1 entries', { exact: true }))
-    await expect(page.getByText('1 entries', { exact: true })).toBeVisible()
+    const historyTab = page.getByRole('button', { name: /^History/ })
+    await openLeftPanel(page, 'Schedule', historyTab)
+    await historyTab.click()
+    await expect(page.getByText('Schedule History', { exact: true })).toBeVisible()
+    await expect(page.getByText('Recovered after transport interruption', { exact: true })).toBeVisible()
+    await expect(page.getByText('2 created', { exact: true })).toBeVisible()
+    await expect(page.getByText('recovered-plan-1', { exact: true })).toBeVisible()
   })
 })

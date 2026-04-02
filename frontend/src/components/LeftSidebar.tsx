@@ -537,7 +537,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
           <SchedulePanel
             orders={orders}
             onOrdersChange={setOrders}
-            showHistoryTab={isDeveloperMode}
+            showHistoryTab
           />
         ),
       },

@@ -55,6 +55,7 @@ export interface DirectCommitResponse {
   plan_id: string
   committed: number
   acquisition_ids: string[]
+  audit_log_id?: string
   conflicts_detected?: number
   conflict_ids?: string[]
 }

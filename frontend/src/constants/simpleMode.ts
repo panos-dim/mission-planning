@@ -75,10 +75,14 @@ export const SIMPLE_MODE_RIGHT_PANELS = [
 export const SCHEDULE_TABS = {
   COMMITTED: 'committed',
   TIMELINE: 'timeline',
-  HISTORY: 'history', // Admin only
+  HISTORY: 'history',
 } as const
 
-export const SIMPLE_MODE_SCHEDULE_TABS = [SCHEDULE_TABS.COMMITTED, SCHEDULE_TABS.TIMELINE] as const
+export const SIMPLE_MODE_SCHEDULE_TABS = [
+  SCHEDULE_TABS.COMMITTED,
+  SCHEDULE_TABS.TIMELINE,
+  SCHEDULE_TABS.HISTORY,
+] as const
 
 /**
  * Table Pagination Configuration
