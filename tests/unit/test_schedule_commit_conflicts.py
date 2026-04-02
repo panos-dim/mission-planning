@@ -1007,6 +1007,149 @@ class TestScheduleCommitConflictDetection:
         acquisitions = state.json()["state"]["acquisitions"]
         assert len(acquisitions) == 1, state.json()
 
+    def test_parallel_mixed_overlap_burst_keeps_only_non_conflicting_winners(
+        self,
+        isolated_schedule_api: Tuple[TestClient, ScheduleDB, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Concurrent mixed overlap bursts should only persist a clean final schedule."""
+        client, _db, workspace_id = isolated_schedule_api
+
+        base_start = datetime.now(timezone.utc) + timedelta(days=19)
+        request_bodies = [
+            {
+                "workspace_id": workspace_id,
+                "algorithm": "burst_cluster_a_1",
+                "lock_level": "none",
+                "items": [
+                    {
+                        "opportunity_id": "mixed-overlap-a1",
+                        "satellite_id": "SAT-1",
+                        "target_id": "MIX-A1",
+                        "start_time": _iso(base_start),
+                        "end_time": _iso(base_start + timedelta(minutes=5)),
+                        "roll_angle_deg": 0.0,
+                        "pitch_angle_deg": 0.0,
+                    }
+                ],
+            },
+            {
+                "workspace_id": workspace_id,
+                "algorithm": "burst_cluster_a_2",
+                "lock_level": "none",
+                "items": [
+                    {
+                        "opportunity_id": "mixed-overlap-a2",
+                        "satellite_id": "SAT-1",
+                        "target_id": "MIX-A2",
+                        "start_time": _iso(base_start + timedelta(minutes=2)),
+                        "end_time": _iso(base_start + timedelta(minutes=7)),
+                        "roll_angle_deg": 0.0,
+                        "pitch_angle_deg": 0.0,
+                    }
+                ],
+            },
+            {
+                "workspace_id": workspace_id,
+                "algorithm": "burst_cluster_b_1",
+                "lock_level": "none",
+                "items": [
+                    {
+                        "opportunity_id": "mixed-overlap-b1",
+                        "satellite_id": "SAT-1",
+                        "target_id": "MIX-B1",
+                        "start_time": _iso(base_start + timedelta(minutes=10)),
+                        "end_time": _iso(base_start + timedelta(minutes=15)),
+                        "roll_angle_deg": 0.0,
+                        "pitch_angle_deg": 0.0,
+                    }
+                ],
+            },
+            {
+                "workspace_id": workspace_id,
+                "algorithm": "burst_cluster_b_2",
+                "lock_level": "none",
+                "items": [
+                    {
+                        "opportunity_id": "mixed-overlap-b2",
+                        "satellite_id": "SAT-1",
+                        "target_id": "MIX-B2",
+                        "start_time": _iso(base_start + timedelta(minutes=12)),
+                        "end_time": _iso(base_start + timedelta(minutes=17)),
+                        "roll_angle_deg": 0.0,
+                        "pitch_angle_deg": 0.0,
+                    }
+                ],
+            },
+        ]
+
+        burst_size = len(request_bodies)
+        original_predict = schedule_router._predict_direct_commit_conflicts
+        precheck_calls = 0
+        precheck_lock = threading.Lock()
+        precheck_barrier = threading.Barrier(burst_size)
+
+        def synchronized_predict(db_arg, items, workspace_id_arg):
+            nonlocal precheck_calls
+            with precheck_lock:
+                precheck_calls += 1
+                current_call = precheck_calls
+            if current_call <= burst_size:
+                precheck_barrier.wait(timeout=5)
+            return original_predict(db_arg, items, workspace_id_arg)
+
+        monkeypatch.setattr(
+            schedule_router,
+            "_predict_direct_commit_conflicts",
+            synchronized_predict,
+        )
+
+        with ExitStack() as stack:
+            clients = [stack.enter_context(TestClient(app)) for _ in range(burst_size)]
+
+            def submit_commit(args):
+                thread_client, request_body = args
+                return thread_client.post(
+                    "/api/v1/schedule/commit/direct", json=request_body
+                )
+
+            with ThreadPoolExecutor(max_workers=burst_size) as executor:
+                responses = list(executor.map(submit_commit, zip(clients, request_bodies)))
+
+        status_counts = {
+            200: sum(1 for response in responses if response.status_code == 200),
+            409: sum(1 for response in responses if response.status_code == 409),
+        }
+        assert status_counts == {200: 2, 409: 2}, [response.json() for response in responses]
+
+        state = client.get(
+            "/api/v1/schedule/state",
+            params={"workspace_id": workspace_id},
+        )
+        assert state.status_code == 200, state.json()
+        acquisitions = state.json()["state"]["acquisitions"]
+        assert len(acquisitions) == 2, state.json()
+
+        committed_targets = {acquisition["target_id"] for acquisition in acquisitions}
+        assert len(committed_targets & {"MIX-A1", "MIX-A2"}) == 1, committed_targets
+        assert len(committed_targets & {"MIX-B1", "MIX-B2"}) == 1, committed_targets
+
+        ordered_windows = sorted(
+            (
+                datetime.fromisoformat(acquisition["start_time"].replace("Z", "+00:00")),
+                datetime.fromisoformat(acquisition["end_time"].replace("Z", "+00:00")),
+            )
+            for acquisition in acquisitions
+        )
+        assert ordered_windows[0][1] <= ordered_windows[1][0], ordered_windows
+
+        conflicts = client.get(
+            "/api/v1/schedule/conflicts",
+            params={"workspace_id": workspace_id},
+        )
+        assert conflicts.status_code == 200, conflicts.json()
+        assert len(conflicts.json()["conflicts"]) == 0, conflicts.json()
+
     def test_direct_commit_materializes_missing_workspace_scope(
         self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
     ) -> None:
