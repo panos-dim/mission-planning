@@ -355,6 +355,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
             drop_acquisition_ids: result.repair_dropped_ids || [],
             lock_level: 'none',
             mode: result.schedule[0]?.sar_mode ? 'SAR' : 'OPTICAL',
+            expected_revision: result.repair_expected_revision,
           })
 
           if (repairResponse.success) {

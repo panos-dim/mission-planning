@@ -339,6 +339,7 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
             },
             repair_plan_id: repairResponse.plan_id,
             repair_dropped_ids: repairResponse.repair_diff.dropped,
+            repair_expected_revision: repairResponse.expected_revision,
             target_statistics: (() => {
               const coveredTargets = new Set(repairResponse.new_plan_items.map((i) => i.target_id))
               const allTargets = new Set([

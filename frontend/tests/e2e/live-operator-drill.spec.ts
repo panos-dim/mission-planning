@@ -308,6 +308,21 @@ async function getHorizon(
   })
 }
 
+async function getCommitHistory(request: APIRequestContext, workspaceId: string) {
+  return apiGet<{
+    audit_logs?: Array<{
+      id: string
+      plan_id: string
+      commit_type: string
+      acquisitions_created: number
+    }>
+    total?: number
+  }>(request, '/api/v1/schedule/commit-history', {
+    workspace_id: workspaceId,
+    limit: 50,
+  })
+}
+
 function toCommitItems(schedule: DirectScheduleItem[]): CommitItem[] {
   return schedule.map((item, index) => ({
     opportunity_id: item.opportunity_id || `live_item_${index + 1}`,
@@ -1688,6 +1703,147 @@ test.describe('Live operator drill', () => {
         ),
       )
       await testInfo.attach('live-two-operator-summary', {
+        path: summaryPath,
+        contentType: 'application/json',
+      })
+    } finally {
+      await contextA.close()
+      await contextB.close()
+    }
+  })
+
+  test('stays fail-closed and auditable across repeated live two-operator contention rounds', async ({
+    browser,
+    request,
+  }, testInfo) => {
+    test.setTimeout(18 * 60 * 1000)
+
+    const workspaceName = `live_two_operator_rounds_${Date.now()}`
+    const workspaceId = await createWorkspace(request, workspaceName)
+    const targetPool = generateFallbackTargetPool(68)
+    const roundTargetCounts = [50, 55, 60]
+    const contextA = await browser.newContext()
+    const contextB = await browser.newContext()
+    const pageA = await contextA.newPage()
+    const pageB = await contextB.newPage()
+    const roundSummaries: Array<{
+      round: number
+      target_count: number
+      winner_plan_id: string
+      winner_audit_log_id: string
+      loser_status: number
+      loser_message: string
+      history_total: number
+    }> = []
+
+    try {
+      let workspaceLoaded = false
+
+      for (let roundIndex = 0; roundIndex < roundTargetCounts.length; roundIndex += 1) {
+        const requestedTargetCount = roundTargetCounts[roundIndex]!
+        const targets = targetPool.slice(0, requestedTargetCount)
+        let actionableRound = false
+
+        for (let expansionAttempt = 0; expansionAttempt < 3; expansionAttempt += 1) {
+          const expansionTargetCount = Math.min(requestedTargetCount + expansionAttempt * 3, targetPool.length)
+          const expandedTargets = targetPool.slice(0, expansionTargetCount)
+          await analyzeWorkspace(request, workspaceId, liveIceyeSatellite, expandedTargets, {
+            startOffsetMs: 6 * 60 * 60 * 1000,
+          })
+
+          const operatorA = await runPlanningViaUi(
+            pageA,
+            workspaceName,
+            `live-two-operator-round-${roundIndex + 1}-a.png`,
+            testInfo,
+            { autoCommit: false, skipWorkspaceLoad: workspaceLoaded },
+          )
+          const operatorB = await runPlanningViaUi(
+            pageB,
+            workspaceName,
+            `live-two-operator-round-${roundIndex + 1}-b.png`,
+            testInfo,
+            { autoCommit: false, skipWorkspaceLoad: workspaceLoaded },
+          )
+          workspaceLoaded = true
+
+          if (
+            operatorA.uiSummary?.actionState !== 'review_ready' ||
+            operatorB.uiSummary?.actionState !== 'review_ready'
+          ) {
+            console.log(
+              `[live-two-operator-rounds] round ${roundIndex + 1} expansion ${expansionAttempt + 1} returned no actionable changes`,
+            )
+            continue
+          }
+
+          const winnerCommit = await commitCurrentReview(pageA)
+          expect(winnerCommit.ok, winnerCommit.bodyText).toBeTruthy()
+          const winnerPlanId = String(winnerCommit.json?.plan_id ?? '')
+          const winnerAuditLogId = String(winnerCommit.json?.audit_log_id ?? '')
+          expect(winnerPlanId).toBeTruthy()
+          expect(winnerAuditLogId).toBeTruthy()
+
+          const loserCommit = await commitCurrentReview(pageB)
+          expect(loserCommit.status, loserCommit.bodyText).toBe(409)
+          const loserDetail =
+            loserCommit.json?.detail && typeof loserCommit.json.detail === 'object'
+              ? (loserCommit.json.detail as Record<string, unknown>)
+              : {}
+          const loserMessage =
+            typeof loserCommit.json?.detail === 'string'
+              ? loserCommit.json.detail
+              : String(loserDetail.message ?? '')
+          expect(
+            /Schedule changed before apply completed|Duplicate commit detected/i.test(loserMessage),
+            loserMessage,
+          ).toBeTruthy()
+
+          await pageB.reload({ waitUntil: 'domcontentloaded' })
+          const headerWorkspaceBadge = pageB.locator('div[title^="Selected workspace:"]')
+          await expect(headerWorkspaceBadge).toContainText(workspaceName, { timeout: 60_000 })
+          await openScheduleHistory(pageB)
+          await expect(pageB.getByText(winnerPlanId, { exact: true })).toBeVisible({
+            timeout: 30_000,
+          })
+          await expect(pageB.getByText(winnerAuditLogId, { exact: true })).toBeVisible({
+            timeout: 30_000,
+          })
+
+          const history = await getCommitHistory(request, workspaceId)
+          const historyTotal = Number(history.total ?? history.audit_logs?.length ?? 0)
+          expect(historyTotal).toBe(roundIndex + 1)
+
+          roundSummaries.push({
+            round: roundIndex + 1,
+            target_count: expansionTargetCount,
+            winner_plan_id: winnerPlanId,
+            winner_audit_log_id: winnerAuditLogId,
+            loser_status: loserCommit.status,
+            loser_message: loserMessage,
+            history_total: historyTotal,
+          })
+          actionableRound = true
+          break
+        }
+
+        expect(actionableRound, `round ${roundIndex + 1} never produced a review-ready live contention state`).toBeTruthy()
+      }
+
+      const summaryPath = testInfo.outputPath('live-two-operator-rounds-summary.json')
+      writeFileSync(
+        summaryPath,
+        JSON.stringify(
+          {
+            workspace_id: workspaceId,
+            workspace_name: workspaceName,
+            rounds: roundSummaries,
+          },
+          null,
+          2,
+        ),
+      )
+      await testInfo.attach('live-two-operator-rounds-summary', {
         path: summaryPath,
         contentType: 'application/json',
       })

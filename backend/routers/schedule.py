@@ -2301,6 +2301,17 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
             error_message = str(exc)
             if "Schedule revision conflict" in error_message:
                 db.update_plan_status(plan.id, "superseded")
+                duplicate_plan_id = _find_existing_direct_commit_plan(db, input_hash)
+                if duplicate_plan_id and duplicate_plan_id != plan.id:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "message": (
+                                "Duplicate commit detected. This exact schedule was already applied."
+                            ),
+                            "duplicate_plan_id": duplicate_plan_id,
+                        },
+                    ) from exc
                 current_conflicts: List[Dict[str, Any]] = []
                 try:
                     current_conflicts = _predict_direct_commit_conflicts(
@@ -3434,6 +3445,7 @@ class RepairPlanResponseModel(BaseModel):
     # Algorithm metrics
     algorithm_metrics: Dict[str, Any] = Field(default_factory=dict)
     plan_id: Optional[str] = None
+    expected_revision: Optional[int] = None
     schedule_context: Dict[str, Any] = Field(default_factory=dict)
 
     # Planner-facing summary: per-target details for intelligent narrative
@@ -4033,6 +4045,7 @@ async def create_repair_plan(
         commit_preview=commit_preview,
         algorithm_metrics=metrics,
         plan_id=plan.id,
+        expected_revision=db.get_schedule_revision(effective_workspace_id),
         schedule_context=schedule_context,
         planner_summary=planner_summary,
     )
@@ -4060,6 +4073,10 @@ class RepairCommitRequest(BaseModel):
         description="Force commit even with conflicts (requires explicit acknowledgment)",
     )
     notes: Optional[str] = Field(default=None, description="Commit notes")
+    expected_revision: Optional[int] = Field(
+        default=None,
+        description="Workspace schedule revision expected by the operator when reviewing the repair plan",
+    )
     # Metrics for audit trail
     score_before: Optional[float] = None
     score_after: Optional[float] = None
@@ -4218,6 +4235,9 @@ async def commit_repair_plan(request: RepairCommitRequest) -> RepairCommitRespon
             mode=request.mode,
             workspace_id=request.workspace_id,
             drop_acquisition_ids=request.drop_acquisition_ids,
+            expected_revision=request.expected_revision,
+            enforce_current_conflict_check=True,
+            allow_conflicts=request.force,
         )
 
         # Recompute conflicts
@@ -4287,7 +4307,20 @@ async def commit_repair_plan(request: RepairCommitRequest) -> RepairCommitRespon
         )
 
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        error_message = str(e)
+        if "Schedule revision conflict" in error_message:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": (
+                        "Schedule changed before apply completed. "
+                        "Refresh conflicts and review the latest repair plan."
+                    ),
+                    "reason": "schedule_revision_conflict",
+                    "stale_detail": error_message,
+                },
+            )
+        raise HTTPException(status_code=400, detail=error_message)
     except Exception as e:
         logger.error(f"Repair commit failed: {e}")
         raise HTTPException(

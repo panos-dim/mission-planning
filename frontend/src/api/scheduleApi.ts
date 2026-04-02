@@ -731,6 +731,7 @@ export interface RepairPlanResponse {
   success: boolean
   message: string
   planning_mode: 'repair'
+  expected_revision?: number
   // Schedule context
   existing_acquisitions: ExistingAcquisitionsSummary
   fixed_count: number
@@ -937,6 +938,7 @@ export interface RepairCommitRequest {
   mode?: string
   force?: boolean
   notes?: string
+  expected_revision?: number
   score_before?: number
   score_after?: number
   conflicts_before?: number

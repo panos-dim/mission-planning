@@ -3896,7 +3896,7 @@ class ScheduleDB:
                     """
                     INSERT INTO workspace_schedule_revision
                         (workspace_id, revision, updated_at)
-                    VALUES (?, 1, ?)
+                    VALUES (?, 2, ?)
                     ON CONFLICT(workspace_id) DO UPDATE
                     SET revision = revision + 1, updated_at = ?
                 """,

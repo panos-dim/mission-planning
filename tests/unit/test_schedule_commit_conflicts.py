@@ -1061,7 +1061,7 @@ class TestScheduleCommitConflictDetection:
         isolated_schedule_api: Tuple[TestClient, ScheduleDB, str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Concurrent mixed overlap bursts should only persist a clean final schedule."""
+        """Concurrent mixed bursts should serialize to one clean winner per workspace revision."""
         client, _db, workspace_id = isolated_schedule_api
 
         base_start = datetime.now(timezone.utc) + timedelta(days=19)
@@ -1169,11 +1169,7 @@ class TestScheduleCommitConflictDetection:
             200: sum(1 for response in responses if response.status_code == 200),
             409: sum(1 for response in responses if response.status_code == 409),
         }
-        assert status_counts == {200: 2, 409: 2}, [response.json() for response in responses]
-        success_payloads = [
-            response.json() for response in responses if response.status_code == 200
-        ]
-        successful_plan_ids = {payload["plan_id"] for payload in success_payloads}
+        assert status_counts == {200: 1, 409: 3}, [response.json() for response in responses]
 
         state = client.get(
             "/api/v1/schedule/state",
@@ -1181,20 +1177,10 @@ class TestScheduleCommitConflictDetection:
         )
         assert state.status_code == 200, state.json()
         acquisitions = state.json()["state"]["acquisitions"]
-        assert len(acquisitions) == 2, state.json()
-
-        committed_targets = {acquisition["target_id"] for acquisition in acquisitions}
-        assert len(committed_targets & {"MIX-A1", "MIX-A2"}) == 1, committed_targets
-        assert len(committed_targets & {"MIX-B1", "MIX-B2"}) == 1, committed_targets
-
-        ordered_windows = sorted(
-            (
-                datetime.fromisoformat(acquisition["start_time"].replace("Z", "+00:00")),
-                datetime.fromisoformat(acquisition["end_time"].replace("Z", "+00:00")),
-            )
-            for acquisition in acquisitions
+        assert len(acquisitions) == 1, state.json()
+        assert acquisitions[0]["target_id"] in {"MIX-A1", "MIX-A2", "MIX-B1", "MIX-B2"}, (
+            state.json()
         )
-        assert ordered_windows[0][1] <= ordered_windows[1][0], ordered_windows
 
         conflicts = client.get(
             "/api/v1/schedule/conflicts",
@@ -1209,13 +1195,9 @@ class TestScheduleCommitConflictDetection:
         )
         assert history.status_code == 200, history.json()
         audit_logs = history.json()["audit_logs"]
-        assert history.json()["total"] == 2, history.json()
-        assert {log["plan_id"] for log in audit_logs} == successful_plan_ids, history.json()
+        assert history.json()["total"] == 1, history.json()
         assert all(log["acquisitions_created"] == 1 for log in audit_logs), history.json()
         assert all(log["commit_type"] == "normal" for log in audit_logs), history.json()
-        assert {
-            payload["audit_log_id"] for payload in success_payloads
-        } == {log["id"] for log in audit_logs}, history.json()
 
     def test_direct_commit_materializes_missing_workspace_scope(
         self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
@@ -1650,8 +1632,22 @@ class TestScheduleCommitConflictDetection:
             },
         )
 
-        assert repair_commit.status_code == 200, repair_commit.json()
-        payload = repair_commit.json()
+        assert repair_commit.status_code == 400, repair_commit.json()
+        assert "Concurrent schedule conflict detected" in repair_commit.json()["detail"]
+
+        forced_repair_commit = client.post(
+            "/api/v1/schedule/repair/commit",
+            json={
+                "plan_id": repair_plan,
+                "workspace_id": workspace_id,
+                "lock_level": "none",
+                "mode": "OPTICAL",
+                "force": True,
+            },
+        )
+
+        assert forced_repair_commit.status_code == 200, forced_repair_commit.json()
+        payload = forced_repair_commit.json()
         assert payload["conflicts_after"] >= 1, payload
 
     def test_recompute_conflicts_defaults_to_workspace_horizon(
@@ -2790,6 +2786,125 @@ class TestPlanningModeSelection:
         assert state.status_code == 200, state.json()
         target_ids = {acq["target_id"] for acq in state.json()["state"]["acquisitions"]}
         assert "TGT-2" in target_ids
+
+    def test_repair_commit_rejects_stale_second_operator_commit(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Two repair plans from the same revision should resolve to one winner and one stale 409."""
+        client, db, workspace_id = isolated_schedule_api
+        original_state = _snapshot_analysis_state()
+
+        keep_slot = _state_iso(datetime.now(timezone.utc) + timedelta(days=2))
+        removed_slot = _state_iso(datetime.now(timezone.utc) + timedelta(days=2, minutes=20))
+        set_cached_opportunities([], workspace_id)
+        set_current_mission_data(
+            {
+                "targets": [
+                    TargetData(
+                        name="ACTIVE-TGT", latitude=25.0, longitude=55.0, priority=5
+                    ),
+                ],
+                "mission_data": {
+                    "targets": [
+                        {"name": "ACTIVE-TGT", "priority": 5},
+                    ],
+                    "start_time": keep_slot,
+                    "end_time": _state_iso(
+                        datetime.now(timezone.utc) + timedelta(days=2, hours=1)
+                    ),
+                },
+            },
+            workspace_id,
+        )
+
+        db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="ACTIVE-TGT",
+            start_time=keep_slot,
+            end_time=keep_slot,
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="committed",
+            workspace_id=workspace_id,
+        )
+        db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="REMOVED-TGT",
+            start_time=removed_slot,
+            end_time=removed_slot,
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="committed",
+            workspace_id=workspace_id,
+        )
+
+        try:
+            repair_a = client.post(
+                "/api/v1/schedule/repair",
+                json={
+                    "workspace_id": workspace_id,
+                    "planning_mode": "repair",
+                    "target_priorities": {"ACTIVE-TGT": 5},
+                },
+            )
+            repair_b = client.post(
+                "/api/v1/schedule/repair",
+                json={
+                    "workspace_id": workspace_id,
+                    "planning_mode": "repair",
+                    "target_priorities": {"ACTIVE-TGT": 5},
+                },
+            )
+        finally:
+            _restore_analysis_state(original_state)
+
+        assert repair_a.status_code == 200, repair_a.json()
+        assert repair_b.status_code == 200, repair_b.json()
+        repair_a_body = repair_a.json()
+        repair_b_body = repair_b.json()
+        assert repair_a_body["plan_id"] != repair_b_body["plan_id"], (
+            repair_a_body,
+            repair_b_body,
+        )
+        assert repair_a_body["expected_revision"] == repair_b_body["expected_revision"], (
+            repair_a_body,
+            repair_b_body,
+        )
+
+        commit_a = client.post(
+            "/api/v1/schedule/repair/commit",
+            json={
+                "workspace_id": workspace_id,
+                "plan_id": repair_a_body["plan_id"],
+                "drop_acquisition_ids": repair_a_body["repair_diff"]["dropped"],
+                "expected_revision": repair_a_body["expected_revision"],
+                "force": True,
+            },
+        )
+        assert commit_a.status_code == 200, commit_a.json()
+
+        commit_b = client.post(
+            "/api/v1/schedule/repair/commit",
+            json={
+                "workspace_id": workspace_id,
+                "plan_id": repair_b_body["plan_id"],
+                "drop_acquisition_ids": repair_b_body["repair_diff"]["dropped"],
+                "expected_revision": repair_b_body["expected_revision"],
+                "force": True,
+            },
+        )
+        assert commit_b.status_code == 409, commit_b.json()
+        detail = commit_b.json()["detail"]
+        assert "Schedule changed before apply completed" in detail["message"], detail
+
+        state = client.get(
+            "/api/v1/schedule/state",
+            params={"workspace_id": workspace_id},
+        )
+        assert state.status_code == 200, state.json()
+        target_ids = {acq["target_id"] for acq in state.json()["state"]["acquisitions"]}
+        assert "ACTIVE-TGT" in target_ids
+        assert "REMOVED-TGT" not in target_ids
 
     def test_planning_opportunities_are_workspace_scoped(
         self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]

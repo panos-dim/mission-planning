@@ -573,6 +573,7 @@ export interface AlgorithmResult {
   // Repair mode metadata — used by commit handler to choose correct endpoint
   repair_plan_id?: string
   repair_dropped_ids?: string[]
+  repair_expected_revision?: number
 }
 
 export interface PlanningRequest {
