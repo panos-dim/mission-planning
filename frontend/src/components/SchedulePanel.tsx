@@ -62,7 +62,7 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
   const setTimeRangeFromIso = useVisStore((s) => s.setTimeRangeFromIso)
   const activeLeftPanel = useVisStore((s) => s.activeLeftPanel)
   const clearAcquisitionSelection = useSelectionStore((s) => s.selectAcquisition)
-  const workspaceId = missionState.activeWorkspace
+  const workspaceId = missionState.activeWorkspace || 'default'
   const currentWorkspaceScheduleItems = useMemo(
     () =>
       scheduleItems.filter(

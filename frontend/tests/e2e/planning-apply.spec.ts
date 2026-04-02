@@ -1622,4 +1622,145 @@ test.describe('Planning apply confirmation UI', () => {
     await expect(page.getByRole('heading', { name: 'Ready to Apply' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Apply Plan' })).toBeVisible()
   })
+
+  test('reloads into committed schedule state after an ambiguous dropped apply', async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(90000)
+
+    const targets = [
+      { name: 'Alpha', latitude: 24.7136, longitude: 46.6753 },
+      { name: 'Bravo', latitude: 21.4858, longitude: 39.1925 },
+    ]
+
+    let unknownOutcomeCommitted = false
+
+    const committedItems = [
+      {
+        id: 'acq-alpha-1',
+        satellite_id: 'SAT-1',
+        target_id: 'Alpha',
+        start_time: '2026-03-24T02:00:00Z',
+        end_time: '2026-03-24T02:05:00Z',
+        state: 'committed',
+        lock_level: 'none',
+        workspace_id: 'default',
+        mode: 'Optical',
+      },
+      {
+        id: 'acq-bravo-1',
+        satellite_id: 'SAT-1',
+        target_id: 'Bravo',
+        start_time: '2026-03-24T03:00:00Z',
+        end_time: '2026-03-24T03:05:00Z',
+        state: 'committed',
+        lock_level: 'none',
+        workspace_id: 'default',
+        mode: 'Optical',
+      },
+    ]
+
+    await mockCommonApis(page, targets)
+    await page.route('**/api/v1/schedule/master**', async (route) => {
+      await route.fulfill({
+        json: {
+          success: true,
+          zoom: 'detail',
+          total: unknownOutcomeCommitted ? committedItems.length : 0,
+          items: unknownOutcomeCommitted ? committedItems : [],
+          buckets: [],
+          t_start: '2026-03-24T00:00:00Z',
+          t_end: '2026-03-31T00:00:00Z',
+        },
+      })
+    })
+    await page.route('**/api/v1/schedule/target-locations**', async (route) => {
+      await route.fulfill({
+        json: {
+          success: true,
+          targets: unknownOutcomeCommitted
+            ? targets.map((target) => ({
+                target_id: target.name,
+                latitude: target.latitude,
+                longitude: target.longitude,
+              }))
+            : [],
+        },
+      })
+    })
+    await page.route('**/api/v1/schedule/horizon**', async (route) => {
+      await route.fulfill({
+        json: unknownOutcomeCommitted
+          ? {
+              success: true,
+              horizon: {
+                start: '2026-03-24T00:00:00Z',
+                end: '2026-03-31T00:00:00Z',
+                freeze_cutoff: '2026-03-24T00:00:00Z',
+              },
+              acquisitions: committedItems.map((item) => ({
+                id: item.id,
+                satellite_id: item.satellite_id,
+                target_id: item.target_id,
+                start_time: item.start_time,
+                end_time: item.end_time,
+                state: item.state,
+                lock_level: item.lock_level,
+              })),
+              statistics: {
+                total_acquisitions: committedItems.length,
+                by_state: { committed: committedItems.length },
+                by_satellite: { 'SAT-1': committedItems.length },
+              },
+            }
+          : noScheduleHorizon,
+      })
+    })
+    await page.route('**/api/v1/schedule/mode-selection**', async (route) => {
+      await route.fulfill({
+        json: {
+          success: true,
+          planning_mode: unknownOutcomeCommitted ? 'repair' : 'from_scratch',
+          reason: unknownOutcomeCommitted
+            ? 'Existing schedule found after reconnect. Review current committed work before replanning.'
+            : 'No existing schedule found for workspace. Building new optimized schedule.',
+          workspace_id: 'default',
+          existing_acquisition_count: unknownOutcomeCommitted ? committedItems.length : 0,
+          new_target_count: 2,
+          conflict_count: 0,
+          current_target_ids: unknownOutcomeCommitted ? targets.map((target) => target.name) : [],
+          existing_target_ids: unknownOutcomeCommitted ? targets.map((target) => target.name) : [],
+          request_payload_hash: 'transport-refresh-recovery-hash',
+        },
+      })
+    })
+    await page.route('**/api/v1/planning/schedule**', async (route) => {
+      await route.fulfill({ json: fromScratchPlanningResponse })
+    })
+    await page.route('**/api/v1/schedule/commit/direct', async (route) => {
+      unknownOutcomeCommitted = true
+      await route.abort('failed')
+    })
+
+    await openPlanningApplyStep(page, targets, testInfo, 'planning-apply-refresh-recovery.png')
+
+    await page.getByRole('button', { name: 'Apply Plan' }).click()
+    await expect(
+      page.getByText('Apply request did not complete. Verify schedule state before retrying.', {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    await page.reload()
+
+    await expect(
+      page.getByText('Apply request did not complete. Verify schedule state before retrying.', {
+        exact: true,
+      }),
+    ).toHaveCount(0)
+    await expect(page.getByRole('heading', { name: 'Ready to Apply' })).toHaveCount(0)
+
+    await openLeftPanel(page, 'Schedule', page.getByText('1 entries', { exact: true }))
+    await expect(page.getByText('1 entries', { exact: true })).toBeVisible()
+  })
 })
