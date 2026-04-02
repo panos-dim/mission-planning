@@ -2918,10 +2918,12 @@ class ScheduleDB:
                     ("committed", now, order_id),
                 )
 
-            # Update plan status
+            # Update plan status only when the commit materially created acquisitions.
+            # Zero-created outcomes can happen when a concurrent winner already wrote the
+            # same unique acquisition rows; callers should decide how to classify that race.
             cursor.execute(
                 "UPDATE plans SET status = ? WHERE id = ?",
-                ("committed", plan_id),
+                ("committed" if created_acquisitions else "candidate", plan_id),
             )
 
             conn.commit()

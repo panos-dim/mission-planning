@@ -12,6 +12,7 @@ import tempfile
 import threading
 import types
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Generator, Optional, Tuple
@@ -835,6 +836,95 @@ class TestScheduleCommitConflictDetection:
         acquisitions = state.json()["state"]["acquisitions"]
         assert len(acquisitions) == 1, state.json()
         assert acquisitions[0]["target_id"] == "PARALLEL-A", state.json()
+
+    def test_parallel_duplicate_burst_allows_only_one_committed_result(
+        self,
+        isolated_schedule_api: Tuple[TestClient, ScheduleDB, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A burst of identical direct commits must collapse to one success."""
+        client, _db, workspace_id = isolated_schedule_api
+
+        base_start = datetime.now(timezone.utc) + timedelta(days=19)
+        request_body = {
+            "workspace_id": workspace_id,
+            "algorithm": "regression_test",
+            "lock_level": "none",
+            "items": [
+                {
+                    "opportunity_id": "parallel-burst-1",
+                    "satellite_id": "SAT-1",
+                    "target_id": "BURST-A",
+                    "start_time": _iso(base_start),
+                    "end_time": _iso(base_start + timedelta(minutes=5)),
+                    "roll_angle_deg": 0.0,
+                    "pitch_angle_deg": 0.0,
+                }
+            ],
+        }
+
+        burst_size = 5
+        original_find_duplicate = schedule_router._find_existing_direct_commit_plan
+        duplicate_lookup_calls = 0
+        duplicate_lookup_lock = threading.Lock()
+        precheck_barrier = threading.Barrier(burst_size)
+
+        def synchronize_duplicate_precheck(db_arg, input_hash):
+            nonlocal duplicate_lookup_calls
+            with duplicate_lookup_lock:
+                duplicate_lookup_calls += 1
+                current_call = duplicate_lookup_calls
+            if current_call <= burst_size:
+                precheck_barrier.wait(timeout=5)
+                return None
+            return original_find_duplicate(db_arg, input_hash)
+
+        monkeypatch.setattr(
+            schedule_router,
+            "_find_existing_direct_commit_plan",
+            synchronize_duplicate_precheck,
+        )
+        monkeypatch.setattr(
+            schedule_router,
+            "_predict_direct_commit_conflicts",
+            lambda *_args, **_kwargs: [],
+        )
+
+        with ExitStack() as stack:
+            clients = [stack.enter_context(TestClient(app)) for _ in range(burst_size)]
+
+            def submit_commit(thread_client: TestClient):
+                return thread_client.post("/api/v1/schedule/commit/direct", json=request_body)
+
+            with ThreadPoolExecutor(max_workers=burst_size) as executor:
+                responses = list(executor.map(submit_commit, clients))
+
+        status_counts = {
+            200: sum(1 for response in responses if response.status_code == 200),
+            409: sum(1 for response in responses if response.status_code == 409),
+        }
+        assert status_counts == {200: 1, 409: burst_size - 1}, [
+            response.json() for response in responses
+        ]
+
+        success_payload = next(
+            response.json() for response in responses if response.status_code == 200
+        )
+        for response in responses:
+            if response.status_code != 409:
+                continue
+            detail = response.json()["detail"]
+            assert "Duplicate commit detected" in detail["message"], detail
+            assert detail["duplicate_plan_id"] == success_payload["plan_id"], detail
+
+        state = client.get(
+            "/api/v1/schedule/state",
+            params={"workspace_id": workspace_id},
+        )
+        assert state.status_code == 200, state.json()
+        acquisitions = state.json()["state"]["acquisitions"]
+        assert len(acquisitions) == 1, state.json()
+        assert acquisitions[0]["target_id"] == "BURST-A", state.json()
 
     def test_direct_commit_materializes_missing_workspace_scope(
         self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
