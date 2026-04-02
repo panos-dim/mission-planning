@@ -21,14 +21,16 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from backend.auto_mode_selection import (
+from backend.scheduling_mode import (
     PipelineAuditTrail,
+    resolve_scheduling_mode,
     compute_request_hash,
     record_schedule_diff,
-    select_planning_mode,
 )
+from backend.order_materialization import prepare_recurring_planner_inputs
 from backend.schedule_persistence import (
     DEFAULT_WORKSPACE_ID,
+    SCHEMA_VERSION,
     Acquisition,
     ScheduleDB,
     get_schedule_db,
@@ -54,6 +56,30 @@ def _bind_schedule_log_context(
         update_log_context(**context)
 
 
+def _opportunity_field(opp: Any, key: str, default: Any = None) -> Any:
+    """Read an opportunity field from dicts or lightweight objects."""
+    if isinstance(opp, dict):
+        return opp.get(key, default)
+    return getattr(opp, key, default)
+
+
+def _opportunity_lineage(opp: Any) -> Dict[str, Optional[str]]:
+    """Extract recurring-order lineage from planner opportunities."""
+    canonical_target_id = _opportunity_field(opp, "canonical_target_id")
+    target_id = _opportunity_field(opp, "target_id")
+    return {
+        "order_id": _opportunity_field(opp, "order_id"),
+        "template_id": _opportunity_field(opp, "template_id"),
+        "instance_key": _opportunity_field(opp, "instance_key"),
+        "canonical_target_id": canonical_target_id or target_id,
+        "display_target_name": _opportunity_field(
+            opp,
+            "display_target_name",
+            canonical_target_id or target_id,
+        ),
+    }
+
+
 # =============================================================================
 # Response Models
 # =============================================================================
@@ -70,6 +96,10 @@ class AcquisitionSummary(BaseModel):
     state: str = "tentative"  # tentative | locked | committed | executing | completed
     lock_level: str = "none"  # none | hard
     order_id: Optional[str] = None
+    template_id: Optional[str] = None
+    instance_key: Optional[str] = None
+    canonical_target_id: Optional[str] = None
+    display_target_name: Optional[str] = None
 
 
 class OrderSummary(BaseModel):
@@ -81,6 +111,10 @@ class OrderSummary(BaseModel):
     status: str = "new"  # new | planned | committed | cancelled | completed
     requested_window_start: Optional[str] = None
     requested_window_end: Optional[str] = None
+    template_id: Optional[str] = None
+    instance_key: Optional[str] = None
+    planner_target_id: Optional[str] = None
+    canonical_target_id: Optional[str] = None
 
 
 class ConflictSummary(BaseModel):
@@ -114,7 +148,7 @@ class ScheduleStateMeta(BaseModel):
     """Metadata about schedule state implementation."""
 
     persistence_enabled: bool = True
-    schema_version: str = "2.5"
+    schema_version: str = SCHEMA_VERSION
     implementation_status: str = "active"
 
 
@@ -350,7 +384,7 @@ def _build_current_target_ids(
     mission_data: Dict[str, Any],
     raw_opportunities: List[Dict[str, Any]],
 ) -> set[str]:
-    """Build current target IDs from mission data, falling back to opportunities."""
+    """Build current target IDs from mission data plus scheduler-visible opportunities."""
     current_target_ids: set[str] = set()
 
     for target in mission_data.get("targets", []):
@@ -361,16 +395,19 @@ def _build_current_target_ids(
         if target_name:
             current_target_ids.add(target_name)
 
-    if current_target_ids:
-        return current_target_ids
-
-    return {
-        opp["target_id"] if isinstance(opp, dict) else getattr(opp, "target_id", "")
-        for opp in raw_opportunities
-        if (
+    current_target_ids.update(
+        {
             opp["target_id"] if isinstance(opp, dict) else getattr(opp, "target_id", "")
-        )
-    }
+            for opp in raw_opportunities
+            if (
+                opp["target_id"]
+                if isinstance(opp, dict)
+                else getattr(opp, "target_id", "")
+            )
+        }
+    )
+
+    return current_target_ids
 
 
 def _build_target_priorities(mission_data: Dict[str, Any]) -> Dict[str, int]:
@@ -398,48 +435,6 @@ def _build_target_priorities(mission_data: Dict[str, Any]) -> Dict[str, int]:
     return target_priorities
 
 
-def _load_workspace_target_baseline(workspace_id: Optional[str]) -> set[str]:
-    """Load the backend baseline target set used for auto-mode comparisons."""
-    if not workspace_id:
-        return set()
-
-    previous_target_ids: set[str] = set()
-
-    try:
-        ws_db = get_workspace_db()
-        workspace = ws_db.get_workspace(workspace_id, include_czml=False)
-        if not workspace:
-            return previous_target_ids
-
-        planning_state = workspace.planning_state or {}
-        stored_target_ids = planning_state.get("current_target_ids", [])
-        if isinstance(stored_target_ids, list):
-            previous_target_ids = {
-                str(target_id) for target_id in stored_target_ids if target_id
-            }
-
-        if not previous_target_ids and workspace.scenario_config:
-            previous_target_ids = {
-                str(target.get("name", ""))
-                for target in workspace.scenario_config.get("targets", [])
-                if target.get("name")
-            }
-
-        if not previous_target_ids and workspace.analysis_state:
-            analysis_targets = workspace.analysis_state.get("mission_data", {}).get(
-                "targets", []
-            )
-            previous_target_ids = {
-                str(target.get("name", ""))
-                for target in analysis_targets
-                if isinstance(target, dict) and target.get("name")
-            }
-    except Exception as e:
-        logger.warning(f"[Auto Mode] Failed to load workspace target baseline: {e}")
-
-    return previous_target_ids
-
-
 def _to_utc_naive(value: datetime) -> datetime:
     """Normalize a datetime to naive UTC for internal schedule comparisons."""
     if value.tzinfo is None:
@@ -456,87 +451,31 @@ def _resolve_auto_mode_selection(
     horizon_end: datetime,
     raw_opportunities: List[Dict[str, Any]],
     mission_data: Dict[str, Any],
+    recurring_orders: Optional[List[Any]] = None,
     request_payload_hash: str,
     weight_priority: float = 40.0,
     weight_geometry: float = 40.0,
     weight_timing: float = 20.0,
 ) -> tuple[Any, Dict[str, Any]]:
     """Resolve backend auto-mode selection and return planner-facing context."""
-    auto_workspace = workspace_id or "default"
-    normalized_horizon_start = _to_utc_naive(horizon_start)
-    normalized_horizon_end = _to_utc_naive(horizon_end)
-
-    try:
-        existing_acqs = db.get_acquisitions_by_lock_level(auto_workspace)
-    except Exception as e:
-        logger.warning(f"[Auto Mode] Failed to query existing acquisitions: {e}")
-        existing_acqs = []
-
-    active_existing = []
-    for acq in existing_acqs:
-        if acq.state in ("failed", "cancelled", "completed"):
-            continue
-        try:
-            acq_end = _to_utc_naive(
-                datetime.fromisoformat(acq.end_time.replace("Z", "+00:00"))
-            )
-            if acq_end <= normalized_horizon_start:
-                continue
-        except ValueError:
-            pass
-        active_existing.append(acq)
-
-    current_target_ids = _build_current_target_ids(mission_data, raw_opportunities)
-    target_priorities = _build_target_priorities(mission_data)
-    previous_target_ids = _load_workspace_target_baseline(workspace_id)
-    scheduled_target_ids = {
-        acquisition.target_id for acquisition in active_existing if acquisition.target_id
-    }
-    existing_target_ids = previous_target_ids or scheduled_target_ids
-
-    conflict_count = 0
-    if active_existing:
-        try:
-            conflicts = db.get_conflicts_in_horizon(
-                start_time=_isoformat_z(normalized_horizon_start),
-                end_time=_isoformat_z(normalized_horizon_end),
-                workspace_id=auto_workspace,
-                include_resolved=False,
-            )
-            conflict_count = len(conflicts)
-        except Exception as e:
-            logger.warning(f"[Auto Mode] Failed to query conflicts: {e}")
-
     force_mode = None
     if planning_mode != "from_scratch":
         force_mode = planning_mode
 
-    mode_result = select_planning_mode(
-        workspace_id=auto_workspace,
-        existing_acquisition_count=len(active_existing),
-        existing_target_ids=existing_target_ids,
-        current_target_ids=current_target_ids,
-        scheduled_target_ids=scheduled_target_ids,
-        target_priorities=target_priorities,
+    mode_result, mode_context = resolve_scheduling_mode(
+        db,
+        workspace_id=workspace_id,
+        horizon_start=horizon_start.replace(tzinfo=timezone.utc),
+        horizon_end=horizon_end.replace(tzinfo=timezone.utc),
+        mission_data=mission_data,
+        raw_opportunities=raw_opportunities,
+        recurring_orders=recurring_orders,
+        request_payload_hash=request_payload_hash,
         weight_priority=weight_priority,
         weight_geometry=weight_geometry,
         weight_timing=weight_timing,
-        conflict_count=conflict_count,
-        previous_plan_count=0,
-        request_payload_hash=request_payload_hash,
         force_mode=force_mode,
     )
-
-    mode_context = {
-        "workspace_id": auto_workspace,
-        "existing_acquisition_count": len(active_existing),
-        "new_target_count": mode_result.new_target_count,
-        "conflict_count": conflict_count,
-        "current_target_ids": sorted(current_target_ids),
-        "existing_target_ids": sorted(existing_target_ids),
-        "scheduled_target_ids": sorted(scheduled_target_ids),
-        "active_existing": active_existing,
-    }
     return mode_result, mode_context
 
 
@@ -589,6 +528,10 @@ async def get_schedule_state(
             state=a.state,
             lock_level=a.lock_level,
             order_id=a.order_id,
+            template_id=a.template_id,
+            instance_key=a.instance_key,
+            canonical_target_id=a.canonical_target_id,
+            display_target_name=a.display_target_name,
         )
         for a in acquisitions
     ]
@@ -601,6 +544,10 @@ async def get_schedule_state(
             status=o.status,
             requested_window_start=o.requested_window_start,
             requested_window_end=o.requested_window_end,
+            template_id=o.template_id,
+            instance_key=o.instance_key,
+            planner_target_id=o.planner_target_id,
+            canonical_target_id=o.canonical_target_id,
         )
         for o in orders_list
     ]
@@ -649,7 +596,7 @@ async def get_schedule_state(
 
     meta = ScheduleStateMeta(
         persistence_enabled=True,
-        schema_version="2.5",
+        schema_version=SCHEMA_VERSION,
         implementation_status="active",
     )
 
@@ -762,6 +709,10 @@ async def get_schedule_horizon(
             state=a.state,
             lock_level=a.lock_level,
             order_id=a.order_id,
+            template_id=a.template_id,
+            instance_key=a.instance_key,
+            canonical_target_id=a.canonical_target_id,
+            display_target_name=a.display_target_name,
         )
         for a in acquisitions
     ]
@@ -2472,7 +2423,7 @@ class PlanningModeSelectionRequest(BaseModel):
 
     planning_mode: str = Field(
         default="from_scratch",
-        description="Optional override. Leave default to let backend auto-select.",
+        description="Internal override only. Leave default to let backend auto-select.",
     )
     horizon_from: Optional[str] = Field(default=None, description="Horizon start (ISO)")
     horizon_to: Optional[str] = Field(default=None, description="Horizon end (ISO)")
@@ -2490,9 +2441,16 @@ class PlanningModeSelectionResponse(BaseModel):
     reason: str
     workspace_id: str
     existing_acquisition_count: int = 0
+    existing_committed_acquisition_count: int = 0
     new_target_count: int = 0
+    current_materialized_instance_count: int = 0
+    outstanding_instance_count: int = 0
+    new_instance_count: int = 0
     removed_scheduled_target_count: int = 0
+    stale_acquisition_count: int = 0
     conflict_count: int = 0
+    previous_schedule_revision_id: int = 1
+    fallback_from_mode: Optional[str] = None
     current_target_ids: List[str] = Field(default_factory=list)
     existing_target_ids: List[str] = Field(default_factory=list)
     request_payload_hash: str = ""
@@ -2536,6 +2494,14 @@ async def get_planning_mode_selection(
 
     mission_data = get_current_mission_data(request.workspace_id).get("mission_data", {})
     raw_opportunities = get_cached_opportunities(request.workspace_id) or []
+    recurring_bundle = prepare_recurring_planner_inputs(
+        db,
+        workspace_id=request.workspace_id,
+        horizon_start=horizon_start.replace(tzinfo=timezone.utc),
+        horizon_end=horizon_end.replace(tzinfo=timezone.utc),
+        base_opportunities=raw_opportunities,
+    )
+    raw_opportunities = recurring_bundle.opportunities
 
     request_hash = compute_request_hash(request.model_dump())
     mode_result, mode_context = _resolve_auto_mode_selection(
@@ -2546,6 +2512,7 @@ async def get_planning_mode_selection(
         horizon_end=horizon_end,
         raw_opportunities=raw_opportunities,
         mission_data=mission_data,
+        recurring_orders=recurring_bundle.recurring_orders,
         request_payload_hash=request_hash,
         weight_priority=request.weight_priority,
         weight_geometry=request.weight_geometry,
@@ -2558,9 +2525,20 @@ async def get_planning_mode_selection(
         reason=mode_result.reason,
         workspace_id=mode_context["workspace_id"],
         existing_acquisition_count=mode_context["existing_acquisition_count"],
+        existing_committed_acquisition_count=mode_context[
+            "existing_committed_acquisition_count"
+        ],
         new_target_count=mode_context["new_target_count"],
+        current_materialized_instance_count=mode_context[
+            "current_materialized_instance_count"
+        ],
+        outstanding_instance_count=mode_context["outstanding_instance_count"],
+        new_instance_count=mode_context["new_instance_count"],
         removed_scheduled_target_count=mode_result.removed_scheduled_target_count,
+        stale_acquisition_count=mode_context["stale_acquisition_count"],
         conflict_count=mode_context["conflict_count"],
+        previous_schedule_revision_id=mode_context["previous_schedule_revision_id"],
+        fallback_from_mode=mode_result.fallback_from_mode,
         current_target_ids=mode_context["current_target_ids"],
         existing_target_ids=mode_context["existing_target_ids"],
         request_payload_hash=request_hash,
@@ -2578,8 +2556,8 @@ class IncrementalPlanRequest(BaseModel):
     # Planning mode
     planning_mode: str = Field(
         default="from_scratch",
-        description="Planning mode: 'from_scratch', 'incremental', or 'repair'. "
-        "Default auto-selects based on workspace state.",
+        description="Internal override for scheduling orchestration. "
+        "Leave default to let the backend auto-select from_scratch vs incremental vs repair intent.",
     )
 
     # Horizon parameters
@@ -2657,6 +2635,11 @@ class PlanItemPreviewResponse(BaseModel):
     value: Optional[float] = None
     quality_score: Optional[float] = None
     incidence_angle_deg: Optional[float] = None
+    order_id: Optional[str] = None
+    template_id: Optional[str] = None
+    instance_key: Optional[str] = None
+    canonical_target_id: Optional[str] = None
+    display_target_name: Optional[str] = None
 
 
 class CommitPreviewResponse(BaseModel):
@@ -2896,6 +2879,18 @@ async def create_incremental_plan(
             deduped_opportunities.append(opp)
         raw_opportunities = deduped_opportunities
 
+    recurring_bundle = prepare_recurring_planner_inputs(
+        db,
+        workspace_id=request.workspace_id,
+        horizon_start=horizon_start.replace(tzinfo=timezone.utc),
+        horizon_end=horizon_end.replace(tzinfo=timezone.utc),
+        base_opportunities=raw_opportunities,
+    )
+    raw_opportunities = recurring_bundle.opportunities
+    schedule_context["recurring_materialization"] = (
+        recurring_bundle.materialization.to_dict()
+    )
+
     if not raw_opportunities:
         logger.info(
             "[Incremental Plan] No cached opportunities - returning empty plan. "
@@ -2917,6 +2912,7 @@ async def create_incremental_plan(
         horizon_end=horizon_end,
         raw_opportunities=raw_opportunities,
         mission_data=_mission_data,
+        recurring_orders=recurring_bundle.recurring_orders,
         request_payload_hash=_req_hash,
         weight_priority=request.weight_priority,
         weight_geometry=request.weight_geometry,
@@ -2931,13 +2927,30 @@ async def create_incremental_plan(
     schedule_context["planning_mode"] = planning_mode.value
     schedule_context["mode_selection_reason"] = mode_result.reason
     schedule_context["existing_acquisition_count"] = mode_context["existing_acquisition_count"]
+    schedule_context["existing_committed_acquisition_count"] = mode_context[
+        "existing_committed_acquisition_count"
+    ]
     schedule_context["new_target_count"] = mode_context["new_target_count"]
+    schedule_context["current_materialized_instance_count"] = mode_context[
+        "current_materialized_instance_count"
+    ]
+    schedule_context["outstanding_instance_count"] = mode_context[
+        "outstanding_instance_count"
+    ]
+    schedule_context["new_instance_count"] = mode_context["new_instance_count"]
+    schedule_context["stale_acquisition_count"] = mode_context["stale_acquisition_count"]
     schedule_context["conflict_count"] = _conflict_count
+    schedule_context["previous_schedule_revision_id"] = mode_context[
+        "previous_schedule_revision_id"
+    ]
+    if mode_result.fallback_from_mode:
+        schedule_context["fallback_from_mode"] = mode_result.fallback_from_mode
 
     logger.info(
         f"[Auto Mode] Selected: {planning_mode.value} | "
         f"existing={mode_context['existing_acquisition_count']}, "
-        f"new_targets={mode_context['new_target_count']} | "
+        f"new_targets={mode_context['new_target_count']}, "
+        f"outstanding_instances={mode_context['outstanding_instance_count']} | "
         f"reason={mode_result.reason[:100]}"
     )
 
@@ -3178,6 +3191,7 @@ async def create_incremental_plan(
                 "incidence_angle_deg",
                 getattr(opp_item, "incidence_angle", None),
             )
+        lineage = _opportunity_lineage(opp_item)
 
         # Create plan item in database
         db.create_plan_item(
@@ -3191,6 +3205,11 @@ async def create_incremental_plan(
             pitch_angle_deg=float(pitch_deg) if pitch_deg else 0.0,
             value=float(value) if value else None,
             quality_score=float(quality) if quality else None,
+            order_id=lineage["order_id"],
+            template_id=lineage["template_id"],
+            instance_key=lineage["instance_key"],
+            canonical_target_id=lineage["canonical_target_id"],
+            display_target_name=lineage["display_target_name"],
         )
 
         # Add to response
@@ -3206,6 +3225,11 @@ async def create_incremental_plan(
                 value=float(value) if value else None,
                 quality_score=float(quality) if quality else None,
                 incidence_angle_deg=float(incidence) if incidence else None,
+                order_id=lineage["order_id"],
+                template_id=lineage["template_id"],
+                instance_key=lineage["instance_key"],
+                canonical_target_id=lineage["canonical_target_id"],
+                display_target_name=lineage["display_target_name"],
             )
         )
 
@@ -3703,6 +3727,33 @@ async def create_repair_plan(
     if not isinstance(mission_scope, dict):
         mission_scope = {}
 
+    recurring_bundle = prepare_recurring_planner_inputs(
+        db,
+        workspace_id=request.workspace_id,
+        horizon_start=horizon_start.replace(tzinfo=timezone.utc),
+        horizon_end=horizon_end.replace(tzinfo=timezone.utc),
+        base_opportunities=raw_opportunities,
+    )
+    raw_opportunities = recurring_bundle.opportunities
+    recurring_lineage_by_opportunity_id = dict(
+        recurring_bundle.lineage_by_opportunity_id
+    )
+
+    mode_result, mode_context = resolve_scheduling_mode(
+        db,
+        workspace_id=request.workspace_id,
+        horizon_start=horizon_start.replace(tzinfo=timezone.utc),
+        horizon_end=horizon_end.replace(tzinfo=timezone.utc),
+        mission_data=mission_scope,
+        raw_opportunities=raw_opportunities,
+        recurring_orders=recurring_bundle.recurring_orders,
+        request_payload_hash=_req_hash,
+        weight_priority=request.weight_priority,
+        weight_geometry=request.weight_geometry,
+        weight_timing=request.weight_timing,
+    )
+    _audit.add("mode_selection", **mode_result.to_log_dict())
+
     derived_target_ids = _build_current_target_ids(mission_scope, raw_opportunities)
     if derived_target_ids or "targets" in mission_scope:
         current_target_ids = derived_target_ids
@@ -3715,6 +3766,10 @@ async def create_repair_plan(
             **derived_priorities,
             **effective_target_priorities,
         }
+    for recurring_order in recurring_bundle.recurring_orders:
+        planner_target_id = recurring_order.planner_target_id or recurring_order.target_id
+        if planner_target_id:
+            effective_target_priorities[str(planner_target_id)] = recurring_order.priority
 
     # Re-score opportunity values with current target priorities
     if effective_target_priorities and raw_opportunities:
@@ -3821,6 +3876,11 @@ async def create_repair_plan(
             pitch_angle_deg=item.get("pitch_angle_deg", 0.0),
             value=item.get("value", 1.0),
             quality_score=item.get("quality_score"),
+            order_id=item.get("order_id"),
+            template_id=item.get("template_id"),
+            instance_key=item.get("instance_key"),
+            canonical_target_id=item.get("canonical_target_id"),
+            display_target_name=item.get("display_target_name"),
         )
         persisted_plan_items += 1
 
@@ -3833,11 +3893,14 @@ async def create_repair_plan(
     # Build plan items for response
     new_items: List[PlanItemPreviewResponse] = []
     for item in proposed_schedule:
+        candidate_id = item.get("opportunity_id", item.get("acquisition_id", ""))
+        lineage = recurring_lineage_by_opportunity_id.get(
+            candidate_id,
+            _opportunity_lineage(item),
+        )
         new_items.append(
             PlanItemPreviewResponse(
-                opportunity_id=item.get(
-                    "opportunity_id", item.get("acquisition_id", "")
-                ),
+                opportunity_id=candidate_id,
                 satellite_id=item.get("satellite_id", ""),
                 target_id=item.get("target_id", ""),
                 start_time=item.get("start_time", ""),
@@ -3847,6 +3910,11 @@ async def create_repair_plan(
                 value=item.get("value"),
                 quality_score=item.get("quality_score"),
                 incidence_angle_deg=item.get("incidence_angle_deg"),
+                order_id=lineage["order_id"],
+                template_id=lineage["template_id"],
+                instance_key=lineage["instance_key"],
+                canonical_target_id=lineage["canonical_target_id"],
+                display_target_name=lineage["display_target_name"],
             )
         )
 
@@ -3939,13 +4007,29 @@ async def create_repair_plan(
     # Build schedule context
     schedule_context = {
         "planning_mode": "repair",
+        "mode_selection_reason": mode_result.reason,
         "repair_scope": repair_scope.value,
         "objective": objective.value,
         "max_changes": request.max_changes,
         "fixed_count": len(repair_context.fixed_set),
         "flex_count": len(repair_context.flex_set),
         "opportunities_available": len(raw_opportunities),
+        "existing_committed_acquisition_count": mode_context[
+            "existing_committed_acquisition_count"
+        ],
+        "current_materialized_instance_count": mode_context[
+            "current_materialized_instance_count"
+        ],
+        "outstanding_instance_count": mode_context["outstanding_instance_count"],
+        "new_instance_count": mode_context["new_instance_count"],
+        "new_target_count": mode_context["new_target_count"],
+        "stale_acquisition_count": mode_context["stale_acquisition_count"],
+        "conflict_count": mode_context["conflict_count"],
+        "previous_schedule_revision_id": mode_context["previous_schedule_revision_id"],
+        "recurring_materialization": recurring_bundle.materialization.to_dict(),
     }
+    if mode_result.fallback_from_mode:
+        schedule_context["fallback_from_mode"] = mode_result.fallback_from_mode
 
     message = (
         f"Repair plan: {len(repair_diff.kept)} kept, "

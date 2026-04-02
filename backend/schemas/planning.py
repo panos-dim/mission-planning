@@ -8,14 +8,17 @@ from pydantic import BaseModel, Field
 class PlanningRequest(BaseModel):
     """Request for mission planning/scheduling."""
 
-    # Planning mode (NEW for persistence)
+    # Planning mode (internal orchestration override)
     mode: str = Field(
         default="from_scratch",
-        description="Planning mode: from_scratch (ignore history) | incremental (respect committed)",
+        description=(
+            "Internal override: from_scratch | incremental | repair. "
+            "Planner-facing UI should rely on backend auto-selection instead of exposing this."
+        ),
     )
     workspace_id: Optional[str] = Field(
         default=None,
-        description="Workspace ID for incremental mode (loads committed acquisitions)",
+        description="Workspace ID for backend scheduling-state inspection",
     )
 
     # Agility parameters

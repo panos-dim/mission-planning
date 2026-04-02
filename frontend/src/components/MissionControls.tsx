@@ -3,7 +3,7 @@ import { ChevronRight, RotateCcw, Shield, Info, AlertCircle } from 'lucide-react
 import { useMission } from '../context/MissionContext'
 import OrdersPanel from './OrdersPanel'
 import MissionParameters from './MissionParameters.tsx'
-import { FormData } from '../types'
+import { AcquisitionTimeWindow, FormData } from '../types'
 import debug from '../utils/debug'
 import { LABELS } from '../constants/labels'
 import { useManagedSatellites } from '../hooks/queries'
@@ -14,6 +14,14 @@ import { usePlanningStore } from '../store/planningStore'
 import { useSlewVisStore } from '../store/slewVisStore'
 import { useVisStore } from '../store/visStore'
 import { LEFT_SIDEBAR_PANELS, RIGHT_SIDEBAR_PANELS } from '../constants/simpleMode'
+
+const DEFAULT_ACQUISITION_TIME_WINDOW: AcquisitionTimeWindow = {
+  enabled: false,
+  start_time: null,
+  end_time: null,
+  timezone: 'UTC',
+  reference: 'off_nadir_time',
+}
 
 // Governance indicator component
 const GovernanceIndicator: React.FC = () => {
@@ -94,6 +102,7 @@ const MissionControls: React.FC = () => {
     pointingAngle: 45,
     imagingType: 'optical',
     sarMode: 'stripmap',
+    acquisitionTimeWindow: DEFAULT_ACQUISITION_TIME_WINDOW,
   })
 
   // Sync selection store → formData whenever selection changes
@@ -156,10 +165,43 @@ const MissionControls: React.FC = () => {
   }, [pfOrders])
   const hasValidOrders = validationIssues.length === 0
 
+  const acquisitionTimeWindowIssue = useMemo(() => {
+    const window = formData.acquisitionTimeWindow
+    if (!window?.enabled) return null
+
+    if (!window.start_time || !window.end_time) {
+      return 'Acquisition time window requires both From and To times'
+    }
+
+    if (window.start_time === window.end_time) {
+      return 'Acquisition time window From and To must be different'
+    }
+
+    return null
+  }, [formData.acquisitionTimeWindow])
+
+  const acquisitionTimeWindowInlineError = useMemo(() => {
+    const window = formData.acquisitionTimeWindow
+    if (!window?.enabled || !acquisitionTimeWindowIssue) return null
+
+    const hasStartedEditingWindow = !!window.start_time || !!window.end_time
+    return hasAttemptedRun || hasStartedEditingWindow ? acquisitionTimeWindowIssue : null
+  }, [formData.acquisitionTimeWindow, acquisitionTimeWindowIssue, hasAttemptedRun])
+
+  const allValidationIssues = useMemo(
+    () =>
+      acquisitionTimeWindowIssue
+        ? [...validationIssues, acquisitionTimeWindowIssue]
+        : validationIssues,
+    [validationIssues, acquisitionTimeWindowIssue],
+  )
+  const hasValidMissionParameters = !acquisitionTimeWindowIssue
+
   // Soft validation — shown inline immediately, skips "no targets" for fresh empty orders
   const softIssues = useMemo(() => {
-    if (hasAttemptedRun) return validationIssues
-    return validationIssues.filter((issue) => !issue.includes('has no targets'))
+    return hasAttemptedRun
+      ? validationIssues
+      : validationIssues.filter((issue) => !issue.includes('has no targets'))
   }, [validationIssues, hasAttemptedRun])
 
   // Auto-disable map add mode when running analysis
@@ -175,9 +217,9 @@ const MissionControls: React.FC = () => {
       return
     }
 
-    if (!hasValidOrders) {
+    if (!hasValidOrders || !hasValidMissionParameters) {
       setHasAttemptedRun(true)
-      alert('Cannot run feasibility:\n\n' + validationIssues.join('\n'))
+      alert('Cannot run feasibility:\n\n' + allValidationIssues.join('\n'))
       return
     }
 
@@ -218,6 +260,7 @@ const MissionControls: React.FC = () => {
       pointingAngle: 45,
       imagingType: 'optical',
       sarMode: 'stripmap',
+      acquisitionTimeWindow: DEFAULT_ACQUISITION_TIME_WINDOW,
     }))
     // Do NOT clear orders — they persist across analysis runs
   }
@@ -279,9 +322,11 @@ const MissionControls: React.FC = () => {
                 imagingType: formData.imagingType,
                 sarMode: formData.sarMode,
                 sar: formData.sar,
+                acquisitionTimeWindow: formData.acquisitionTimeWindow,
               }}
               onChange={(params: Partial<FormData>) => updateFormData(params)}
               disabled={isAnalyzed}
+              acquisitionTimeWindowError={acquisitionTimeWindowInlineError}
               allSatellites={allSatellites.map((s) => ({
                 id: s.id,
                 name: s.name,
@@ -314,7 +359,9 @@ const MissionControls: React.FC = () => {
                 !hasValidOrders
               }
               className={`btn-primary flex-1 min-w-0 ${
-                formData.satellites.length === 0 || !formData.tle.name || !hasValidOrders
+                formData.satellites.length === 0 ||
+                !formData.tle.name ||
+                !hasValidOrders
                   ? 'opacity-50 cursor-not-allowed'
                   : ''
               }`}
@@ -322,7 +369,7 @@ const MissionControls: React.FC = () => {
                 formData.satellites.length === 0 || !formData.tle.name
                   ? 'Select at least one satellite in Admin Panel'
                   : !hasValidOrders
-                    ? 'Fix order validation issues first'
+                    ? 'Fix validation issues first'
                     : 'Run feasibility analysis'
               }
             >

@@ -26,6 +26,14 @@ export const TargetDataSchema = z.object({
   color: z.string().optional(),
 });
 
+export const AcquisitionTimeWindowSchema = z.object({
+  enabled: z.boolean(),
+  start_time: z.string().nullable().optional(),
+  end_time: z.string().nullable().optional(),
+  timezone: z.string(),
+  reference: z.literal("off_nadir_time"),
+});
+
 // Satellite info for constellation support
 export const SatelliteInfoSchema = z.object({
   id: z.string(),
@@ -81,6 +89,7 @@ export const MissionDataSchema = z.object({
   max_spacecraft_roll_deg: z.number().optional(),
   max_spacecraft_pitch_deg: z.number().optional(),
   satellite_agility: z.number().optional(),
+  acquisition_time_window: AcquisitionTimeWindowSchema.optional(),
   total_passes: z.number(),
   targets: z.array(TargetDataSchema),
   passes: z.array(PassDataSchema),

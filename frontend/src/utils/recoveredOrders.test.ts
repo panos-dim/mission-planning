@@ -55,4 +55,19 @@ describe('buildRecoveredOrdersFromScheduleItems', () => {
 
     expect(getAcceptedOrderAcquisitionCount(recovered)).toBe(2)
   })
+
+  it('preserves pitch geometry for recovered upcoming passes', () => {
+    const recovered = buildRecoveredOrdersFromScheduleItems([
+      {
+        ...buildScheduleItem('acq-1', 'Kuwait_1', '2026-03-24T01:00:00Z'),
+        geometry: {
+          roll_deg: 3.2,
+          pitch_deg: 11.4,
+          incidence_deg: 15,
+        },
+      },
+    ])
+
+    expect(recovered[0]?.schedule[0]?.pitch_deg).toBe(11.4)
+  })
 })

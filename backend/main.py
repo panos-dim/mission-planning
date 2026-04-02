@@ -83,17 +83,25 @@ except ImportError as e:
 # Import configuration manager
 from backend.config_manager import ConfigManager, reload_config
 from backend.coordinate_parser import CoordinateParser, FileParser, TargetValidator
+from backend.time_windows import (
+    DailyTimeWindow,
+    OFF_NADIR_TIME_REFERENCE,
+    filter_by_daily_time_window,
+)
 
 # Import CZML generator, coordinate parser, routers, and satellite manager
 from backend.czml_generator import CZMLGenerator, generate_mission_czml
 from backend.mission_settings_manager import MissionSettingsManager
+from backend.order_materialization import prepare_recurring_planner_inputs
 from backend.routers.batching import router as batching_router
 from backend.routers.config_admin import router as config_admin_router
 from backend.routers.dev import router as dev_router
+from backend.routers.order_templates import router as order_templates_router
 from backend.routers.orders import router as orders_router
 from backend.routers.schedule import router as schedule_router
 from backend.routers.validation import router as validation_router
 from backend.routers.workspaces import router as workspaces_router
+from backend.scheduling_mode import compute_request_hash, resolve_scheduling_mode
 from backend.security import require_admin_access, require_dev_access
 from backend.satellite_manager import SatelliteManager
 from backend.schedule_persistence import get_schedule_db
@@ -124,6 +132,7 @@ _ROUTE_FAMILY_PREFIXES = (
     ("/api/v1/schedule", "schedule"),
     ("/api/v1/planning", "planning"),
     ("/api/v1/mission", "mission"),
+    ("/api/v1/order-templates", "orders"),
     ("/api/v1/orders", "orders"),
     ("/api/v1/workspaces", "workspaces"),
     ("/api/v1/debug", "debug"),
@@ -853,6 +862,58 @@ def clear_cached_opportunities(workspace_id: Optional[str] = None) -> None:
         app.state.opportunities_cache = []
 
 
+def _pass_identity_key(pass_detail: Any) -> tuple[str, str, str]:
+    """Build a stable key for matching filtered passes and SAR overlays."""
+    satellite_name = getattr(pass_detail, "satellite_name", "") or ""
+    target_name = getattr(pass_detail, "target_name", "") or ""
+    max_time = getattr(pass_detail, "max_elevation_time", None)
+    if max_time is None:
+        max_time = getattr(pass_detail, "start_time", None)
+    if hasattr(max_time, "isoformat"):
+        max_time_text = max_time.isoformat()
+    else:
+        max_time_text = str(max_time)
+    return (satellite_name, target_name, max_time_text)
+
+
+def _get_pass_off_nadir_time(pass_detail: Any) -> datetime:
+    """Return the pass timestamp used for off-nadir time filtering."""
+    timestamp = getattr(pass_detail, "max_elevation_time", None)
+    if timestamp is None:
+        timestamp = getattr(pass_detail, "start_time")
+
+    if not isinstance(timestamp, datetime):
+        timestamp = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+
+    if timestamp.tzinfo is None:
+        return timestamp.replace(tzinfo=timezone.utc)
+    return timestamp.astimezone(timezone.utc)
+
+
+def _normalize_acquisition_time_window_payload(
+    window_request: Optional[Any],
+) -> Dict[str, Any]:
+    """Serialize the current acquisition time window settings into mission data."""
+    if window_request is None:
+        return {
+            "enabled": False,
+            "start_time": None,
+            "end_time": None,
+            "timezone": "UTC",
+            "reference": OFF_NADIR_TIME_REFERENCE,
+        }
+
+    return {
+        "enabled": bool(getattr(window_request, "enabled", False)),
+        "start_time": getattr(window_request, "start_time", None),
+        "end_time": getattr(window_request, "end_time", None),
+        "timezone": getattr(window_request, "timezone", "UTC"),
+        "reference": getattr(
+            window_request, "reference", OFF_NADIR_TIME_REFERENCE
+        ),
+    }
+
+
 def _load_workspace_planning_baseline_target_ids(
     workspace_id: Optional[str],
 ) -> set[str]:
@@ -948,6 +1009,7 @@ def _persist_workspace_analysis_snapshot(
             "satellites": mission_data.get("satellites", []),
             "is_constellation": mission_data.get("is_constellation", False),
             "mission_type": mission_data.get("mission_type", "imaging"),
+            "imaging_type": mission_data.get("imaging_type"),
             "start_time": mission_data.get("start_time"),
             "end_time": mission_data.get("end_time"),
             "elevation_mask": mission_data.get("elevation_mask", 10),
@@ -957,6 +1019,7 @@ def _persist_workspace_analysis_snapshot(
             "max_spacecraft_roll_deg": mission_data.get(
                 "max_spacecraft_roll_deg", 45
             ),
+            "acquisition_time_window": mission_data.get("acquisition_time_window"),
             "total_passes": len(serialized_passes),
             "targets": serialized_targets,
             "passes": serialized_passes,
@@ -1161,6 +1224,7 @@ app.include_router(workspaces_router)
 app.include_router(validation_router)
 app.include_router(config_admin_router)
 app.include_router(schedule_router)
+app.include_router(order_templates_router)
 app.include_router(orders_router)
 app.include_router(batching_router)
 app.include_router(dev_router)
@@ -1874,6 +1938,39 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
             len(all_passes),
         )
 
+        acquisition_time_window = _normalize_acquisition_time_window_payload(
+            request.acquisition_time_window
+        )
+        if request.acquisition_time_window and request.acquisition_time_window.enabled:
+            daily_window = DailyTimeWindow.from_strings(
+                start_time=request.acquisition_time_window.start_time or "",
+                end_time=request.acquisition_time_window.end_time or "",
+                timezone_name=request.acquisition_time_window.timezone,
+                reference=request.acquisition_time_window.reference,
+            )
+            original_pass_count = len(all_passes)
+            all_passes = filter_by_daily_time_window(
+                all_passes,
+                window=daily_window,
+                get_timestamp=_get_pass_off_nadir_time,
+            )
+            allowed_pass_keys = {_pass_identity_key(pass_detail) for pass_detail in all_passes}
+            if sar_passes_list:
+                sar_passes_list = [
+                    sar_pass
+                    for sar_pass in sar_passes_list
+                    if _pass_identity_key(sar_pass) in allowed_pass_keys
+                ]
+
+            logger.info(
+                "Applied acquisition time window filter: kept=%d removed=%d window=%s timezone=%s reference=%s",
+                len(all_passes),
+                original_pass_count - len(all_passes),
+                daily_window.label(),
+                daily_window.timezone_name,
+                daily_window.reference,
+            )
+
         # Get satellite agility from satellite configuration
         satellite_agility = 1.0  # Default value
         managed_satellite = satellite_manager.get_satellite_by_id(primary_tle.name)
@@ -1931,6 +2028,7 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
                 if request.max_spacecraft_pitch_deg is not None
                 else request.max_spacecraft_roll_deg
             ),  # 2D slew: default to same as roll
+            "acquisition_time_window": acquisition_time_window,
             "satellite_agility": satellite_agility,
             "total_passes": len(all_passes),
             "targets": [
@@ -3679,6 +3777,67 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
             request.weight_preset,
         )
 
+        mission_start_raw = mission_data.get("start_time")
+        mission_end_raw = mission_data.get("end_time")
+        recurring_bundle = None
+        if mission_start_raw and mission_end_raw:
+            mission_start_dt = datetime.fromisoformat(
+                str(mission_start_raw).replace("Z", "+00:00")
+            )
+            mission_end_dt = datetime.fromisoformat(
+                str(mission_end_raw).replace("Z", "+00:00")
+            )
+            recurring_bundle = prepare_recurring_planner_inputs(
+                get_schedule_db(),
+                workspace_id=request.workspace_id,
+                horizon_start=mission_start_dt,
+                horizon_end=mission_end_dt,
+                base_opportunities=opportunities,
+                target_positions=target_positions,
+            )
+            opportunities = recurring_bundle.opportunities
+            target_positions = recurring_bundle.target_positions
+        else:
+            logger.warning(
+                "[Recurring Orders] Skipping planning materialization because mission horizon is missing"
+            )
+
+        effective_mode = request.mode
+        auto_mode_result = None
+        if mission_start_raw and mission_end_raw:
+            force_mode = request.mode if request.mode != "from_scratch" else None
+            auto_mode_result, _auto_mode_context = resolve_scheduling_mode(
+                get_schedule_db(),
+                workspace_id=request.workspace_id,
+                horizon_start=mission_start_dt,
+                horizon_end=mission_end_dt,
+                mission_data=mission_data,
+                raw_opportunities=opportunities,
+                recurring_orders=(
+                    recurring_bundle.recurring_orders if recurring_bundle else None
+                ),
+                request_payload_hash=compute_request_hash(request.model_dump()),
+                weight_priority=request.weight_priority,
+                weight_geometry=request.weight_geometry,
+                weight_timing=request.weight_timing,
+                force_mode=force_mode,
+            )
+            effective_mode = auto_mode_result.mode
+            logger.info(
+                "[Planning] Auto mode resolved to %s for workspace=%s (reason=%s)",
+                effective_mode,
+                request.workspace_id,
+                auto_mode_result.reason,
+            )
+            if effective_mode == "repair":
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Automatic scheduling resolved to repair. "
+                        "Use /api/v1/schedule/repair or call the mode-selection endpoint first."
+                    ),
+                )
+
         # =====================================================================
         # INCREMENTAL MODE: Filter out opportunities that conflict with
         # committed acquisitions (blocked intervals per satellite)
@@ -3686,7 +3845,7 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
         blocked_intervals_by_satellite: Dict[str, List[tuple]] = {}
         existing_target_ids: set[str] = set()
 
-        if request.mode == "incremental":
+        if effective_mode == "incremental":
             logger.info(f"[INCREMENTAL MODE] Loading committed acquisitions...")
             existing_target_ids = _load_workspace_planning_baseline_target_ids(
                 request.workspace_id
@@ -3722,7 +3881,7 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
                         )
 
                 current_target_ids = {
-                    target.name for target in targets if getattr(target, "name", "")
+                    opp.target_id for opp in opportunities if getattr(opp, "target_id", "")
                 }
                 new_target_ids = current_target_ids - existing_target_ids
                 if new_target_ids:
@@ -3945,11 +4104,11 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
             for s in schedule:
                 _ps_satellites_used.add(s.satellite_id)
                 _ps_target_acqs.append(
-                    {
-                        "target_id": s.target_id,
-                        "satellite_id": s.satellite_id,
-                        "start_time": (
-                            s.start_time.isoformat()
+                        {
+                            "target_id": s.target_id,
+                            "satellite_id": s.satellite_id,
+                            "start_time": (
+                                s.start_time.isoformat()
                             if hasattr(s.start_time, "isoformat")
                             else str(s.start_time)
                         ),
@@ -3973,8 +4132,19 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
             _horizon_end = mission_data.get("end_time", "")
 
             # Package results with target-level info and angle statistics
+            schedule_payload = []
+            recurring_lineage_by_opp = (
+                recurring_bundle.lineage_by_opportunity_id if recurring_bundle else {}
+            )
+            for scheduled_item in schedule:
+                serialized = scheduled_item.to_dict()
+                lineage = recurring_lineage_by_opp.get(scheduled_item.opportunity_id)
+                if lineage:
+                    serialized.update(lineage)
+                schedule_payload.append(serialized)
+
             results[algo_name] = {
-                "schedule": [s.to_dict() for s in schedule],
+                "schedule": schedule_payload,
                 "metrics": metrics.to_dict(),
                 "target_statistics": {
                     "total_targets": total_targets,
@@ -3992,6 +4162,19 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
                 "planner_summary": {
                     "target_acquisitions": _ps_target_acqs,
                     "targets_not_scheduled": _ps_not_scheduled,
+                    "auto_mode": (
+                        {
+                            "mode": effective_mode,
+                            "reason": auto_mode_result.reason,
+                        }
+                        if auto_mode_result
+                        else None
+                    ),
+                    "recurring_materialization": (
+                        recurring_bundle.materialization.to_dict()
+                        if recurring_bundle
+                        else None
+                    ),
                     "horizon": {
                         "start": (
                             _horizon_start
@@ -4158,7 +4341,7 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
                                 )
                                 if target_summary.get("name")
                             ],
-                            "last_planning_mode": request.mode,
+                            "last_planning_mode": effective_mode,
                             "last_plan_id": candidate_plan_id,
                             "last_plan_input_hash": plan_input_hash,
                         }

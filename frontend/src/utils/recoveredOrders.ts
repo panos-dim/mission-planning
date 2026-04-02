@@ -79,6 +79,7 @@ export function buildRecoveredOrdersFromScheduleItems(
           start_time: item.start_time,
           end_time: item.end_time,
           droll_deg: item.geometry?.roll_deg ?? 0,
+          pitch_deg: item.geometry?.pitch_deg ?? 0,
           t_slew_s: item.maneuver_time_s ?? 0,
           slack_s: item.slack_time_s ?? 0,
           value: item.quality_score ?? 0,

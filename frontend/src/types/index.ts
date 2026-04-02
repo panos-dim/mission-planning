@@ -79,6 +79,14 @@ export interface TargetData {
   color?: string // Color code for map marker (e.g., '#FF0000' for red, '#00FF00' for green)
 }
 
+export interface AcquisitionTimeWindow {
+  enabled: boolean
+  start_time?: string | null
+  end_time?: string | null
+  timezone: string
+  reference: 'off_nadir_time'
+}
+
 export interface MissionRequest {
   // Legacy single satellite (deprecated - use satellites for constellation)
   tle?: TLEData
@@ -93,6 +101,7 @@ export interface MissionRequest {
   mission_type: 'imaging' | 'communication'
   elevation_mask?: number
   max_spacecraft_roll_deg?: number // Satellite agility limit (how far it can tilt)
+  acquisition_time_window?: AcquisitionTimeWindow
 }
 
 // =============================================================================
@@ -257,6 +266,7 @@ export interface MissionData {
   sensor_fov_half_angle_deg?: number // Camera field of view (from satellite config)
   max_spacecraft_roll_deg?: number // Satellite agility limit
   satellite_agility?: number
+  acquisition_time_window?: AcquisitionTimeWindow
   total_passes: number
   targets: TargetData[]
   passes: PassData[]
@@ -451,6 +461,7 @@ export interface FormData {
   imagingType?: 'optical' | 'sar'
   sarMode?: 'stripmap' | 'spotlight' | 'scan'
   sar?: SARInputParams // SAR-specific mission input parameters
+  acquisitionTimeWindow?: AcquisitionTimeWindow
 }
 
 // Cesium-related types
@@ -577,7 +588,7 @@ export interface AlgorithmResult {
 }
 
 export interface PlanningRequest {
-  // Planning mode (incremental vs from_scratch vs repair)
+  // Internal backend orchestration override. Planner-facing UI should not expose it.
   mode?: 'from_scratch' | 'incremental' | 'repair'
   workspace_id?: string
   // Agility parameters — PR_UI_008: all optional, backend Pydantic defaults apply when omitted
@@ -639,6 +650,7 @@ export interface AcceptedOrder {
     start_time: string
     end_time: string
     droll_deg: number
+    pitch_deg?: number
     t_slew_s: number
     slack_s: number
     value: number

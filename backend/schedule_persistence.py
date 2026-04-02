@@ -24,7 +24,7 @@ from typing import Any, Dict, Generator, List, Optional
 logger = logging.getLogger(__name__)
 
 # Schema version for this module
-SCHEMA_VERSION = "2.7"
+SCHEMA_VERSION = "2.8"
 DEFAULT_WORKSPACE_ID = "default"
 
 # Default database path (same as workspace_persistence.py)
@@ -86,6 +86,49 @@ def _ensure_workspace_exists(
             raise
 
 
+def _dump_json(value: Any) -> Optional[str]:
+    """Serialize structured values, preserving NULL for absent data."""
+    return json.dumps(value) if value is not None else None
+
+
+def _load_json(value: Optional[str]) -> Any:
+    """Parse JSON columns defensively for API responses."""
+    if not value:
+        return None
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return None
+
+
+def _normalize_order_identity(
+    target_id: str,
+    planner_target_id: Optional[str],
+    canonical_target_id: Optional[str],
+) -> tuple[str, str]:
+    """Normalize scheduler-facing and canonical target identities.
+
+    Architectural rule from the recurring-orders audit:
+    - order_templates = recurring business intent
+    - orders = actionable dated instances
+    - order_id = dated instance identity
+    - template_id = recurring template identity
+    - planner_target_id = unique scheduler-facing identity per instance
+    - canonical_target_id = physical target identity for operator meaning/grouping
+    """
+    return planner_target_id or target_id, canonical_target_id or target_id
+
+
+def _normalize_display_target_name(
+    target_id: str,
+    canonical_target_id: Optional[str],
+    display_target_name: Optional[str],
+) -> tuple[str, str]:
+    """Normalize canonical/display lineage for plan items and acquisitions."""
+    canonical = canonical_target_id or target_id
+    return canonical, display_target_name or canonical
+
+
 # =============================================================================
 # Data Classes
 # =============================================================================
@@ -93,7 +136,7 @@ def _ensure_workspace_exists(
 
 @dataclass
 class Order:
-    """User imaging request with extended workflow fields."""
+    """Actionable dated order instance with optional recurrence lineage."""
 
     id: str
     created_at: str
@@ -108,6 +151,13 @@ class Order:
     notes: Optional[str]
     external_ref: Optional[str]
     workspace_id: Optional[str]
+    template_id: Optional[str] = None
+    instance_key: Optional[str] = None
+    instance_local_date: Optional[str] = None
+    planner_target_id: Optional[str] = None
+    canonical_target_id: Optional[str] = None
+    target_lat: Optional[float] = None
+    target_lon: Optional[float] = None
     # Extended fields for PS2.5
     order_type: str = "IMAGING"  # IMAGING | DOWNLINK | MAINTENANCE
     due_time: Optional[str] = None  # SLA deadline
@@ -121,19 +171,8 @@ class Order:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API response."""
-        constraints = None
-        if self.constraints_json:
-            try:
-                constraints = json.loads(self.constraints_json)
-            except json.JSONDecodeError:
-                constraints = None
-
-        tags = None
-        if self.tags_json:
-            try:
-                tags = json.loads(self.tags_json)
-            except json.JSONDecodeError:
-                tags = None
+        constraints = _load_json(self.constraints_json)
+        tags = _load_json(self.tags_json)
 
         return {
             "id": self.id,
@@ -155,6 +194,13 @@ class Order:
             "notes": self.notes,
             "external_ref": self.external_ref,
             "workspace_id": self.workspace_id,
+            "template_id": self.template_id,
+            "instance_key": self.instance_key,
+            "instance_local_date": self.instance_local_date,
+            "planner_target_id": self.planner_target_id,
+            "canonical_target_id": self.canonical_target_id,
+            "target_lat": self.target_lat,
+            "target_lon": self.target_lon,
             # Extended fields
             "order_type": self.order_type,
             "due_time": self.due_time,
@@ -165,6 +211,61 @@ class Order:
             "requested_satellite_group": self.requested_satellite_group,
             "user_notes": self.user_notes,
             "reject_reason": self.reject_reason,
+        }
+
+
+@dataclass
+class OrderTemplate:
+    """Recurring business intent that can materialize dated order instances."""
+
+    id: str
+    workspace_id: str
+    name: str
+    status: str
+    canonical_target_id: str
+    target_lat: float
+    target_lon: float
+    priority: int
+    constraints_json: Optional[str]
+    requested_satellite_group: Optional[str]
+    recurrence_type: str
+    interval: int
+    days_of_week_json: Optional[str]
+    window_start_hhmm: str
+    window_end_hhmm: str
+    timezone_name: str
+    effective_start_date: str
+    effective_end_date: Optional[str]
+    notes: Optional[str]
+    external_ref: Optional[str]
+    created_at: str
+    updated_at: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for API response."""
+        return {
+            "id": self.id,
+            "workspace_id": self.workspace_id,
+            "name": self.name,
+            "status": self.status,
+            "canonical_target_id": self.canonical_target_id,
+            "target_lat": self.target_lat,
+            "target_lon": self.target_lon,
+            "priority": self.priority,
+            "constraints": _load_json(self.constraints_json),
+            "requested_satellite_group": self.requested_satellite_group,
+            "recurrence_type": self.recurrence_type,
+            "interval": self.interval,
+            "days_of_week": _load_json(self.days_of_week_json),
+            "window_start_hhmm": self.window_start_hhmm,
+            "window_end_hhmm": self.window_end_hhmm,
+            "timezone_name": self.timezone_name,
+            "effective_start_date": self.effective_start_date,
+            "effective_end_date": self.effective_end_date,
+            "notes": self.notes,
+            "external_ref": self.external_ref,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
         }
 
 
@@ -259,6 +360,10 @@ class Acquisition:
     maneuver_time_s: Optional[float]
     slack_time_s: Optional[float]
     workspace_id: Optional[str]
+    template_id: Optional[str] = None
+    instance_key: Optional[str] = None
+    canonical_target_id: Optional[str] = None
+    display_target_name: Optional[str] = None
     # v2.5 geo-backfill fields for master schedule view
     target_lat: Optional[float] = None
     target_lon: Optional[float] = None
@@ -291,6 +396,10 @@ class Acquisition:
             "maneuver_time_s": self.maneuver_time_s,
             "slack_time_s": self.slack_time_s,
             "workspace_id": self.workspace_id,
+            "template_id": self.template_id,
+            "instance_key": self.instance_key,
+            "canonical_target_id": self.canonical_target_id,
+            "display_target_name": self.display_target_name,
             "target_lat": self.target_lat,
             "target_lon": self.target_lon,
             "satellite_display_name": self.satellite_display_name,
@@ -367,6 +476,10 @@ class PlanItem:
     maneuver_time_s: Optional[float]
     slack_time_s: Optional[float]
     order_id: Optional[str]
+    template_id: Optional[str] = None
+    instance_key: Optional[str] = None
+    canonical_target_id: Optional[str] = None
+    display_target_name: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API response."""
@@ -387,6 +500,10 @@ class PlanItem:
             "maneuver_time_s": self.maneuver_time_s,
             "slack_time_s": self.slack_time_s,
             "order_id": self.order_id,
+            "template_id": self.template_id,
+            "instance_key": self.instance_key,
+            "canonical_target_id": self.canonical_target_id,
+            "display_target_name": self.display_target_name,
         }
 
 
@@ -560,16 +677,22 @@ class ScheduleDB:
             if current_version < "2.7":
                 self._migrate_to_v2_7(conn)
 
+            if current_version < "2.8":
+                self._migrate_to_v2_8(conn)
+
             conn.commit()
 
     def health_check(self) -> Dict[str, Any]:
         """Run a lightweight database readiness check."""
         required_tables = {
+            "orders",
+            "order_templates",
             "workspaces",
             "plans",
             "plan_items",
             "acquisitions",
             "conflicts",
+            "schedule_snapshots",
         }
 
         try:
@@ -1354,9 +1477,601 @@ class ScheduleDB:
 
         logger.info("Migration to schema v2.7 complete")
 
+    def _migrate_to_v2_8(self, conn: sqlite3.Connection) -> None:
+        """Migrate database schema to v2.8 — recurring order lineage foundation."""
+        cursor = conn.cursor()
+        now = _utc_now_z()
+
+        logger.info("Running migration to schema v2.8 (recurring order lineage)...")
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS order_templates (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+                name TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                canonical_target_id TEXT NOT NULL,
+                target_lat REAL NOT NULL,
+                target_lon REAL NOT NULL,
+                priority INTEGER NOT NULL DEFAULT 5,
+                constraints_json TEXT,
+                requested_satellite_group TEXT,
+                recurrence_type TEXT NOT NULL,
+                interval INTEGER NOT NULL DEFAULT 1,
+                days_of_week_json TEXT,
+                window_start_hhmm TEXT NOT NULL,
+                window_end_hhmm TEXT NOT NULL,
+                timezone_name TEXT NOT NULL,
+                effective_start_date TEXT NOT NULL,
+                effective_end_date TEXT,
+                notes TEXT,
+                external_ref TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_order_templates_workspace
+            ON order_templates(workspace_id)
+        """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_order_templates_status
+            ON order_templates(status)
+        """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_order_templates_target
+            ON order_templates(canonical_target_id)
+        """
+        )
+
+        order_columns = [
+            ("template_id", "TEXT REFERENCES order_templates(id)"),
+            ("instance_key", "TEXT"),
+            ("instance_local_date", "TEXT"),
+            ("planner_target_id", "TEXT"),
+            ("canonical_target_id", "TEXT"),
+            ("target_lat", "REAL"),
+            ("target_lon", "REAL"),
+        ]
+        for col_name, col_type in order_columns:
+            try:
+                cursor.execute(f"ALTER TABLE orders ADD COLUMN {col_name} {col_type}")
+                logger.info(f"  Added column orders.{col_name}")
+            except sqlite3.OperationalError:
+                pass
+
+        cursor.execute(
+            """
+            UPDATE orders
+            SET planner_target_id = COALESCE(planner_target_id, target_id),
+                canonical_target_id = COALESCE(canonical_target_id, target_id)
+        """
+        )
+
+        try:
+            cursor.execute(
+                """
+                SELECT DISTINCT workspace_id
+                FROM orders
+                WHERE target_lat IS NULL AND workspace_id IS NOT NULL
+            """
+            )
+            for row in cursor.fetchall():
+                target_coords = self._resolve_target_coords(cursor, row["workspace_id"])
+                for target_name, (lat, lon) in target_coords.items():
+                    cursor.execute(
+                        """
+                        UPDATE orders
+                        SET target_lat = COALESCE(target_lat, ?),
+                            target_lon = COALESCE(target_lon, ?)
+                        WHERE workspace_id = ?
+                          AND COALESCE(canonical_target_id, target_id) = ?
+                    """,
+                        (lat, lon, row["workspace_id"], target_name),
+                    )
+        except Exception as exc:
+            logger.warning("  Order target coord backfill skipped: %s", exc)
+
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_orders_template_id
+            ON orders(template_id)
+        """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_orders_instance_local_date
+            ON orders(instance_local_date)
+        """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_orders_canonical_target
+            ON orders(canonical_target_id)
+        """
+        )
+        cursor.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_template_instance_unique
+            ON orders(template_id, instance_key)
+            WHERE template_id IS NOT NULL AND instance_key IS NOT NULL
+        """
+        )
+
+        lineage_columns = [
+            ("template_id", "TEXT REFERENCES order_templates(id)"),
+            ("instance_key", "TEXT"),
+            ("canonical_target_id", "TEXT"),
+            ("display_target_name", "TEXT"),
+        ]
+        for table in ("plan_items", "acquisitions"):
+            for col_name, col_type in lineage_columns:
+                try:
+                    cursor.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}"
+                    )
+                    logger.info(f"  Added column {table}.{col_name}")
+                except sqlite3.OperationalError:
+                    pass
+
+            cursor.execute(
+                f"""
+                UPDATE {table}
+                SET canonical_target_id = COALESCE(canonical_target_id, target_id),
+                    display_target_name = COALESCE(display_target_name, target_id)
+            """
+            )
+
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_plan_items_template_id
+            ON plan_items(template_id)
+        """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_plan_items_canonical_target
+            ON plan_items(canonical_target_id)
+        """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_acquisitions_template_id
+            ON acquisitions(template_id)
+        """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_acquisitions_canonical_target
+            ON acquisitions(canonical_target_id)
+        """
+        )
+
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO schema_migrations (version, applied_at, description)
+            VALUES (?, ?, ?)
+        """,
+            (
+                "2.8",
+                now,
+                "Recurring order foundation: order_templates plus template/instance lineage on orders, plan_items, and acquisitions",
+            ),
+        )
+
+        logger.info("Migration to schema v2.8 complete")
+
+    # =========================================================================
+    # Recurring Order Template Operations
+    # =========================================================================
+
+    def create_order_template(
+        self,
+        workspace_id: str,
+        name: str,
+        canonical_target_id: str,
+        target_lat: float,
+        target_lon: float,
+        priority: int = 5,
+        constraints: Optional[Dict[str, Any]] = None,
+        requested_satellite_group: Optional[str] = None,
+        recurrence_type: str = "daily",
+        interval: int = 1,
+        days_of_week: Optional[List[str]] = None,
+        window_start_hhmm: str = "00:00",
+        window_end_hhmm: str = "23:59",
+        timezone_name: str = "UTC",
+        effective_start_date: str = "",
+        effective_end_date: Optional[str] = None,
+        notes: Optional[str] = None,
+        external_ref: Optional[str] = None,
+        status: str = "active",
+    ) -> OrderTemplate:
+        """Create a recurring order template.
+
+        order_templates capture recurring business intent. Materialized order rows
+        remain the actionable dated instances referenced by order_id.
+        """
+        template_id = f"tmpl_{uuid.uuid4().hex[:12]}"
+        now = _utc_now_z()
+        effective_workspace_id = _normalize_workspace_id(workspace_id)
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            _ensure_workspace_exists(cursor, effective_workspace_id)
+            cursor.execute(
+                """
+                INSERT INTO order_templates (
+                    id, workspace_id, name, status, canonical_target_id,
+                    target_lat, target_lon, priority, constraints_json,
+                    requested_satellite_group, recurrence_type, interval,
+                    days_of_week_json, window_start_hhmm, window_end_hhmm,
+                    timezone_name, effective_start_date, effective_end_date,
+                    notes, external_ref, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    template_id,
+                    effective_workspace_id,
+                    name,
+                    status,
+                    canonical_target_id,
+                    target_lat,
+                    target_lon,
+                    priority,
+                    _dump_json(constraints),
+                    requested_satellite_group,
+                    recurrence_type,
+                    interval,
+                    _dump_json(days_of_week),
+                    window_start_hhmm,
+                    window_end_hhmm,
+                    timezone_name,
+                    effective_start_date,
+                    effective_end_date,
+                    notes,
+                    external_ref,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+
+        return OrderTemplate(
+            id=template_id,
+            workspace_id=effective_workspace_id,
+            name=name,
+            status=status,
+            canonical_target_id=canonical_target_id,
+            target_lat=target_lat,
+            target_lon=target_lon,
+            priority=priority,
+            constraints_json=_dump_json(constraints),
+            requested_satellite_group=requested_satellite_group,
+            recurrence_type=recurrence_type,
+            interval=interval,
+            days_of_week_json=_dump_json(days_of_week),
+            window_start_hhmm=window_start_hhmm,
+            window_end_hhmm=window_end_hhmm,
+            timezone_name=timezone_name,
+            effective_start_date=effective_start_date,
+            effective_end_date=effective_end_date,
+            notes=notes,
+            external_ref=external_ref,
+            created_at=now,
+            updated_at=now,
+        )
+
+    def get_order_template(self, template_id: str) -> Optional[OrderTemplate]:
+        """Get a recurring order template by ID."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM order_templates WHERE id = ?", (template_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return self._row_to_order_template(row)
+
+    def list_order_templates(
+        self,
+        workspace_id: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[OrderTemplate]:
+        """List recurring order templates with optional filters."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            query = "SELECT * FROM order_templates WHERE 1=1"
+            params: List[Any] = []
+
+            if workspace_id:
+                query += " AND workspace_id = ?"
+                params.append(workspace_id)
+            if status:
+                query += " AND status = ?"
+                params.append(status)
+
+            query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+            cursor.execute(query, params)
+            return [self._row_to_order_template(row) for row in cursor.fetchall()]
+
+    def update_order_template(
+        self,
+        template_id: str,
+        *,
+        name: Optional[str] = None,
+        status: Optional[str] = None,
+        canonical_target_id: Optional[str] = None,
+        target_lat: Optional[float] = None,
+        target_lon: Optional[float] = None,
+        priority: Optional[int] = None,
+        constraints: Optional[Dict[str, Any]] = None,
+        requested_satellite_group: Optional[str] = None,
+        recurrence_type: Optional[str] = None,
+        interval: Optional[int] = None,
+        days_of_week: Optional[List[str]] = None,
+        window_start_hhmm: Optional[str] = None,
+        window_end_hhmm: Optional[str] = None,
+        timezone_name: Optional[str] = None,
+        effective_start_date: Optional[str] = None,
+        effective_end_date: Optional[str] = None,
+        notes: Optional[str] = None,
+        external_ref: Optional[str] = None,
+    ) -> Optional[OrderTemplate]:
+        """Patch mutable order-template fields and return the updated row."""
+        now = _utc_now_z()
+        updates = ["updated_at = ?"]
+        params: List[Any] = [now]
+
+        column_updates = {
+            "name": name,
+            "status": status,
+            "canonical_target_id": canonical_target_id,
+            "target_lat": target_lat,
+            "target_lon": target_lon,
+            "priority": priority,
+            "requested_satellite_group": requested_satellite_group,
+            "recurrence_type": recurrence_type,
+            "interval": interval,
+            "window_start_hhmm": window_start_hhmm,
+            "window_end_hhmm": window_end_hhmm,
+            "timezone_name": timezone_name,
+            "effective_start_date": effective_start_date,
+            "effective_end_date": effective_end_date,
+            "notes": notes,
+            "external_ref": external_ref,
+        }
+        for column, value in column_updates.items():
+            if value is not None:
+                updates.append(f"{column} = ?")
+                params.append(value)
+
+        if constraints is not None:
+            updates.append("constraints_json = ?")
+            params.append(_dump_json(constraints))
+
+        if days_of_week is not None:
+            updates.append("days_of_week_json = ?")
+            params.append(_dump_json(days_of_week))
+
+        params.append(template_id)
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"UPDATE order_templates SET {', '.join(updates)} WHERE id = ?",
+                params,
+            )
+            conn.commit()
+            if cursor.rowcount <= 0:
+                return None
+
+        return self.get_order_template(template_id)
+
+    def replace_order_template(
+        self,
+        template_id: str,
+        *,
+        name: str,
+        status: str,
+        canonical_target_id: str,
+        target_lat: float,
+        target_lon: float,
+        priority: int,
+        constraints: Optional[Dict[str, Any]],
+        requested_satellite_group: Optional[str],
+        recurrence_type: str,
+        interval: int,
+        days_of_week: Optional[List[str]],
+        window_start_hhmm: str,
+        window_end_hhmm: str,
+        timezone_name: str,
+        effective_start_date: str,
+        effective_end_date: Optional[str],
+        notes: Optional[str],
+        external_ref: Optional[str],
+    ) -> Optional[OrderTemplate]:
+        """Replace the mutable state of a template using a fully validated payload."""
+        now = _utc_now_z()
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE order_templates
+                SET name = ?, status = ?, canonical_target_id = ?,
+                    target_lat = ?, target_lon = ?, priority = ?,
+                    constraints_json = ?, requested_satellite_group = ?,
+                    recurrence_type = ?, interval = ?, days_of_week_json = ?,
+                    window_start_hhmm = ?, window_end_hhmm = ?, timezone_name = ?,
+                    effective_start_date = ?, effective_end_date = ?,
+                    notes = ?, external_ref = ?, updated_at = ?
+                WHERE id = ?
+            """,
+                (
+                    name,
+                    status,
+                    canonical_target_id,
+                    target_lat,
+                    target_lon,
+                    priority,
+                    _dump_json(constraints),
+                    requested_satellite_group,
+                    recurrence_type,
+                    interval,
+                    _dump_json(days_of_week),
+                    window_start_hhmm,
+                    window_end_hhmm,
+                    timezone_name,
+                    effective_start_date,
+                    effective_end_date,
+                    notes,
+                    external_ref,
+                    now,
+                    template_id,
+                ),
+            )
+            conn.commit()
+            if cursor.rowcount <= 0:
+                return None
+
+        return self.get_order_template(template_id)
+
+    def delete_order_template(self, template_id: str) -> Dict[str, Any]:
+        """Delete an unused order template.
+
+        Templates are the recurring source identity, so deleting a template that
+        already has materialized order instances would orphan lineage. We reject
+        that case and keep the instance history intact.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM order_templates WHERE id = ?", (template_id,))
+            if not cursor.fetchone():
+                return {"template_deleted": False, "instances_linked": 0}
+
+            cursor.execute(
+                "SELECT COUNT(*) AS cnt FROM orders WHERE template_id = ?",
+                (template_id,),
+            )
+            linked_instances = int(cursor.fetchone()["cnt"])
+            if linked_instances:
+                raise ValueError(
+                    f"Cannot delete template {template_id}: {linked_instances} order instance(s) still reference it"
+                )
+
+            cursor.execute("DELETE FROM order_templates WHERE id = ?", (template_id,))
+            conn.commit()
+            return {
+                "template_deleted": cursor.rowcount > 0,
+                "instances_linked": linked_instances,
+            }
+
+    def _row_to_order_template(self, row: sqlite3.Row) -> OrderTemplate:
+        """Convert a database row to an OrderTemplate object."""
+        return OrderTemplate(
+            id=row["id"],
+            workspace_id=row["workspace_id"],
+            name=row["name"],
+            status=row["status"],
+            canonical_target_id=row["canonical_target_id"],
+            target_lat=row["target_lat"],
+            target_lon=row["target_lon"],
+            priority=row["priority"],
+            constraints_json=row["constraints_json"],
+            requested_satellite_group=row["requested_satellite_group"],
+            recurrence_type=row["recurrence_type"],
+            interval=row["interval"],
+            days_of_week_json=row["days_of_week_json"],
+            window_start_hhmm=row["window_start_hhmm"],
+            window_end_hhmm=row["window_end_hhmm"],
+            timezone_name=row["timezone_name"],
+            effective_start_date=row["effective_start_date"],
+            effective_end_date=row["effective_end_date"],
+            notes=row["notes"],
+            external_ref=row["external_ref"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
     # =========================================================================
     # Order Operations
     # =========================================================================
+
+    def _resolve_order_target_coords(
+        self,
+        cursor: sqlite3.Cursor,
+        workspace_id: Optional[str],
+        target_id: str,
+        canonical_target_id: Optional[str],
+        target_lat: Optional[float],
+        target_lon: Optional[float],
+    ) -> tuple[Optional[float], Optional[float]]:
+        """Fill missing order geometry from workspace scenario targets."""
+        if target_lat is not None and target_lon is not None:
+            return target_lat, target_lon
+        if not workspace_id:
+            return target_lat, target_lon
+
+        target_coords = self._resolve_target_coords(cursor, workspace_id)
+        lookup_keys = [canonical_target_id, target_id]
+        for lookup_key in lookup_keys:
+            if lookup_key and lookup_key in target_coords:
+                lat, lon = target_coords[lookup_key]
+                return (
+                    target_lat if target_lat is not None else lat,
+                    target_lon if target_lon is not None else lon,
+                )
+
+        return target_lat, target_lon
+
+    def _get_order_instance_lineage(
+        self,
+        cursor: sqlite3.Cursor,
+        order_id: Optional[str],
+    ) -> Dict[str, Any]:
+        """Fetch stored lineage for a dated order instance."""
+        if not order_id:
+            return {}
+
+        cursor.execute("SELECT * FROM orders WHERE id = ?", (order_id,))
+        row = cursor.fetchone()
+        if not row:
+            return {}
+
+        row_keys = row.keys()
+        planner_target_id = (
+            row["planner_target_id"] if "planner_target_id" in row_keys else None
+        )
+        canonical_target_id = (
+            row["canonical_target_id"] if "canonical_target_id" in row_keys else None
+        )
+        planner_target_id, canonical_target_id = _normalize_order_identity(
+            row["target_id"],
+            planner_target_id,
+            canonical_target_id,
+        )
+        return {
+            "template_id": row["template_id"] if "template_id" in row_keys else None,
+            "instance_key": row["instance_key"] if "instance_key" in row_keys else None,
+            "instance_local_date": (
+                row["instance_local_date"] if "instance_local_date" in row_keys else None
+            ),
+            "planner_target_id": planner_target_id,
+            "canonical_target_id": canonical_target_id,
+            "display_target_name": canonical_target_id or row["target_id"],
+            "target_lat": row["target_lat"] if "target_lat" in row_keys else None,
+            "target_lon": row["target_lon"] if "target_lon" in row_keys else None,
+        }
 
     def create_order(
         self,
@@ -1377,6 +2092,13 @@ class ScheduleDB:
         tags: Optional[List[str]] = None,
         requested_satellite_group: Optional[str] = None,
         user_notes: Optional[str] = None,
+        template_id: Optional[str] = None,
+        instance_key: Optional[str] = None,
+        instance_local_date: Optional[str] = None,
+        planner_target_id: Optional[str] = None,
+        canonical_target_id: Optional[str] = None,
+        target_lat: Optional[float] = None,
+        target_lon: Optional[float] = None,
     ) -> Order:
         """Create a new order.
 
@@ -1397,23 +2119,48 @@ class ScheduleDB:
             tags: List of tags
             requested_satellite_group: Preferred satellite group
             user_notes: User-provided notes
+            template_id: Recurring template identity, if this order is materialized
+            instance_key: Deterministic occurrence key for recurring instances
+            instance_local_date: Local date for the recurring occurrence
+            planner_target_id: Unique scheduler-facing target identity for this instance
+            canonical_target_id: Physical target identity used for grouping/operator meaning
+            target_lat: Optional target latitude snapshot
+            target_lon: Optional target longitude snapshot
 
         Returns:
             Created Order object
         """
+        if template_id and not instance_key:
+            raise ValueError("Recurring order instances require instance_key")
+        if template_id and not instance_local_date:
+            raise ValueError("Recurring order instances require instance_local_date")
+
         order_id = f"ord_{uuid.uuid4().hex[:12]}"
         now = _utc_now_z()
         effective_workspace_id = (
             _normalize_workspace_id(workspace_id) if workspace_id else None
         )
+        planner_target_id, canonical_target_id = _normalize_order_identity(
+            target_id,
+            planner_target_id,
+            canonical_target_id,
+        )
 
-        constraints_json = json.dumps(constraints) if constraints else None
-        tags_json = json.dumps(tags) if tags else None
+        constraints_json = _dump_json(constraints)
+        tags_json = _dump_json(tags)
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
             if effective_workspace_id:
                 _ensure_workspace_exists(cursor, effective_workspace_id)
+            target_lat, target_lon = self._resolve_order_target_coords(
+                cursor,
+                effective_workspace_id,
+                target_id,
+                canonical_target_id,
+                target_lat,
+                target_lon,
+            )
             cursor.execute(
                 """
                 INSERT INTO orders (
@@ -1421,8 +2168,10 @@ class ScheduleDB:
                     constraints_json, requested_window_start, requested_window_end,
                     source, notes, external_ref, workspace_id,
                     order_type, due_time, earliest_start, latest_end,
-                    tags_json, requested_satellite_group, user_notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    tags_json, requested_satellite_group, user_notes,
+                    template_id, instance_key, instance_local_date,
+                    planner_target_id, canonical_target_id, target_lat, target_lon
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     order_id,
@@ -1445,6 +2194,13 @@ class ScheduleDB:
                     tags_json,
                     requested_satellite_group,
                     user_notes,
+                    template_id,
+                    instance_key,
+                    instance_local_date,
+                    planner_target_id,
+                    canonical_target_id,
+                    target_lat,
+                    target_lon,
                 ),
             )
             conn.commit()
@@ -1465,6 +2221,13 @@ class ScheduleDB:
             notes=notes,
             external_ref=external_ref,
             workspace_id=effective_workspace_id,
+            template_id=template_id,
+            instance_key=instance_key,
+            instance_local_date=instance_local_date,
+            planner_target_id=planner_target_id,
+            canonical_target_id=canonical_target_id,
+            target_lat=target_lat,
+            target_lon=target_lon,
             order_type=order_type,
             due_time=due_time,
             earliest_start=earliest_start,
@@ -1483,6 +2246,133 @@ class ScheduleDB:
             if not row:
                 return None
             return self._row_to_order(row)
+
+    def get_order_by_template_instance(
+        self,
+        template_id: str,
+        instance_key: str,
+    ) -> Optional[Order]:
+        """Get a materialized recurring instance by its deterministic lineage key."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM orders
+                WHERE template_id = ? AND instance_key = ?
+                LIMIT 1
+            """,
+                (template_id, instance_key),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return self._row_to_order(row)
+
+    def get_or_create_materialized_order(
+        self,
+        *,
+        workspace_id: str,
+        template_id: str,
+        instance_key: str,
+        instance_local_date: str,
+        planner_target_id: str,
+        canonical_target_id: str,
+        target_lat: float,
+        target_lon: float,
+        priority: int,
+        requested_window_start: str,
+        requested_window_end: str,
+        constraints: Optional[Dict[str, Any]] = None,
+        requested_satellite_group: Optional[str] = None,
+        notes: Optional[str] = None,
+        external_ref: Optional[str] = None,
+        source: str = "materialized_recurring",
+    ) -> tuple[Order, bool]:
+        """Insert a recurring dated instance once and reuse it on repeated horizons.
+
+        Returns:
+            Tuple of ``(order, created_now)``.
+        """
+        order_id = f"ord_{uuid.uuid4().hex[:12]}"
+        now = _utc_now_z()
+        effective_workspace_id = _normalize_workspace_id(workspace_id)
+        planner_target_id, canonical_target_id = _normalize_order_identity(
+            planner_target_id,
+            planner_target_id,
+            canonical_target_id,
+        )
+        constraints_json = _dump_json(constraints)
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            _ensure_workspace_exists(cursor, effective_workspace_id)
+            target_lat, target_lon = self._resolve_order_target_coords(
+                cursor,
+                effective_workspace_id,
+                planner_target_id,
+                canonical_target_id,
+                target_lat,
+                target_lon,
+            )
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO orders (
+                    id, created_at, updated_at, status, target_id, priority,
+                    constraints_json, requested_window_start, requested_window_end,
+                    source, notes, external_ref, workspace_id,
+                    order_type, due_time, earliest_start, latest_end,
+                    tags_json, requested_satellite_group, user_notes,
+                    template_id, instance_key, instance_local_date,
+                    planner_target_id, canonical_target_id, target_lat, target_lon
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    order_id,
+                    now,
+                    now,
+                    "new",
+                    planner_target_id,
+                    priority,
+                    constraints_json,
+                    requested_window_start,
+                    requested_window_end,
+                    source,
+                    notes,
+                    external_ref,
+                    effective_workspace_id,
+                    "IMAGING",
+                    None,
+                    requested_window_start,
+                    requested_window_end,
+                    None,
+                    requested_satellite_group,
+                    None,
+                    template_id,
+                    instance_key,
+                    instance_local_date,
+                    planner_target_id,
+                    canonical_target_id,
+                    target_lat,
+                    target_lon,
+                ),
+            )
+            created_now = cursor.rowcount > 0
+            conn.commit()
+
+        if created_now:
+            created = self.get_order(order_id)
+            if created is None:  # pragma: no cover - defensive fetch after write
+                raise RuntimeError(
+                    f"Failed to reload newly materialized order instance {order_id}"
+                )
+            return created, True
+
+        existing = self.get_order_by_template_instance(template_id, instance_key)
+        if existing is None:  # pragma: no cover - unexpected ignore without a row
+            raise RuntimeError(
+                "Recurring order materialization was ignored but no existing row was found"
+            )
+        return existing, False
 
     def list_orders(
         self,
@@ -1621,6 +2511,23 @@ class ScheduleDB:
             notes=row["notes"],
             external_ref=row["external_ref"],
             workspace_id=row["workspace_id"],
+            template_id=row["template_id"] if "template_id" in row_keys else None,
+            instance_key=row["instance_key"] if "instance_key" in row_keys else None,
+            instance_local_date=(
+                row["instance_local_date"] if "instance_local_date" in row_keys else None
+            ),
+            planner_target_id=(
+                row["planner_target_id"]
+                if "planner_target_id" in row_keys and row["planner_target_id"]
+                else row["target_id"]
+            ),
+            canonical_target_id=(
+                row["canonical_target_id"]
+                if "canonical_target_id" in row_keys and row["canonical_target_id"]
+                else row["target_id"]
+            ),
+            target_lat=row["target_lat"] if "target_lat" in row_keys else None,
+            target_lon=row["target_lon"] if "target_lon" in row_keys else None,
             # Extended fields (v2.1)
             order_type=row["order_type"] if "order_type" in row_keys else "IMAGING",
             due_time=row["due_time"] if "due_time" in row_keys else None,
@@ -1668,6 +2575,10 @@ class ScheduleDB:
         maneuver_time_s: Optional[float] = None,
         slack_time_s: Optional[float] = None,
         workspace_id: Optional[str] = None,
+        template_id: Optional[str] = None,
+        instance_key: Optional[str] = None,
+        canonical_target_id: Optional[str] = None,
+        display_target_name: Optional[str] = None,
         target_lat: Optional[float] = None,
         target_lon: Optional[float] = None,
         satellite_display_name: Optional[str] = None,
@@ -1685,6 +2596,22 @@ class ScheduleDB:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             _ensure_workspace_exists(cursor, effective_workspace_id)
+            order_lineage = self._get_order_instance_lineage(cursor, order_id)
+            canonical_target_id, display_target_name = _normalize_display_target_name(
+                target_id,
+                canonical_target_id or order_lineage.get("canonical_target_id"),
+                display_target_name or order_lineage.get("display_target_name"),
+            )
+            template_id = template_id or order_lineage.get("template_id")
+            instance_key = instance_key or order_lineage.get("instance_key")
+            target_lat, target_lon = self._resolve_order_target_coords(
+                cursor,
+                effective_workspace_id,
+                target_id,
+                canonical_target_id,
+                target_lat if target_lat is not None else order_lineage.get("target_lat"),
+                target_lon if target_lon is not None else order_lineage.get("target_lon"),
+            )
             cursor.execute(
                 """
                 INSERT INTO acquisitions (
@@ -1694,8 +2621,9 @@ class ScheduleDB:
                     swath_width_km, scene_length_km, state, lock_level, source,
                     order_id, plan_id, opportunity_id, quality_score,
                     maneuver_time_s, slack_time_s, workspace_id,
+                    template_id, instance_key, canonical_target_id, display_target_name,
                     target_lat, target_lon, satellite_display_name, off_nadir_deg
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     acq_id,
@@ -1724,6 +2652,10 @@ class ScheduleDB:
                     maneuver_time_s,
                     slack_time_s,
                     effective_workspace_id,
+                    template_id,
+                    instance_key,
+                    canonical_target_id,
+                    display_target_name,
                     target_lat,
                     target_lon,
                     satellite_display_name,
@@ -1763,6 +2695,10 @@ class ScheduleDB:
             maneuver_time_s=maneuver_time_s,
             slack_time_s=slack_time_s,
             workspace_id=effective_workspace_id,
+            template_id=template_id,
+            instance_key=instance_key,
+            canonical_target_id=canonical_target_id,
+            display_target_name=display_target_name,
             target_lat=target_lat,
             target_lon=target_lon,
             satellite_display_name=satellite_display_name,
@@ -2270,6 +3206,18 @@ class ScheduleDB:
             maneuver_time_s=row["maneuver_time_s"],
             slack_time_s=row["slack_time_s"],
             workspace_id=row["workspace_id"],
+            template_id=row["template_id"] if "template_id" in row_keys else None,
+            instance_key=row["instance_key"] if "instance_key" in row_keys else None,
+            canonical_target_id=(
+                row["canonical_target_id"]
+                if "canonical_target_id" in row_keys and row["canonical_target_id"]
+                else row["target_id"]
+            ),
+            display_target_name=(
+                row["display_target_name"]
+                if "display_target_name" in row_keys and row["display_target_name"]
+                else row["target_id"]
+            ),
             # v2.5 geo-backfill fields
             target_lat=row["target_lat"] if "target_lat" in row_keys else None,
             target_lon=row["target_lon"] if "target_lon" in row_keys else None,
@@ -2523,19 +3471,32 @@ class ScheduleDB:
         maneuver_time_s: Optional[float] = None,
         slack_time_s: Optional[float] = None,
         order_id: Optional[str] = None,
+        template_id: Optional[str] = None,
+        instance_key: Optional[str] = None,
+        canonical_target_id: Optional[str] = None,
+        display_target_name: Optional[str] = None,
     ) -> PlanItem:
         """Create a plan item."""
         item_id = f"planitem_{uuid.uuid4().hex[:12]}"
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            order_lineage = self._get_order_instance_lineage(cursor, order_id)
+            canonical_target_id, display_target_name = _normalize_display_target_name(
+                target_id,
+                canonical_target_id or order_lineage.get("canonical_target_id"),
+                display_target_name or order_lineage.get("display_target_name"),
+            )
+            template_id = template_id or order_lineage.get("template_id")
+            instance_key = instance_key or order_lineage.get("instance_key")
             cursor.execute(
                 """
                 INSERT INTO plan_items (
                     id, plan_id, opportunity_id, satellite_id, target_id,
                     start_time, end_time, roll_angle_deg, pitch_angle_deg,
-                    value, quality_score, maneuver_time_s, slack_time_s, order_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    value, quality_score, maneuver_time_s, slack_time_s, order_id,
+                    template_id, instance_key, canonical_target_id, display_target_name
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     item_id,
@@ -2552,6 +3513,10 @@ class ScheduleDB:
                     maneuver_time_s,
                     slack_time_s,
                     order_id,
+                    template_id,
+                    instance_key,
+                    canonical_target_id,
+                    display_target_name,
                 ),
             )
             conn.commit()
@@ -2571,6 +3536,10 @@ class ScheduleDB:
             maneuver_time_s=maneuver_time_s,
             slack_time_s=slack_time_s,
             order_id=order_id,
+            template_id=template_id,
+            instance_key=instance_key,
+            canonical_target_id=canonical_target_id,
+            display_target_name=display_target_name,
         )
 
     def get_plan_items(self, plan_id: str) -> List[PlanItem]:
@@ -2600,6 +3569,18 @@ class ScheduleDB:
             maneuver_time_s=row["maneuver_time_s"],
             slack_time_s=row["slack_time_s"],
             order_id=row["order_id"],
+            template_id=row["template_id"] if "template_id" in row.keys() else None,
+            instance_key=row["instance_key"] if "instance_key" in row.keys() else None,
+            canonical_target_id=(
+                row["canonical_target_id"]
+                if "canonical_target_id" in row.keys() and row["canonical_target_id"]
+                else row["target_id"]
+            ),
+            display_target_name=(
+                row["display_target_name"]
+                if "display_target_name" in row.keys() and row["display_target_name"]
+                else row["target_id"]
+            ),
         )
 
     # =========================================================================
@@ -2637,6 +3618,58 @@ class ScheduleDB:
                 f"Could not resolve target coords for workspace {workspace_id}: {e}"
             )
             return {}
+
+    def _resolve_plan_item_lineage(
+        self,
+        cursor: sqlite3.Cursor,
+        item: sqlite3.Row,
+        workspace_id: Optional[str],
+        target_coords: Dict[str, tuple],
+    ) -> Dict[str, Any]:
+        """Resolve template/instance lineage plus geometry for a plan item."""
+        row_keys = item.keys()
+        order_lineage = self._get_order_instance_lineage(
+            cursor,
+            item["order_id"] if "order_id" in row_keys else None,
+        )
+
+        template_id = item["template_id"] if "template_id" in row_keys else None
+        instance_key = item["instance_key"] if "instance_key" in row_keys else None
+        canonical_target_id = (
+            item["canonical_target_id"] if "canonical_target_id" in row_keys else None
+        )
+        display_target_name = (
+            item["display_target_name"] if "display_target_name" in row_keys else None
+        )
+
+        canonical_target_id, display_target_name = _normalize_display_target_name(
+            item["target_id"],
+            canonical_target_id or order_lineage.get("canonical_target_id"),
+            display_target_name or order_lineage.get("display_target_name"),
+        )
+
+        target_lat = order_lineage.get("target_lat")
+        target_lon = order_lineage.get("target_lon")
+        if target_lat is None or target_lon is None:
+            for lookup_key in (
+                canonical_target_id,
+                display_target_name,
+                item["target_id"],
+            ):
+                if lookup_key and lookup_key in target_coords:
+                    lat, lon = target_coords[lookup_key]
+                    target_lat = target_lat if target_lat is not None else lat
+                    target_lon = target_lon if target_lon is not None else lon
+                    break
+
+        return {
+            "template_id": template_id or order_lineage.get("template_id"),
+            "instance_key": instance_key or order_lineage.get("instance_key"),
+            "canonical_target_id": canonical_target_id,
+            "display_target_name": display_target_name,
+            "target_lat": target_lat,
+            "target_lon": target_lon,
+        }
 
     # =========================================================================
     # Snapshot Operations (Rollback Support)
@@ -2852,10 +3885,12 @@ class ScheduleDB:
                 roll_deg = item["roll_angle_deg"]
                 off_nadir = abs(roll_deg) if roll_deg is not None else None
 
-                # v2.5: look up target geo coords
-                coords = target_coords.get(item["target_id"])
-                t_lat = coords[0] if coords else None
-                t_lon = coords[1] if coords else None
+                lineage = self._resolve_plan_item_lineage(
+                    cursor,
+                    item,
+                    effective_workspace_id,
+                    target_coords,
+                )
 
                 # Create acquisition from plan item
                 try:
@@ -2866,8 +3901,9 @@ class ScheduleDB:
                             start_time, end_time, mode, roll_angle_deg, pitch_angle_deg,
                             state, lock_level, source, order_id, plan_id, opportunity_id,
                             quality_score, maneuver_time_s, slack_time_s, workspace_id,
+                            template_id, instance_key, canonical_target_id, display_target_name,
                             off_nadir_deg, target_lat, target_lon
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                         (
                             acq_id,
@@ -2890,9 +3926,13 @@ class ScheduleDB:
                             item["maneuver_time_s"],
                             item["slack_time_s"],
                             effective_workspace_id,
+                            lineage["template_id"],
+                            lineage["instance_key"],
+                            lineage["canonical_target_id"],
+                            lineage["display_target_name"],
                             off_nadir,
-                            t_lat,
-                            t_lon,
+                            lineage["target_lat"],
+                            lineage["target_lon"],
                         ),
                     )
                 except sqlite3.IntegrityError as exc:
@@ -3639,6 +4679,14 @@ class ScheduleDB:
             cursor.execute(query, params)
             return [self._row_to_audit_log(row) for row in cursor.fetchall()]
 
+    def get_latest_commit_audit_log(
+        self,
+        workspace_id: Optional[str] = None,
+    ) -> Optional[CommitAuditLog]:
+        """Return the most recent commit audit log for a workspace."""
+        logs = self.get_commit_audit_logs(workspace_id=workspace_id, limit=1, offset=0)
+        return logs[0] if logs else None
+
     def _row_to_audit_log(self, row: sqlite3.Row) -> CommitAuditLog:
         """Convert database row to CommitAuditLog object."""
         return CommitAuditLog(
@@ -3829,10 +4877,12 @@ class ScheduleDB:
                     roll_deg = item["roll_angle_deg"]
                     off_nadir = abs(roll_deg) if roll_deg is not None else None
 
-                    # v2.5: look up target geo coords
-                    coords = target_coords.get(item["target_id"])
-                    t_lat = coords[0] if coords else None
-                    t_lon = coords[1] if coords else None
+                    lineage = self._resolve_plan_item_lineage(
+                        cursor,
+                        item,
+                        effective_workspace_id,
+                        target_coords,
+                    )
 
                     cursor.execute(
                         """
@@ -3841,8 +4891,9 @@ class ScheduleDB:
                             start_time, end_time, mode, roll_angle_deg, pitch_angle_deg,
                             state, lock_level, source, order_id, plan_id, opportunity_id,
                             quality_score, maneuver_time_s, slack_time_s, workspace_id,
+                            template_id, instance_key, canonical_target_id, display_target_name,
                             off_nadir_deg, target_lat, target_lon
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                         (
                             acq_id,
@@ -3865,9 +4916,13 @@ class ScheduleDB:
                             item["maneuver_time_s"],
                             item["slack_time_s"],
                             effective_workspace_id,
+                            lineage["template_id"],
+                            lineage["instance_key"],
+                            lineage["canonical_target_id"],
+                            lineage["display_target_name"],
                             off_nadir,
-                            t_lat,
-                            t_lon,
+                            lineage["target_lat"],
+                            lineage["target_lon"],
                         ),
                     )
 
@@ -4392,13 +5447,29 @@ class ScheduleDB:
             _ensure_workspace_exists(cursor, effective_workspace_id)
 
             for data in orders_data:
+                if data.get("template_id") and not data.get("instance_key"):
+                    raise ValueError("Recurring order instances require instance_key")
+                if data.get("template_id") and not data.get("instance_local_date"):
+                    raise ValueError(
+                        "Recurring order instances require instance_local_date"
+                    )
+
                 order_id = f"ord_{uuid.uuid4().hex[:12]}"
-                constraints_json = (
-                    json.dumps(data.get("constraints"))
-                    if data.get("constraints")
-                    else None
+                planner_target_id, canonical_target_id = _normalize_order_identity(
+                    data.get("target_id", ""),
+                    data.get("planner_target_id"),
+                    data.get("canonical_target_id"),
                 )
-                tags_json = json.dumps(data.get("tags")) if data.get("tags") else None
+                constraints_json = _dump_json(data.get("constraints"))
+                tags_json = _dump_json(data.get("tags"))
+                target_lat, target_lon = self._resolve_order_target_coords(
+                    cursor,
+                    effective_workspace_id,
+                    data.get("target_id", ""),
+                    canonical_target_id,
+                    data.get("target_lat"),
+                    data.get("target_lon"),
+                )
 
                 cursor.execute(
                     """
@@ -4407,8 +5478,10 @@ class ScheduleDB:
                         constraints_json, requested_window_start, requested_window_end,
                         source, notes, external_ref, workspace_id,
                         order_type, due_time, earliest_start, latest_end,
-                        tags_json, requested_satellite_group, user_notes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        tags_json, requested_satellite_group, user_notes,
+                        template_id, instance_key, instance_local_date,
+                        planner_target_id, canonical_target_id, target_lat, target_lon
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         order_id,
@@ -4431,6 +5504,13 @@ class ScheduleDB:
                         tags_json,
                         data.get("requested_satellite_group"),
                         data.get("user_notes"),
+                        data.get("template_id"),
+                        data.get("instance_key"),
+                        data.get("instance_local_date"),
+                        planner_target_id,
+                        canonical_target_id,
+                        target_lat,
+                        target_lon,
                     ),
                 )
 
@@ -4449,6 +5529,13 @@ class ScheduleDB:
                         notes=data.get("notes"),
                         external_ref=data.get("external_ref"),
                         workspace_id=effective_workspace_id,
+                        template_id=data.get("template_id"),
+                        instance_key=data.get("instance_key"),
+                        instance_local_date=data.get("instance_local_date"),
+                        planner_target_id=planner_target_id,
+                        canonical_target_id=canonical_target_id,
+                        target_lat=target_lat,
+                        target_lon=target_lon,
                         order_type=data.get("order_type", "IMAGING"),
                         due_time=data.get("due_time"),
                         earliest_start=data.get("earliest_start"),

@@ -197,7 +197,7 @@ export default function RepairCommitModal({
   onClose,
   onCommit,
   onReviewChanges,
-  planId,
+  planId: _planId,
   repairResult,
   targets,
   hardLockedCount,

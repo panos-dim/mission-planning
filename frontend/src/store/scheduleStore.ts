@@ -17,12 +17,14 @@ import {
   type MasterScheduleItem,
   type MasterScheduleBucket,
 } from '../api/scheduleApi'
+import { SCHEDULE_TABS } from '../constants/simpleMode'
 
 // =============================================================================
 // Types
 // =============================================================================
 
 export type MasterZoom = 'detail' | 'aggregate'
+export type ScheduleActiveTab = (typeof SCHEDULE_TABS)[keyof typeof SCHEDULE_TABS]
 
 interface ScheduleState {
   // Time range
@@ -34,6 +36,7 @@ interface ScheduleState {
   buckets: MasterScheduleBucket[]
   total: number
   zoom: MasterZoom
+  activeTab: ScheduleActiveTab
 
   // Fetch state
   loading: boolean
@@ -76,6 +79,9 @@ interface ScheduleActions {
 
   /** Set zoom mode */
   setZoom: (zoom: MasterZoom) => void
+
+  /** Set active schedule sub-tab. */
+  setActiveTab: (tab: ScheduleActiveTab) => void
 
   /**
    * Focus an acquisition (triggers map fly-to + clock sync).
@@ -132,6 +138,7 @@ const INITIAL_STATE: ScheduleState = {
   buckets: [],
   total: 0,
   zoom: 'detail',
+  activeTab: SCHEDULE_TABS.COMMITTED,
   loading: false,
   error: null,
   fetchMs: null,
@@ -241,6 +248,10 @@ export const useScheduleStore = create<ScheduleStore>()(
 
       setZoom: (zoom) => {
         set({ zoom }, false, 'setZoom')
+      },
+
+      setActiveTab: (tab) => {
+        set({ activeTab: tab }, false, 'setActiveTab')
       },
 
       focusAcquisition: (id, overrides) => {

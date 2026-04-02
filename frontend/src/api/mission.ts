@@ -8,6 +8,7 @@ import { API_ENDPOINTS, TIMEOUTS } from './config'
 import { validateResponse } from './validate'
 import { MissionAnalyzeResponseSchema, PlanningResponseSchema } from './schemas'
 import type { 
+  AcquisitionTimeWindow,
   MissionData, 
   CZMLPacket, 
   PlanningRequest, 
@@ -31,6 +32,7 @@ export interface MissionAnalyzeRequest {
   max_spacecraft_roll_deg?: number
   imaging_type?: 'optical' | 'sar'
   sar_mode?: 'stripmap' | 'spotlight' | 'scan'
+  acquisition_time_window?: AcquisitionTimeWindow
 }
 
 // Response types

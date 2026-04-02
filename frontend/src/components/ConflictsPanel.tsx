@@ -181,7 +181,7 @@ const ConflictsPanel: React.FC<ConflictsPanelProps> = ({
     selectedConflictId: localSelectedConflictId,
     isLoading,
     error,
-    summary,
+    summary: _summary,
     setConflicts,
     selectConflict: localSelectConflict,
     setLoading,

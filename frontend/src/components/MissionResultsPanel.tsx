@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { useMission } from '../context/MissionContext'
-import { Clock, BarChart2, MapPin, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
+import { BarChart2, MapPin, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
 import { LABELS } from '../constants/labels'
 import { formatDateTimeShort, formatDateTimeDDMMYYYY } from '../utils/date'
 import { fmt1 } from '../utils/format'
@@ -56,6 +56,20 @@ const ftGenerateTicks = (minTs: number, maxTs: number, maxTicks: number): number
 
 const MissionResultsPanel: React.FC = () => {
   const { state, navigateToPassWindow } = useMission()
+  const acquisitionTimeWindow = state.missionData?.acquisition_time_window
+  const isAcquisitionTimeWindowActive = !!acquisitionTimeWindow?.enabled
+  const acquisitionTimeWindowLabel =
+    isAcquisitionTimeWindowActive &&
+    acquisitionTimeWindow?.start_time &&
+    acquisitionTimeWindow?.end_time
+      ? `${acquisitionTimeWindow.start_time}-${acquisitionTimeWindow.end_time}`
+      : null
+  const satelliteCount = state.missionData?.satellites?.length ?? 0
+  const isConstellation = satelliteCount > 1 || !!state.missionData?.is_constellation
+  const satelliteSummaryLabel = isConstellation
+    ? `${satelliteCount || 0} selected`
+    : state.missionData?.satellite_name || state.missionData?.satellites?.[0]?.name || '—'
+  const satelliteSummaryTitle = isConstellation ? 'Satellites' : 'Satellite'
 
   // Styled hover tooltip state for timeline dots
   const [timelineTooltip, setTimelineTooltip] = useState<{
@@ -311,36 +325,48 @@ const MissionResultsPanel: React.FC = () => {
 
   return (
     <div className="h-full flex flex-col min-h-0 bg-gray-900">
-      {/* Fixed Header — Summary + Timeline label */}
+      {/* Fixed Header — Summary */}
       <div className="flex-shrink-0 border-b border-gray-700 bg-gray-800/95">
-        <div className="px-3 py-2.5 flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <Clock className="w-4 h-4 text-blue-400" />
-            <span className="text-sm font-semibold text-white">Timeline</span>
-          </div>
-          <div className="flex items-center space-x-2">
-            <span
-              className={`text-xs font-semibold px-2 py-0.5 rounded ${
-                isPerfect ? 'bg-blue-500/20 text-blue-400' : 'bg-gray-700 text-gray-300'
-              }`}
+        <div className="px-3 pt-2.5 pb-2 flex flex-wrap items-center gap-2">
+          {acquisitionTimeWindowLabel && (
+            <div
+              aria-label={`Time window active: ${acquisitionTimeWindowLabel}`}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-blue-500/20 bg-gray-700/60 px-2.5 py-1 text-[10px] font-medium text-gray-300"
             >
-              {covered}/{total} targets
-            </span>
-            <span className="text-[10px] text-gray-500">{state.missionData.satellite_name}</span>
+              <span className="text-gray-400">Time window active: </span>
+              <span className="font-semibold text-blue-300 tabular-nums">
+                {acquisitionTimeWindowLabel}
+              </span>
+            </div>
+          )}
+          <div
+            className={`inline-flex items-center rounded-lg px-2.5 py-1 text-[10px] font-semibold tabular-nums ${
+              isPerfect ? 'bg-blue-500/15 text-blue-300' : 'bg-gray-700/70 text-gray-200'
+            }`}
+          >
+            {covered}/{total} targets
           </div>
         </div>
 
-        {/* Mission time range */}
-        <div className="px-3 pb-2 flex justify-between text-[10px]">
-          <div>
-            <span className="text-gray-500">Start </span>
-            <span className="text-gray-300">
-              {formatDateTimeShort(state.missionData.start_time)}
-            </span>
+        <div className="px-3 pb-2.5 space-y-1.5 text-[11px]">
+          <div className="flex min-w-0 items-baseline gap-1.5">
+            <span className="shrink-0 font-medium text-gray-500">{satelliteSummaryTitle}</span>
+            <span className="truncate font-semibold text-gray-200">{satelliteSummaryLabel}</span>
           </div>
-          <div>
-            <span className="text-gray-500">End </span>
-            <span className="text-gray-300">{formatDateTimeShort(state.missionData.end_time)}</span>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex min-w-0 items-baseline gap-1.5">
+              <span className="shrink-0 font-medium text-gray-500">Start</span>
+              <span className="truncate font-semibold text-gray-200 tabular-nums">
+                {formatDateTimeShort(state.missionData.start_time)}
+              </span>
+            </div>
+            <div className="flex min-w-0 items-baseline justify-self-end gap-1.5 text-right">
+              <span className="shrink-0 font-medium text-gray-500">End</span>
+              <span className="truncate font-semibold text-gray-200 tabular-nums">
+                {formatDateTimeShort(state.missionData.end_time)}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -440,7 +466,9 @@ const MissionResultsPanel: React.FC = () => {
         {visiblePasses.length === 0 ? (
           <div className="text-xs text-gray-500 text-center py-8">
             {sortedPasses.length === 0
-              ? 'No opportunity windows found for this mission.'
+              ? isAcquisitionTimeWindowActive
+                ? 'No opportunities found inside the selected acquisition time window.'
+                : 'No opportunity windows found for this mission.'
               : 'No windows for selected targets. Click a target above or "Show all".'}
           </div>
         ) : (

@@ -38,6 +38,7 @@ import {
   buildRecoveredOrdersFromScheduleItems,
   getAcceptedOrderAcquisitionCount,
 } from '../utils/recoveredOrders'
+import { formatDateTimeShort } from '../utils/date'
 
 interface SchedulePanelProps {
   orders: AcceptedOrder[]
@@ -86,17 +87,25 @@ function formatHistoryTime(value: string): string {
 }
 
 function formatHistoryLabel(log: AuditLogEntry): string {
-  if (log.commit_type === 'repair') return 'Repair'
+  if (log.commit_type === 'repair') return 'Adjusted'
   if (log.commit_type === 'force') return 'Override'
   return 'Applied'
+}
+
+function formatScheduleSyncTime(value: number | null): string | null {
+  if (!value) return null
+  try {
+    return formatDateTimeShort(new Date(value).toISOString())
+  } catch {
+    return null
+  }
 }
 
 const SchedulePanel: React.FC<SchedulePanelProps> = ({
   orders,
   onOrdersChange,
-  showHistoryTab = false,
+  showHistoryTab: _showHistoryTab = false,
 }) => {
-  const [activeTab, setActiveTab] = useState<TabId>(SCHEDULE_TABS.COMMITTED)
   const [showIssueReview, setShowIssueReview] = useState(false)
   const [showRecentActions, setShowRecentActions] = useState(false)
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([])
@@ -104,6 +113,7 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
   const [historyError, setHistoryError] = useState<string | null>(null)
   const [clearInProgress, setClearInProgress] = useState(false)
   const [clearError, setClearError] = useState<string | null>(null)
+  const [summaryRefreshing, setSummaryRefreshing] = useState(false)
   // PR-LOCK-OPS-01: Lock store for merging lock levels into timeline acquisitions
   const lockLevels = useLockStore((s) => s.levels)
   const toggleLock = useLockStore((s) => s.toggleLock)
@@ -116,6 +126,10 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
   const fetchMaster = useScheduleStore((s) => s.fetchMaster)
   const startPolling = useScheduleStore((s) => s.startPolling)
   const stopPolling = useScheduleStore((s) => s.stopPolling)
+  const activeTab = useScheduleStore((s) => s.activeTab as TabId)
+  const setActiveTab = useScheduleStore((s) => s.setActiveTab)
+  const scheduleLoading = useScheduleStore((s) => s.loading)
+  const lastFetchedAt = useScheduleStore((s) => s.lastFetchedAt)
   const focusAcquisition = useScheduleStore((s) => s.focusAcquisition)
   const focusedAcquisitionId = useScheduleStore((s) => s.focusedAcquisitionId)
   const setTimeRangeFromIso = useVisStore((s) => s.setTimeRangeFromIso)
@@ -292,6 +306,8 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
   const recentAuditLogs = useMemo(() => auditLogs.slice(0, 6), [auditLogs])
   const latestAuditLog = recentAuditLogs[0] ?? null
   const hasActiveSchedule = committedAcquisitionCount > 0
+  const lastSyncLabel = useMemo(() => formatScheduleSyncTime(lastFetchedAt), [lastFetchedAt])
+  const isSummaryBusy = summaryRefreshing || historyLoading || scheduleLoading
 
   const fetchCommitHistory = useCallback(async () => {
     if (!workspaceId) return
@@ -392,6 +408,27 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
     workspaceId,
   ])
 
+  const handleRefreshSchedule = useCallback(async () => {
+    if (!workspaceId || summaryRefreshing) return
+
+    setSummaryRefreshing(true)
+    try {
+      await Promise.all([
+        fetchMaster({ workspace_id: workspaceId }),
+        fetchCommitHistory(),
+        fetchScheduleConflicts(),
+      ])
+    } finally {
+      setSummaryRefreshing(false)
+    }
+  }, [
+    fetchCommitHistory,
+    fetchMaster,
+    fetchScheduleConflicts,
+    summaryRefreshing,
+    workspaceId,
+  ])
+
   const tabs: Tab[] = [
     {
       id: SCHEDULE_TABS.COMMITTED,
@@ -468,25 +505,48 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
         {activeTab === SCHEDULE_TABS.COMMITTED && (
           <div className="h-full flex min-h-0 flex-col">
             <div className="border-b border-gray-700 px-4 py-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-medium text-gray-100">Schedule Summary</h3>
-                  <p className="mt-1 text-xs text-gray-500">
-                    {hasActiveSchedule
-                      ? `${committedAcquisitionCount} scheduled acquisition${
-                          committedAcquisitionCount === 1 ? '' : 's'
-                        } ready in this schedule window`
-                      : 'No scheduled acquisitions right now'}
-                  </p>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-shrink-0 items-center gap-2">
+                  <span className="rounded-full border border-gray-700 bg-gray-800 px-2 py-1 text-[11px] font-medium text-gray-300">
+                    Map live
+                  </span>
+                  {activeConflictSummary.errorCount > 0 && (
+                    <span className="rounded bg-red-900/30 px-2 py-1 text-xs font-medium text-red-300">
+                      {activeConflictSummary.errorCount} blocking issue
+                      {activeConflictSummary.errorCount === 1 ? '' : 's'}
+                    </span>
+                  )}
+                  {activeConflictSummary.warningCount > 0 && (
+                    <span className="rounded bg-yellow-900/30 px-2 py-1 text-xs font-medium text-yellow-300">
+                      {activeConflictSummary.warningCount} warning
+                      {activeConflictSummary.warningCount === 1 ? '' : 's'}
+                    </span>
+                  )}
+                  {activeConflictSummary.total === 0 && (
+                    <span className="rounded bg-green-900/30 px-2 py-1 text-xs font-medium text-green-300">
+                      {hasActiveSchedule ? 'Schedule clear' : 'Nothing scheduled'}
+                    </span>
+                  )}
+                  {hasActiveSchedule && latestAuditLog && (
+                    <span className="rounded bg-gray-800 px-2 py-1 text-xs text-gray-300">
+                      Last change: {formatHistorySummary(latestAuditLog)}
+                    </span>
+                  )}
+                  {lastSyncLabel && (
+                    <span className="text-[11px] text-gray-500 tabular-nums">
+                      Updated {lastSyncLabel}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void handleRefreshSchedule()}
+                    disabled={isSummaryBusy}
+                    className="inline-flex items-center justify-center rounded border border-gray-700 p-1.5 text-gray-300 hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+                    aria-label="Refresh schedule data"
+                  >
+                    <RefreshCw className="size-3.5" />
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => void fetchCommitHistory()}
-                  className="inline-flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-xs text-gray-300 hover:bg-gray-800"
-                >
-                  <RefreshCw className={`h-3.5 w-3.5 ${historyLoading ? 'animate-spin' : ''}`} />
-                  <span>Refresh</span>
-                </button>
               </div>
 
               {clearError && (
@@ -494,30 +554,6 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
                   {clearError}
                 </div>
               )}
-
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                {activeConflictSummary.errorCount > 0 && (
-                  <span className="rounded bg-red-900/30 px-2 py-1 text-xs font-medium text-red-300">
-                    {activeConflictSummary.errorCount} blocking issue
-                    {activeConflictSummary.errorCount === 1 ? '' : 's'}
-                  </span>
-                )}
-                {activeConflictSummary.warningCount > 0 && (
-                  <span className="rounded bg-yellow-900/30 px-2 py-1 text-xs font-medium text-yellow-300">
-                    {activeConflictSummary.warningCount} warning{activeConflictSummary.warningCount === 1 ? '' : 's'}
-                  </span>
-                )}
-                {activeConflictSummary.total === 0 && (
-                  <span className="rounded bg-green-900/30 px-2 py-1 text-xs font-medium text-green-300">
-                    {hasActiveSchedule ? 'Schedule clear' : 'Nothing scheduled'}
-                  </span>
-                )}
-                {hasActiveSchedule && latestAuditLog && (
-                  <span className="rounded bg-gray-800 px-2 py-1 text-xs text-gray-300">
-                    Last change: {formatHistorySummary(latestAuditLog)}
-                  </span>
-                )}
-              </div>
 
               <div className="mt-3 flex flex-wrap gap-2">
                 {committedAcquisitionCount > 0 && (
@@ -548,7 +584,7 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
                     className="inline-flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-xs text-gray-300 hover:bg-gray-800"
                   >
                     {showRecentActions ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-                    <span>Recent changes</span>
+                    <span>History</span>
                   </button>
                 )}
               </div>
@@ -615,6 +651,11 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
                               {formatHistoryTime(log.created_at)}
                             </p>
                             <p className="mt-2 text-sm text-gray-200">{formatHistorySummary(log)}</p>
+                            {log.repair_diff && (
+                              <p className="mt-1 text-xs text-gray-500">
+                                Details are summary-level for now. Per-pass target names are not yet stored in audit history.
+                              </p>
+                            )}
                             {log.notes && (
                               <p className="mt-1 text-xs text-gray-400 line-clamp-2">{log.notes}</p>
                             )}

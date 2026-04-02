@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Trash2, ChevronDown, ChevronRight, Satellite, Target, Camera } from 'lucide-react'
+import { Trash2, ChevronDown, ChevronRight, Camera } from 'lucide-react'
 import { bulkDeleteAcquisitions, deleteOrder } from '../api/scheduleApi'
 import { AcceptedOrder } from '../types'
 import { formatDateTimeShort } from '../utils/date'
@@ -77,11 +77,6 @@ export default function AcceptedOrders({
     }
   }
 
-  const totalAcquisitions = useMemo(
-    () => orders.reduce((sum, order) => sum + order.schedule.length, 0),
-    [orders],
-  )
-
   const getPlanLabel = (order: AcceptedOrder, index: number) => {
     if (orders.length === 1) return 'Active Plan'
     if (order.name?.trim() && !order.name.startsWith('Recovered')) return order.name
@@ -89,10 +84,9 @@ export default function AcceptedOrders({
   }
 
   const getPlanSummary = (order: AcceptedOrder) => {
-    const acquisitionCount = order.schedule.length
     const satelliteCount = order.satellites_involved?.length || 0
     const targetCount = order.targets_covered?.length || 0
-    return `${acquisitionCount} acquisition${acquisitionCount === 1 ? '' : 's'} • ${satelliteCount} sat${satelliteCount === 1 ? '' : 's'} • ${targetCount} target${targetCount === 1 ? '' : 's'}`
+    return `${satelliteCount} sat${satelliteCount === 1 ? '' : 's'} • ${targetCount} target${targetCount === 1 ? '' : 's'}`
   }
 
   const sortedSelectedSchedule = useMemo(() => {
@@ -105,13 +99,8 @@ export default function AcceptedOrders({
   return (
     <div className="h-full flex flex-col bg-gray-900 text-white">
       {/* Header */}
-      <div className="flex items-center justify-between bg-gray-800 border-b border-gray-700 px-4 py-2.5">
-        <div className="flex items-center gap-2">
-          <h2 className="text-xs font-semibold text-gray-300 uppercase">Upcoming Plan</h2>
-          <span className="text-[10px] text-gray-500 tabular-nums">
-            {totalAcquisitions} acquisition{totalAcquisitions === 1 ? '' : 's'}
-          </span>
-        </div>
+      <div className="bg-gray-800 border-b border-gray-700 px-4 py-2.5">
+        <h2 className="text-xs font-semibold text-gray-300 uppercase">Upcoming Plan</h2>
       </div>
 
       {/* Orders List — compact rows */}
@@ -166,25 +155,6 @@ export default function AcceptedOrders({
                         </div>
                       )}
                     </div>
-
-                    {/* Inline metrics */}
-                    <div className="flex items-center gap-2.5 flex-shrink-0 pt-0.5 text-[10px]">
-                      <span
-                        className="flex items-center gap-0.5 text-green-400"
-                        title="Acquisitions"
-                      >
-                        <Camera className="w-3 h-3" />
-                        {order.metrics.accepted}
-                      </span>
-                      <span className="flex items-center gap-0.5 text-blue-400" title="Satellites">
-                        <Satellite className="w-3 h-3" />
-                        {order.satellites_involved?.length || 0}
-                      </span>
-                      <span className="flex items-center gap-0.5 text-purple-400" title="Targets">
-                        <Target className="w-3 h-3" />
-                        {order.targets_covered?.length || 0}
-                      </span>
-                    </div>
                   </div>
 
                   {isSelected && (
@@ -214,37 +184,36 @@ export default function AcceptedOrders({
         <div className="border-t border-gray-700 bg-gray-800 max-h-[45%] overflow-auto">
           {/* Detail header */}
           <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700 sticky top-0 bg-gray-800 z-10">
-            <div className="flex items-center gap-2">
-              <h3 className="text-xs font-semibold text-white uppercase">Upcoming Passes</h3>
-              <span className="text-[10px] text-gray-500 tabular-nums">
-                {selectedOrder.schedule.length} item{selectedOrder.schedule.length === 1 ? '' : 's'}
-              </span>
-            </div>
-            <div className="text-[10px] text-gray-500 text-pretty">
-              Review the next acquisitions in time order
-            </div>
+            <h3 className="text-xs font-semibold text-white uppercase">Upcoming Passes</h3>
           </div>
 
           <div className="divide-y divide-gray-700/70">
-            {sortedSelectedSchedule.map((item, idx) => (
-              <div key={`${item.opportunity_id}-${idx}`} className="px-3 py-2.5">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium text-white truncate">{item.target_id}</div>
-                    <div className="mt-1 text-[11px] text-gray-400">
-                      Satellite {item.satellite_id}
+            {sortedSelectedSchedule.map((item, idx) => {
+              const pitchDeg = item.pitch_deg ?? 0
+
+              return (
+                <div key={`${item.opportunity_id}-${idx}`} className="px-3 py-2.5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-white truncate">{item.target_id}</div>
+                      <div className="mt-1 text-[11px] text-gray-400">
+                        Satellite {item.satellite_id}
+                      </div>
+                      <div className="mt-1 text-[11px] text-gray-500 tabular-nums">
+                        {formatDateTime(item.start_time)} → {formatDateTime(item.end_time)}
+                      </div>
                     </div>
-                    <div className="mt-1 text-[11px] text-gray-500 tabular-nums">
-                      {formatDateTime(item.start_time)} → {formatDateTime(item.end_time)}
+                    <div className="text-right text-[11px] text-gray-400 tabular-nums">
+                      <div>Roll {item.droll_deg.toFixed(1)}°</div>
+                      <div className="mt-1">Pitch {pitchDeg.toFixed(1)}°</div>
+                      {item.t_slew_s > 0 && (
+                        <div className="mt-1">Slew {item.t_slew_s.toFixed(0)}s</div>
+                      )}
                     </div>
-                  </div>
-                  <div className="text-right text-[11px] text-gray-400 tabular-nums">
-                    <div>Roll {item.droll_deg.toFixed(1)}°</div>
-                    {item.t_slew_s > 0 && <div className="mt-1">Slew {item.t_slew_s.toFixed(0)}s</div>}
                   </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </div>
       )}

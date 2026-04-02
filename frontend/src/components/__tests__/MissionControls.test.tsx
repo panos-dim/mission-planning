@@ -10,7 +10,8 @@ import { useSlewVisStore } from '../../store/slewVisStore'
 import { useTargetAddStore } from '../../store/targetAddStore'
 import { useVisStore } from '../../store/visStore'
 
-const { useMissionMock, useManagedSatellitesMock } = vi.hoisted(() => ({
+const { analyzeMissionMock, useMissionMock, useManagedSatellitesMock } = vi.hoisted(() => ({
+  analyzeMissionMock: vi.fn(),
   useMissionMock: vi.fn(),
   useManagedSatellitesMock: vi.fn(),
 }))
@@ -24,7 +25,66 @@ vi.mock('../../hooks/queries', () => ({
 }))
 
 vi.mock('../MissionParameters.tsx', () => ({
-  default: () => <div data-testid="mission-parameters-stub">Mission Parameters Stub</div>,
+  default: ({
+    onChange,
+    acquisitionTimeWindowError,
+  }: {
+    onChange: (params: Record<string, unknown>) => void
+    acquisitionTimeWindowError?: string | null
+  }) => (
+    <div data-testid="mission-parameters-stub">
+      <div>Mission Parameters Stub</div>
+      <button
+        type="button"
+        onClick={() =>
+          onChange({
+            acquisitionTimeWindow: {
+              enabled: true,
+              start_time: '15:00',
+              end_time: '17:00',
+              timezone: 'UTC',
+              reference: 'off_nadir_time',
+            },
+          })
+        }
+      >
+        Enable Acquisition Window
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          onChange({
+            acquisitionTimeWindow: {
+              enabled: true,
+              start_time: null,
+              end_time: null,
+              timezone: 'UTC',
+              reference: 'off_nadir_time',
+            },
+          })
+        }
+      >
+        Enable Incomplete Acquisition Window
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          onChange({
+            acquisitionTimeWindow: {
+              enabled: true,
+              start_time: '15:00',
+              end_time: null,
+              timezone: 'UTC',
+              reference: 'off_nadir_time',
+            },
+          })
+        }
+      >
+        Enable Partial Acquisition Window
+      </button>
+      {acquisitionTimeWindowError && <div>{acquisitionTimeWindowError}</div>}
+    </div>
+  ),
 }))
 
 describe('MissionControls', () => {
@@ -34,6 +94,7 @@ describe('MissionControls', () => {
 
     useMissionMock.mockReset()
     useManagedSatellitesMock.mockReset()
+    analyzeMissionMock.mockReset()
 
     usePreFeasibilityOrdersStore.getState().clearAll()
     usePreFeasibilityOrdersStore.setState({ activeOrderId: null })
@@ -50,7 +111,7 @@ describe('MissionControls', () => {
         czmlData: [],
         missionData: null,
       },
-      analyzeMission: vi.fn(),
+      analyzeMission: analyzeMissionMock,
       clearMission: vi.fn(),
     })
 
@@ -90,5 +151,99 @@ describe('MissionControls', () => {
     expect(screen.getByText('0 targets')).toBeInTheDocument()
     expect(usePreFeasibilityOrdersStore.getState().orders).toHaveLength(1)
     expect(usePreFeasibilityOrdersStore.getState().orders[0]?.name).toBe('Order 1')
+  })
+
+  it('passes the acquisition time window through the feasibility run payload', async () => {
+    const user = userEvent.setup()
+
+    usePreFeasibilityOrdersStore.setState({
+      orders: [
+        {
+          id: 'order-1',
+          name: 'Order 1',
+          createdAt: '2026-04-02T08:00:00Z',
+          targets: [{ name: 'Alpha', latitude: 24.5, longitude: 54.3, priority: 1 }],
+        },
+      ],
+      activeOrderId: 'order-1',
+    })
+
+    render(<MissionControls />)
+
+    await user.click(screen.getByRole('button', { name: 'Enable Acquisition Window' }))
+    await user.click(screen.getByRole('button', { name: /run feasibility/i }))
+
+    expect(analyzeMissionMock).toHaveBeenCalledTimes(1)
+    expect(analyzeMissionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        acquisitionTimeWindow: {
+          enabled: true,
+          start_time: '15:00',
+          end_time: '17:00',
+          timezone: 'UTC',
+          reference: 'off_nadir_time',
+        },
+      }),
+    )
+  })
+
+  it('keeps the acquisition window quiet until the operator edits it or tries to run', async () => {
+    const user = userEvent.setup()
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+
+    try {
+      usePreFeasibilityOrdersStore.setState({
+        orders: [
+          {
+            id: 'order-1',
+            name: 'Order 1',
+            createdAt: '2026-04-02T08:00:00Z',
+            targets: [{ name: 'Alpha', latitude: 24.5, longitude: 54.3, priority: 1 }],
+          },
+        ],
+        activeOrderId: 'order-1',
+      })
+
+      render(<MissionControls />)
+
+      await user.click(screen.getByRole('button', { name: 'Enable Incomplete Acquisition Window' }))
+      expect(
+        screen.queryByText('Acquisition time window requires both From and To times'),
+      ).not.toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: /run feasibility/i }))
+
+      expect(alertSpy).toHaveBeenCalledTimes(1)
+      expect(analyzeMissionMock).not.toHaveBeenCalled()
+      expect(
+        await screen.findAllByText('Acquisition time window requires both From and To times'),
+      ).toHaveLength(1)
+    } finally {
+      alertSpy.mockRestore()
+    }
+  })
+
+  it('shows the acquisition time window validation only once near the field', async () => {
+    const user = userEvent.setup()
+
+    usePreFeasibilityOrdersStore.setState({
+      orders: [
+        {
+          id: 'order-1',
+          name: 'Order 1',
+          createdAt: '2026-04-02T08:00:00Z',
+          targets: [{ name: 'Alpha', latitude: 24.5, longitude: 54.3, priority: 1 }],
+        },
+      ],
+      activeOrderId: 'order-1',
+    })
+
+    render(<MissionControls />)
+
+    await user.click(screen.getByRole('button', { name: 'Enable Partial Acquisition Window' }))
+
+    expect(
+      await screen.findAllByText('Acquisition time window requires both From and To times'),
+    ).toHaveLength(1)
   })
 })

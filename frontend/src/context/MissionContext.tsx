@@ -27,7 +27,8 @@ import { useSceneObjectStore } from '../store/sceneObjectStore'
 import { useWorkspaceStore } from '../store/workspaceStore'
 import { useSessionStore } from '../store/sessionStore'
 import debug from '../utils/debug'
-import { missionApi, tleApi, getErrorMessage } from '../api'
+import { missionApi, tleApi, planningApi, getErrorMessage } from '../api'
+import { queryClient, queryKeys } from '../lib/queryClient'
 import type { CesiumViewerRefValue } from '../types/cesiumHelpers'
 
 // Core mission state (scene objects & workspaces now in Zustand stores)
@@ -258,6 +259,7 @@ export function MissionProvider({ children }: MissionProviderProps): JSX.Element
           elevation_mask: formData.elevationMask,
         }),
         max_spacecraft_roll_deg: formData.pointingAngle > 0 ? formData.pointingAngle : undefined,
+        acquisition_time_window: formData.acquisitionTimeWindow,
         imaging_type: formData.imagingType,
         // Map frontend SAR mode names to backend API names
         // Frontend: spot, strip, scan, dwell → Backend: spotlight, stripmap, scan
@@ -302,6 +304,20 @@ export function MissionProvider({ children }: MissionProviderProps): JSX.Element
             czmlData: result.data.czml_data,
           },
         })
+
+        // Keep the planner query in sync with the fresh feasibility run so
+        // Mission Planning can unlock immediately with the new candidate set.
+        try {
+          await queryClient.fetchQuery({
+            queryKey: queryKeys.planning.opportunities(activeWorkspace || 'default'),
+            queryFn: () => planningApi.getOpportunities(activeWorkspace || 'default'),
+            staleTime: 0,
+          })
+        } catch (opportunitiesError) {
+          debug.warn?.('Failed to refresh planning opportunities after feasibility run', {
+            error: opportunitiesError,
+          })
+        }
 
         // Track analysis run in explorer store
         useExplorerStore.getState().addAnalysisRun({

@@ -427,6 +427,21 @@ describe('MissionPlanning', () => {
     })
   })
 
+  it('enables planning from fresh feasibility passes even if the opportunities query is stale', () => {
+    useOpportunitiesMock.mockReturnValue({
+      data: {
+        opportunities: [],
+      },
+    })
+
+    render(<MissionPlanning />)
+
+    expect(
+      screen.queryByText(/Run Feasibility Analysis first to enable scheduling\./i),
+    ).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /generate mission plan/i })).toBeEnabled()
+  })
+
   it('sends priority-first weights and from_scratch mode through the planner API', async () => {
     const user = userEvent.setup()
 
@@ -477,9 +492,9 @@ describe('MissionPlanning', () => {
     })
 
     expect(createRepairPlanMock).not.toHaveBeenCalled()
-    expect(await screen.findByText(/New Schedule/i)).toBeInTheDocument()
+    expect(await screen.findByText(/Fresh Schedule/i)).toBeInTheDocument()
     expect(screen.getByText(/fresh baseline is required/i)).toBeInTheDocument()
-    expect(await screen.findByRole('button', { name: /^Next$/i })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /Review Plan/i })).toBeInTheDocument()
   })
 
   it('sends quality-first weights and incremental mode through the planner API', async () => {
@@ -532,11 +547,11 @@ describe('MissionPlanning', () => {
     })
 
     expect(createRepairPlanMock).not.toHaveBeenCalled()
-    expect(await screen.findByText(/Incremental Mode/i)).toBeInTheDocument()
+    expect(await screen.findByText(/Schedule Extension/i)).toBeInTheDocument()
     expect(
       screen.getByText(/favor additive scheduling without disturbing the baseline/i),
     ).toBeInTheDocument()
-    expect(await screen.findByRole('button', { name: /^Next$/i })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /Review Plan/i })).toBeInTheDocument()
   })
 
   it('sends urgent weights and repair mode through the repair API with per-target priorities', async () => {
@@ -594,10 +609,10 @@ describe('MissionPlanning', () => {
     })
 
     expect(planningScheduleMock).not.toHaveBeenCalled()
-    expect(await screen.findByText(/Repair Mode/i)).toBeInTheDocument()
+    expect(await screen.findByText(/Schedule Correction/i)).toBeInTheDocument()
     expect(screen.getByText(/require schedule repair/i)).toBeInTheDocument()
     expect(screen.getByTestId('repair-diff-panel-stub')).toBeInTheDocument()
-    expect(await screen.findByRole('button', { name: /^Next$/i })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /Review Plan/i })).toBeInTheDocument()
   })
 
   it('blocks apply review when incremental planning returns no feasible acquisitions', async () => {
@@ -617,7 +632,7 @@ describe('MissionPlanning', () => {
     })
     planningScheduleMock.mockResolvedValue(buildEmptyPlanningResponse())
     useVisStore.setState({
-      uiMode: 'operator',
+      uiMode: 'simple',
       clockTime: null,
       requestedRightPanel: null,
     })
@@ -627,11 +642,11 @@ describe('MissionPlanning', () => {
     await user.click(screen.getByRole('button', { name: /generate mission plan/i }))
 
     expect(
-      await screen.findByText(/No feasible acquisitions were found for the current targets and horizon/i),
+      await screen.findByText(
+        /No workable acquisitions were found for the selected targets and schedule window\./i,
+      ),
     ).toBeInTheDocument()
-    expect(
-      screen.getByRole('button', { name: /No Changes to Apply/i }),
-    ).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Nothing to Apply/i })).toBeDisabled()
     expect(previewDirectCommitMock).not.toHaveBeenCalled()
   })
 
@@ -652,7 +667,7 @@ describe('MissionPlanning', () => {
     })
     createRepairPlanMock.mockResolvedValue(buildNoOpRepairResponse())
     useVisStore.setState({
-      uiMode: 'operator',
+      uiMode: 'simple',
       clockTime: null,
       requestedRightPanel: null,
     })
@@ -661,9 +676,7 @@ describe('MissionPlanning', () => {
 
     await user.click(screen.getByRole('button', { name: /generate mission plan/i }))
 
-    expect(await screen.findByText(/No changes needed\. The current schedule is already optimal\./i)).toBeInTheDocument()
-    expect(
-      screen.getByRole('button', { name: /No Changes to Apply/i }),
-    ).toBeDisabled()
+    expect(await screen.findByText(/No schedule changes are needed right now\./i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Nothing to Apply/i })).toBeDisabled()
   })
 })

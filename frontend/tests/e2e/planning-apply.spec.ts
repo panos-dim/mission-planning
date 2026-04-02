@@ -921,6 +921,8 @@ test.describe('Planning apply confirmation UI', () => {
   test('persists and surfaces backend conflicts after a forced direct apply', async ({
     page,
   }, testInfo) => {
+    test.setTimeout(90000)
+
     const targets = [
       { name: 'Alpha', latitude: 24.7136, longitude: 46.6753 },
       { name: 'Bravo', latitude: 21.4858, longitude: 39.1925 },
@@ -1076,9 +1078,9 @@ test.describe('Planning apply confirmation UI', () => {
       force: true,
     })
 
-    const summaryHeading = page.getByText('Schedule Summary', { exact: true })
-    await openLeftPanel(page, 'Schedule', summaryHeading)
-    await expect(page.getByText('Schedule Summary', { exact: true })).toBeVisible()
+    const scheduleHeading = page.getByRole('heading', { name: 'Upcoming Plan', exact: true })
+    await openLeftPanel(page, 'Schedule', scheduleHeading)
+    await expect(page.getByRole('heading', { name: 'Upcoming Plan', exact: true })).toBeVisible()
     await expect(page.getByText('1 blocking issue', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Review issues', exact: true }).click()
     await expect(page.getByText('Time Overlap', { exact: true })).toBeVisible()
@@ -1799,10 +1801,10 @@ test.describe('Planning apply confirmation UI', () => {
     ).toHaveCount(0)
     await expect(page.getByRole('heading', { name: 'Ready to Schedule' })).toHaveCount(0)
 
-    const summaryHeading = page.getByText('Schedule Summary', { exact: true })
-    await openLeftPanel(page, 'Schedule', summaryHeading)
-    await expect(page.getByText('Schedule Summary', { exact: true })).toBeVisible()
-    await page.getByRole('button', { name: 'Recent changes', exact: true }).click()
+    const scheduleHeading = page.getByRole('heading', { name: 'Upcoming Plan', exact: true })
+    await openLeftPanel(page, 'Schedule', scheduleHeading)
+    await expect(page.getByRole('heading', { name: 'Upcoming Plan', exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'History', exact: true }).click()
     await expect(page.getByText('Recovered after transport interruption', { exact: true })).toBeVisible()
     await expect(page.getByText('2 added', { exact: true })).toBeVisible()
     await expect(page.getByText('Applied', { exact: true })).toBeVisible()

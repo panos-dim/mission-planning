@@ -269,7 +269,9 @@ const MapControls: React.FC<MapControlsProps> = ({ viewerRef, viewportId }) => {
                 : btn
             }
             title={
-              isLockMode ? 'Exit Lock Mode (Esc)' : 'Lock Mode — click acquisitions to lock/unlock'
+              isLockMode
+                ? 'Exit Lock Mode (Esc)'
+                : 'Lock Mode — click schedule pins or acquisition shapes to lock/unlock'
             }
             aria-label={isLockMode ? 'Exit Lock Mode' : 'Lock Mode'}
           >

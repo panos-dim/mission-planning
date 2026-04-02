@@ -20,7 +20,13 @@
  */
 
 import { useEffect, useRef } from 'react'
-import { type Entity, type DataSource, ColorMaterialProperty, ConstantProperty } from 'cesium'
+import {
+  type Entity,
+  type DataSource,
+  ColorMaterialProperty,
+  ConstantProperty,
+  JulianDate,
+} from 'cesium'
 import { useVisStore } from '../../../store/visStore'
 import { useScheduleStore } from '../../../store/scheduleStore'
 import { getSatColor, getSatColorWithAlpha } from '../../../utils/satelliteColors'
@@ -93,6 +99,100 @@ const DEFAULT_PATH_WIDTH = 1.5
 const HIGHLIGHT_PATH_WIDTH = 3
 const MAX_SLICE_REBUILD_ATTEMPTS = 8
 const SLICE_RETRY_DELAY_MS = 250
+const LIVE_GROUNDTRACK_HALF_WINDOW_S = 45 * 60
+const LIVE_GROUNDTRACK_REFRESH_MS = 15_000
+
+function getPrimaryGroundtrackSatellites(
+  items: Array<{
+    satellite_id: string
+    start_time: string
+    end_time: string
+  }>,
+  visibleSatelliteIds: Set<string>,
+  isolatedSatelliteId: string | null,
+  focusedSatelliteId: string | null,
+  currentTime: JulianDate | null,
+): Set<string> {
+  if (isolatedSatelliteId) {
+    return new Set([toCzmlSatId(isolatedSatelliteId)])
+  }
+
+  if (focusedSatelliteId) {
+    return new Set([toCzmlSatId(focusedSatelliteId)])
+  }
+
+  const [firstVisibleSatelliteId] = Array.from(visibleSatelliteIds)
+  const currentTimeMs = currentTime ? JulianDate.toDate(currentTime).getTime() : null
+  const visibleItems = items.filter((item) => visibleSatelliteIds.has(toCzmlSatId(item.satellite_id)))
+
+  if (visibleItems.length > 0 && currentTimeMs != null) {
+    const activeItem = visibleItems
+      .filter((item) => {
+        const startMs = new Date(item.start_time).getTime()
+        const endMs = new Date(item.end_time).getTime()
+        return startMs <= currentTimeMs && endMs >= currentTimeMs
+      })
+      .sort((a, b) => new Date(a.end_time).getTime() - new Date(b.end_time).getTime())[0]
+
+    if (activeItem) {
+      return new Set([toCzmlSatId(activeItem.satellite_id)])
+    }
+
+    const nextUpcomingItem = visibleItems
+      .filter((item) => new Date(item.start_time).getTime() >= currentTimeMs)
+      .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())[0]
+
+    if (nextUpcomingItem) {
+      return new Set([toCzmlSatId(nextUpcomingItem.satellite_id)])
+    }
+
+    const mostRecentPastItem = visibleItems
+      .filter((item) => new Date(item.end_time).getTime() < currentTimeMs)
+      .sort((a, b) => new Date(b.end_time).getTime() - new Date(a.end_time).getTime())[0]
+
+    if (mostRecentPastItem) {
+      return new Set([toCzmlSatId(mostRecentPastItem.satellite_id)])
+    }
+  }
+
+  return firstVisibleSatelliteId ? new Set([firstVisibleSatelliteId]) : new Set()
+}
+
+function getLiveGroundtrackWindow(
+  viewer: { clock?: { currentTime: JulianDate; startTime: JulianDate; stopTime: JulianDate } } | null,
+  fallbackStart: string | null,
+  fallbackEnd: string | null,
+): { startIso: string; endIso: string } | null {
+  if (!viewer?.clock) {
+    if (!fallbackStart || !fallbackEnd) return null
+    return { startIso: fallbackStart, endIso: fallbackEnd }
+  }
+
+  const start = JulianDate.addSeconds(
+    viewer.clock.currentTime,
+    -LIVE_GROUNDTRACK_HALF_WINDOW_S,
+    new JulianDate(),
+  )
+  const stop = JulianDate.addSeconds(
+    viewer.clock.currentTime,
+    LIVE_GROUNDTRACK_HALF_WINDOW_S,
+    new JulianDate(),
+  )
+
+  const clampedStart = JulianDate.lessThan(start, viewer.clock.startTime)
+    ? JulianDate.clone(viewer.clock.startTime, new JulianDate())
+    : start
+  const clampedStop = JulianDate.greaterThan(stop, viewer.clock.stopTime)
+    ? JulianDate.clone(viewer.clock.stopTime, new JulianDate())
+    : stop
+
+  if (JulianDate.secondsDifference(clampedStop, clampedStart) <= 0) return null
+
+  return {
+    startIso: JulianDate.toIso8601(clampedStart),
+    endIso: JulianDate.toIso8601(clampedStop),
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Hook
@@ -109,12 +209,14 @@ export function useScheduleSatelliteLayers(
   const items = useScheduleStore((s) => s.items)
   const tStart = useScheduleStore((s) => s.tStart)
   const tEnd = useScheduleStore((s) => s.tEnd)
+  const activeScheduleTab = useScheduleStore((s) => s.activeTab)
   const focusedSatelliteId = useScheduleStore((s) => s.focusedSatelliteId)
   const isolatedSatelliteId = useScheduleStore((s) => s.isolatedSatelliteId)
   const showSatellites = useScheduleStore((s) => s.schedLayerSatellites)
   const showGroundtracks = useScheduleStore((s) => s.schedLayerGroundtracks)
   const showHighlight = useScheduleStore((s) => s.schedLayerHighlight)
   const sampleStep = useScheduleStore((s) => s.groundtrackSampleStep)
+  const isScheduleLiveView = activeScheduleTab === 'committed'
 
   // Track which entity IDs we have touched so we can restore them on cleanup.
   const touchedEntityIdsRef = useRef<Set<string>>(new Set())
@@ -207,6 +309,13 @@ export function useScheduleSatelliteLayers(
       isolatedSatelliteId,
       focusedSatelliteId,
     )
+    const visibleGroundtrackCzmlIds = getPrimaryGroundtrackSatellites(
+      items,
+      visibleCzmlIds,
+      isolatedSatelliteId,
+      focusedSatelliteId,
+      isScheduleLiveView ? (viewer?.clock?.currentTime ?? null) : null,
+    )
     const focusedCzmlId = focusedSatelliteId ? toCzmlSatId(focusedSatelliteId) : null
 
     // -----------------------------------------------------------------
@@ -238,15 +347,16 @@ export function useScheduleSatelliteLayers(
       // Only match sat_<id>_ground_track; not the single-sat 'satellite_ground_track' entity.
       if (id.startsWith('sat_') && id.endsWith('_ground_track')) {
         const ownerSatId = id.slice(0, -'_ground_track'.length)
-        const isInWindow = visibleCzmlIds.size > 0 && visibleCzmlIds.has(ownerSatId)
+        const isInWindow =
+          visibleGroundtrackCzmlIds.size > 0 && visibleGroundtrackCzmlIds.has(ownerSatId)
         entity.show = showGroundtracks && isInWindow
         touchedEntityIdsRef.current.add(id)
 
         if (entity.path) {
-          // Suppress the full clock-relative path arc — the debounced sliced
-          // polyline (Effect 2) renders only the [tStart, tEnd] window segment.
+          // Live schedule view uses a sliced polyline segment; timeline view
+          // falls back to Cesium's native path rendering to avoid seam artifacts.
           // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Cesium Property system accepts boolean at runtime
-          ;(entity.path.show as any) = false
+          ;(entity.path.show as any) = !isScheduleLiveView
         }
 
         // Immediately remove the sliced polyline for entities leaving the window
@@ -274,6 +384,7 @@ export function useScheduleSatelliteLayers(
     showSatellites,
     showGroundtracks,
     showHighlight,
+    isScheduleLiveView,
     viewerRef,
   ])
 
@@ -286,7 +397,7 @@ export function useScheduleSatelliteLayers(
   // ---------------------------------------------------------------------------
   useEffect(() => {
     // When conditions aren't met, clean up any leftover sliced entities.
-    if (!isScheduleView || !showGroundtracks || !loadedDataSource?.entities) {
+    if (!isScheduleView || !isScheduleLiveView || !showGroundtracks || !loadedDataSource?.entities) {
       const viewer = viewerRef.current?.cesiumElement
       if (viewer && slicedEntityIdsRef.current.size > 0) {
         slicedEntityIdsRef.current.forEach((slicedId) => {
@@ -308,12 +419,22 @@ export function useScheduleSatelliteLayers(
       if (!viewer) return
 
       // Recompute which satellites fall within the visible window.
-      const inWindowCzmlIds = applySatelliteIsolation(
+      const visibleSatelliteCzmlIds = applySatelliteIsolation(
         getSatellitesInWindow(items, tStart, tEnd),
         isolatedSatelliteId,
         focusedSatelliteId,
       )
+      const inWindowCzmlIds = getPrimaryGroundtrackSatellites(
+        items,
+        visibleSatelliteCzmlIds,
+        isolatedSatelliteId,
+        focusedSatelliteId,
+        viewer.clock?.currentTime ?? null,
+      )
       const focusedCzmlId = focusedSatelliteId ? toCzmlSatId(focusedSatelliteId) : null
+      const liveWindow = getLiveGroundtrackWindow(viewer, tStart, tEnd)
+
+      if (!liveWindow) return
 
       // Build the set of sliced IDs that should exist after this run.
       const nextSlicedIds = new Set<string>()
@@ -332,11 +453,16 @@ export function useScheduleSatelliteLayers(
 
         const ownerSatId = id.slice(0, -'_ground_track'.length)
         const isInWindow = inWindowCzmlIds.size > 0 && inWindowCzmlIds.has(ownerSatId)
-        if (!isInWindow || !tStart || !tEnd) return
+        if (!isInWindow) return
         attemptedGroundTrackIds.add(id)
 
         // Sample positions within the visible window (cache-aware).
-        const sliceResult = sliceGroundtrackPositions(entity, tStart, tEnd, sampleStep)
+        const sliceResult = sliceGroundtrackPositions(
+          entity,
+          liveWindow.startIso,
+          liveWindow.endIso,
+          sampleStep,
+        )
         if (!sliceResult) {
           nullSliceIds.add(id)
           return
@@ -432,10 +558,12 @@ export function useScheduleSatelliteLayers(
     }
 
     timers.push(setTimeout(rebuildSlices, SLICE_DEBOUNCE_MS))
+    const liveRefreshIntervalId = setInterval(rebuildSlices, LIVE_GROUNDTRACK_REFRESH_MS)
 
     return () => {
       cancelled = true
       timers.forEach((timer) => clearTimeout(timer))
+      clearInterval(liveRefreshIntervalId)
     }
   }, [
     isScheduleView,
@@ -447,6 +575,7 @@ export function useScheduleSatelliteLayers(
     isolatedSatelliteId,
     showGroundtracks,
     showHighlight,
+    isScheduleLiveView,
     sampleStep,
     viewerRef,
   ])

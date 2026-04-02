@@ -451,6 +451,10 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
           start_time: s.start_time,
           end_time: s.end_time,
           droll_deg: s.delta_roll,
+          pitch_deg:
+            typeof (s as typeof s & { pitch_angle_deg?: number }).pitch_angle_deg === 'number'
+              ? (s as typeof s & { pitch_angle_deg?: number }).pitch_angle_deg
+              : (s.pitch_angle ?? 0),
           t_slew_s: s.maneuver_time,
           slack_s: s.slack_time,
           value: s.value,

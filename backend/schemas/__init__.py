@@ -25,6 +25,15 @@ from backend.schemas.debug import (
     TimeWindow,
 )
 from backend.schemas.mission import MissionRequest, MissionResponse, SARInputParams
+from backend.schemas.order_templates import (
+    CreateOrderTemplateRequest,
+    OrderTemplateCreateResponse,
+    OrderTemplateDeleteResponse,
+    OrderTemplateFields,
+    OrderTemplateListResponse,
+    OrderTemplateResponse,
+    UpdateOrderTemplateRequest,
+)
 from backend.schemas.planning import (
     PlanningAuditMetadata,
     PlanningRequest,
@@ -45,6 +54,14 @@ __all__ = [
     "SARInputParams",
     "MissionRequest",
     "MissionResponse",
+    # Order templates
+    "OrderTemplateFields",
+    "CreateOrderTemplateRequest",
+    "UpdateOrderTemplateRequest",
+    "OrderTemplateResponse",
+    "OrderTemplateCreateResponse",
+    "OrderTemplateListResponse",
+    "OrderTemplateDeleteResponse",
     # Analysis
     "PassGeometryResponse",
     "PassLightingResponse",

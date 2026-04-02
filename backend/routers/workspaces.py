@@ -631,6 +631,7 @@ async def save_current_mission(request: SaveCurrentRequest) -> Dict[str, Any]:
                 "satellites": mission_data.get("satellites", []),
                 "is_constellation": mission_data.get("is_constellation", False),
                 "mission_type": mission_data.get("mission_type", "imaging"),
+                "imaging_type": mission_data.get("imaging_type"),
                 "start_time": mission_data.get("start_time"),
                 "end_time": mission_data.get("end_time"),
                 "elevation_mask": mission_data.get("elevation_mask", 10),
@@ -639,6 +640,9 @@ async def save_current_mission(request: SaveCurrentRequest) -> Dict[str, Any]:
                 ),
                 "max_spacecraft_roll_deg": mission_data.get(
                     "max_spacecraft_roll_deg", 45
+                ),
+                "acquisition_time_window": mission_data.get(
+                    "acquisition_time_window"
                 ),
                 "total_passes": len(passes),
                 "targets": [

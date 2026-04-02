@@ -343,3 +343,63 @@ input[type='number'] {
 .react-datepicker__input-container input {
   @apply w-full;
 }
+
+.time-only-picker.react-datepicker {
+  display: block !important;
+  width: 104px;
+  min-width: 104px;
+  overflow: hidden;
+}
+
+.time-only-picker.react-datepicker .react-datepicker__header {
+  border-radius: 8px 8px 0 0;
+  padding: 6px 8px;
+}
+
+.time-only-picker.react-datepicker .react-datepicker__header--time {
+  padding: 6px 8px;
+}
+
+.time-only-picker.react-datepicker .react-datepicker-time__header {
+  @apply text-gray-300;
+  font-size: 11px;
+}
+
+.time-only-picker.react-datepicker .react-datepicker__time-container {
+  width: 100%;
+  border-left: none;
+}
+
+.time-only-picker.react-datepicker .react-datepicker__time-container .react-datepicker__time {
+  border-radius: 0 0 8px 8px;
+}
+
+.time-only-picker.react-datepicker
+  .react-datepicker__time-container
+  .react-datepicker__time
+  .react-datepicker__time-box {
+  width: 100%;
+}
+
+.time-only-picker.react-datepicker
+  .react-datepicker__time-container
+  .react-datepicker__time
+  .react-datepicker__time-box
+  ul.react-datepicker__time-list {
+  height: 176px !important;
+}
+
+.time-only-picker.react-datepicker
+  .react-datepicker__time-container
+  .react-datepicker__time
+  .react-datepicker__time-box
+  ul.react-datepicker__time-list
+  li.react-datepicker__time-list-item {
+  padding: 6px 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.time-only-picker-popper {
+  min-width: 0 !important;
+}

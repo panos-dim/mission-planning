@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest'
 
 import type { MasterScheduleItem } from '../api/scheduleApi'
 import type { AcceptedOrder, TargetData } from '../types'
-import { buildScheduleTargetStatus, collectScheduleTargetGeo } from './scheduleTargets'
+import {
+  buildScheduleTargetAcquisitionMap,
+  buildScheduleTargetStatus,
+  collectScheduleTargetGeo,
+} from './scheduleTargets'
 
 const buildScheduleItem = (targetId: string, endTime: string): MasterScheduleItem => ({
   id: `${targetId}-acq`,
@@ -91,5 +95,43 @@ describe('collectScheduleTargetGeo', () => {
     )
 
     expect(geo.get('Kuwait_1')).toEqual({ lat: 29.3759, lon: 47.9774 })
+  })
+})
+
+describe('buildScheduleTargetAcquisitionMap', () => {
+  it('prefers the most relevant master-schedule acquisition for each target', () => {
+    const acquisitionMap = buildScheduleTargetAcquisitionMap(
+      [
+        {
+          ...buildScheduleItem('Jeddah', '2026-03-24T01:05:00Z'),
+          id: 'acq-past',
+          start_time: '2026-03-24T01:00:00Z',
+        },
+        {
+          ...buildScheduleItem('Jeddah', '2026-03-24T03:05:00Z'),
+          id: 'acq-next',
+          start_time: '2026-03-24T03:00:00Z',
+        },
+      ],
+      [],
+      new Date('2026-03-24T02:00:00Z').getTime(),
+    )
+
+    expect(acquisitionMap.get('Jeddah')).toBe('acq-next')
+  })
+
+  it('falls back to committed orders when master schedule items are unavailable', () => {
+    const acquisitionMap = buildScheduleTargetAcquisitionMap(
+      [],
+      [
+        {
+          ...buildOrder('Alpha'),
+          backend_acquisition_ids: ['acq-alpha-1'],
+        },
+      ],
+      new Date('2026-03-24T00:00:00Z').getTime(),
+    )
+
+    expect(acquisitionMap.get('Alpha')).toBe('acq-alpha-1')
   })
 })

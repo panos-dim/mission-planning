@@ -5,16 +5,39 @@ import { Check } from 'lucide-react'
 export interface CheckboxProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'type'> {
   label?: string
   description?: string
+  labelClassName?: string
+  descriptionClassName?: string
 }
 
 export const Checkbox = React.forwardRef<HTMLInputElement, CheckboxProps>(
-  ({ className, label, description, id, disabled, checked, ...props }, ref) => {
-    const checkboxId = id || `checkbox-${Math.random().toString(36).substr(2, 9)}`
+  (
+    {
+      className,
+      label,
+      description,
+      labelClassName,
+      descriptionClassName,
+      id,
+      disabled,
+      checked,
+      ...props
+    },
+    ref,
+  ) => {
+    const generatedId = React.useId()
+    const checkboxId = id || generatedId
 
     return (
-      <div className={cn('flex items-start', className)}>
-        <div className="flex items-center h-5">
-          <div className="relative">
+      <label
+        htmlFor={checkboxId}
+        className={cn(
+          'flex items-start gap-2',
+          disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
+          className,
+        )}
+      >
+        <span className="flex items-center h-5">
+          <span className="relative flex size-4 items-center justify-center">
             <input
               ref={ref}
               type="checkbox"
@@ -24,41 +47,33 @@ export const Checkbox = React.forwardRef<HTMLInputElement, CheckboxProps>(
               className="sr-only peer"
               {...props}
             />
-            <div
+            <span
+              aria-hidden="true"
               className={cn(
-                'w-4 h-4 border rounded transition-colors duration-200',
+                'size-4 border rounded transition-colors duration-200',
                 'peer-focus:ring-2 peer-focus:ring-blue-500 peer-focus:ring-offset-2 peer-focus:ring-offset-gray-900',
-                checked
-                  ? 'bg-blue-600 border-blue-600'
-                  : 'bg-gray-700 border-gray-600',
-                disabled && 'opacity-50 cursor-not-allowed'
+                checked ? 'bg-blue-600 border-blue-600' : 'bg-gray-700 border-gray-600',
               )}
             >
-              {checked && (
-                <Check className="w-3 h-3 text-white absolute top-0.5 left-0.5" />
-              )}
-            </div>
-          </div>
-        </div>
+              {checked && <Check className="absolute top-0.5 left-0.5 w-3 h-3 text-white" />}
+            </span>
+          </span>
+        </span>
         {(label || description) && (
-          <div className="ml-2">
+          <span className="min-w-0">
             {label && (
-              <label
-                htmlFor={checkboxId}
-                className={cn(
-                  'text-sm text-gray-300 cursor-pointer',
-                  disabled && 'cursor-not-allowed opacity-50'
-                )}
-              >
+              <span className={cn('text-sm text-gray-300', labelClassName)}>
                 {label}
-              </label>
+              </span>
             )}
             {description && (
-              <p className="text-xs text-gray-500 mt-0.5">{description}</p>
+              <p className={cn('mt-0.5 text-xs text-gray-500', descriptionClassName)}>
+                {description}
+              </p>
             )}
-          </div>
+          </span>
         )}
-      </div>
+      </label>
     )
   }
 )

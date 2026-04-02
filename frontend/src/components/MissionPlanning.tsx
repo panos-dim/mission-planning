@@ -223,7 +223,7 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
     [scheduleContextData, scheduleContextLoading, scheduleContextError],
   )
 
-  // Auto-detect mode via backend: from_scratch, incremental, or repair
+  // Let the backend choose the scheduling path internally.
   const handleRunPlanning = async () => {
     // Guard: prevent double-invocation (ref-based — survives React batched updates)
     if (planningGuardRef.current || isPlanning) return
@@ -754,8 +754,10 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
     }
   }
 
-  // Check if opportunities are available
-  const hasOpportunities = opportunities.length > 0
+  // Planning should unlock as soon as feasibility has returned candidate passes,
+  // even if the opportunities query is still catching up from a previous cache entry.
+  const feasibilityPassCount = state.missionData?.passes?.length ?? 0
+  const hasOpportunities = opportunities.length > 0 || feasibilityPassCount > 0
   const isDisabled = !hasOpportunities
 
   // Auto-enable slew visualization when results arrive; update active schedule
@@ -903,10 +905,10 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
                     <div>
                       <span className="font-semibold">
                         {schedulingReasoning.mode === 'repair'
-                          ? 'Repair Mode'
+                          ? 'Schedule Correction'
                           : schedulingReasoning.mode === 'incremental'
-                            ? 'Incremental Mode'
-                            : 'New Schedule'}
+                            ? 'Schedule Extension'
+                            : 'Fresh Schedule'}
                       </span>
                       <span className="text-gray-400"> — </span>
                       {schedulingReasoning.reason}

@@ -80,6 +80,10 @@ class AcquisitionSnapshot(BaseModel):
     lock_level: str
     plan_id: Optional[str] = None
     order_id: Optional[str] = None
+    template_id: Optional[str] = None
+    instance_key: Optional[str] = None
+    canonical_target_id: Optional[str] = None
+    display_target_name: Optional[str] = None
 
 
 class PlanSnapshot(BaseModel):
@@ -296,6 +300,10 @@ async def get_schedule_snapshot(
             lock_level=a.lock_level,
             plan_id=a.plan_id,
             order_id=a.order_id,
+            template_id=a.template_id,
+            instance_key=a.instance_key,
+            canonical_target_id=a.canonical_target_id,
+            display_target_name=a.display_target_name,
         )
         for a in acquisitions
     ]
@@ -504,7 +512,7 @@ async def get_last_planning_run() -> LastPlanningRunResponse:
     - Acquisition IDs before/after
     - Diff counts (added/removed/kept)
     """
-    from backend.auto_mode_selection import get_last_planning_run as _get_last
+    from backend.scheduling_mode import get_last_planning_run as _get_last
 
     data = _get_last()
     if not data:

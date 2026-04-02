@@ -2,6 +2,12 @@ import type { MasterScheduleItem } from '../api/scheduleApi'
 import type { AcceptedOrder, TargetData } from '../types'
 
 export type ScheduleTargetStatus = 'upcoming' | 'past'
+type ScheduleTargetCandidate = {
+  acquisitionId: string
+  targetId: string
+  startTime: string
+  endTime: string
+}
 
 const updateTargetStatus = (
   targetStatus: Map<string, ScheduleTargetStatus>,
@@ -83,4 +89,80 @@ export function collectScheduleTargetGeo(
   }
 
   return targetGeo
+}
+
+function pickPreferredTargetCandidate(
+  candidates: ScheduleTargetCandidate[],
+  nowTs: number,
+): ScheduleTargetCandidate | null {
+  if (candidates.length === 0) return null
+
+  const activeCandidate = candidates
+    .filter((candidate) => {
+      const startTs = new Date(candidate.startTime).getTime()
+      const endTs = new Date(candidate.endTime).getTime()
+      return startTs <= nowTs && endTs >= nowTs
+    })
+    .sort((a, b) => new Date(a.endTime).getTime() - new Date(b.endTime).getTime())[0]
+
+  if (activeCandidate) return activeCandidate
+
+  const nextUpcomingCandidate = candidates
+    .filter((candidate) => new Date(candidate.startTime).getTime() >= nowTs)
+    .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())[0]
+
+  if (nextUpcomingCandidate) return nextUpcomingCandidate
+
+  return (
+    candidates.sort((a, b) => new Date(b.endTime).getTime() - new Date(a.endTime).getTime())[0] ??
+    null
+  )
+}
+
+export function buildScheduleTargetAcquisitionMap(
+  scheduleItems: MasterScheduleItem[],
+  committedOrders: AcceptedOrder[],
+  nowTs = Date.now(),
+): Map<string, string> {
+  const candidatesByTarget = new Map<string, ScheduleTargetCandidate[]>()
+
+  const addCandidate = (candidate: ScheduleTargetCandidate) => {
+    const existing = candidatesByTarget.get(candidate.targetId) ?? []
+    existing.push(candidate)
+    candidatesByTarget.set(candidate.targetId, existing)
+  }
+
+  if (scheduleItems.length > 0) {
+    for (const item of scheduleItems) {
+      addCandidate({
+        acquisitionId: item.id,
+        targetId: item.target_id,
+        startTime: item.start_time,
+        endTime: item.end_time,
+      })
+    }
+  } else {
+    for (const order of committedOrders) {
+      for (const [index, item] of (order.schedule || []).entries()) {
+        const acquisitionId = order.backend_acquisition_ids?.[index] || item.opportunity_id
+        if (!acquisitionId) continue
+        addCandidate({
+          acquisitionId,
+          targetId: item.target_id,
+          startTime: item.start_time,
+          endTime: item.end_time,
+        })
+      }
+    }
+  }
+
+  const targetAcquisitionMap = new Map<string, string>()
+  for (const [targetId, candidates] of candidatesByTarget.entries()) {
+    const preferredCandidate = pickPreferredTargetCandidate(candidates, nowTs)
+    if (preferredCandidate) {
+      targetAcquisitionMap.set(targetId, preferredCandidate.acquisitionId)
+    }
+  }
+
+  return targetAcquisitionMap
 }

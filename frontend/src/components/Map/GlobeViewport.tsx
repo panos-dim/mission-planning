@@ -55,7 +55,11 @@ import { useScheduleStore } from '../../store/scheduleStore'
 import { useSelectionStore } from '../../store/selectionStore'
 import debug from '../../utils/debug'
 import { registerSatellites, getSatColor, getSatColorWithAlpha } from '../../utils/satelliteColors'
-import { buildScheduleTargetStatus, collectScheduleTargetGeo } from '../../utils/scheduleTargets'
+import {
+  buildScheduleTargetAcquisitionMap,
+  buildScheduleTargetStatus,
+  collectScheduleTargetGeo,
+} from '../../utils/scheduleTargets'
 import * as workspacesApi from '../../api/workspaces'
 
 function getScheduleLockLabelOffset(targetName: string): number {
@@ -101,14 +105,22 @@ function isOpticalPassEntity(entity: Entity): boolean {
 }
 
 /**
- * Check if entity is lockable (SAR swath or optical pass)
+ * Check if entity is a schedule target pin or its lock badge.
  */
-function isLockableEntity(entity: Entity): boolean {
-  return isSarSwathEntity(entity) || isOpticalPassEntity(entity)
+function isScheduleTargetEntity(entity: Entity): boolean {
+  if (!entity.id || typeof entity.id !== 'string') return false
+  return entity.id.startsWith('sched_target_') || entity.id.startsWith('sched_lock_')
 }
 
 /**
- * Extract opportunity_id from any lockable entity (SAR swath or optical pass)
+ * Check if entity is lockable (SAR swath, optical pass, or schedule target pin)
+ */
+function isLockableEntity(entity: Entity): boolean {
+  return isSarSwathEntity(entity) || isOpticalPassEntity(entity) || isScheduleTargetEntity(entity)
+}
+
+/**
+ * Extract the lock target id from any lockable entity.
  */
 function extractLockableOpportunityId(entity: Entity): string | null {
   if (!entity.properties) return null
@@ -116,6 +128,9 @@ function extractLockableOpportunityId(entity: Entity): string | null {
     const entityType = entity.properties.entity_type?.getValue(null)
     if (entityType === 'sar_swath' || entityType === 'optical_pass') {
       return entity.properties.opportunity_id?.getValue(null) ?? null
+    }
+    if (entityType === 'sched_target' || entityType === 'sched_target_lock') {
+      return entity.properties.acquisition_id?.getValue(null) ?? null
     }
     return null
   } catch {
@@ -227,6 +242,20 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
   const [isUsingFallback, setIsUsingFallback] = useState(false)
   const imageryReplacedRef = useRef(false)
   const workspaceCzmlRestoreRef = useRef<string | null>(null)
+  const scheduleClockSnapshotRef = useRef<{
+    time: JulianDate | null
+    shouldAnimate: boolean
+    multiplier: number
+  } | null>(null)
+  const latestClockStateRef = useRef<{
+    time: JulianDate | null
+    shouldAnimate: boolean
+    multiplier: number
+  }>({
+    time: null,
+    shouldAnimate: false,
+    multiplier: 1,
+  })
   // Loaded CZML DataSource — set from onLoad callback to guarantee availability
   const [loadedDataSource, setLoadedDataSource] = useState<DataSource | null>(null)
 
@@ -300,6 +329,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
     })),
   )
   const selectTargetInStore = useSelectionStore((s) => s.selectTarget)
+  const selectAcquisitionInStore = useSelectionStore((s) => s.selectAcquisition)
   const selectedType = useSelectionStore((s) => s.selectedType)
   const selectedTargetId = useSelectionStore((s) => s.selectedTargetId)
   const selectedAcquisitionId = useSelectionStore((s) => s.selectedAcquisitionId)
@@ -322,12 +352,23 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
   // PR-UI-013: Committed orders for schedule-mode target status colors
   const committedOrders = useOrdersStore((s) => s.orders)
   const scheduleItems = useScheduleStore((s) => s.items)
+  const activeScheduleTab = useScheduleStore((s) => s.activeTab)
 
   // Planning-mode state: which sidebar panel is active + planning results
   const activeLeftPanel = useVisStore((s) => s.activeLeftPanel)
+  const isScheduleView = activeLeftPanel === 'schedule'
+  const isScheduleLiveView = isScheduleView && activeScheduleTab === 'committed'
   const planningResults = usePlanningStore((s) => s.results)
   const planningActiveAlgo = usePlanningStore((s) => s.activeAlgorithm)
   const originalBillboardsRef = useRef<Map<string, string>>(new Map())
+
+  useEffect(() => {
+    latestClockStateRef.current = {
+      time: clockTime ? JulianDate.clone(clockTime, new JulianDate()) : null,
+      shouldAnimate: clockShouldAnimate,
+      multiplier: clockMultiplier,
+    }
+  }, [clockMultiplier, clockShouldAnimate, clockTime])
 
   // Use shared CZML if provided, otherwise use state CZML
   const czmlData = sharedCzml || state.czmlData
@@ -389,6 +430,58 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
       cancelled = true
     }
   }, [czmlData, dispatch, loadedDataSource, state.activeWorkspace, viewportId])
+
+  useEffect(() => {
+    if (viewportId !== 'primary' || !state.missionData || !loadedDataSource) return
+    const viewer = viewerRef.current?.cesiumElement
+
+    if (isScheduleLiveView) {
+      if (!scheduleClockSnapshotRef.current) {
+        scheduleClockSnapshotRef.current = latestClockStateRef.current
+      }
+
+      const liveNow = JulianDate.now()
+      const missionStart = JulianDate.fromIso8601(state.missionData.start_time.replace('+00:00', 'Z'))
+      const missionStop = JulianDate.fromIso8601(state.missionData.end_time.replace('+00:00', 'Z'))
+
+      let liveTime = JulianDate.clone(liveNow, new JulianDate())
+      if (JulianDate.lessThan(liveTime, missionStart)) {
+        liveTime = JulianDate.clone(missionStart, new JulianDate())
+      } else if (JulianDate.greaterThan(liveTime, missionStop)) {
+        liveTime = JulianDate.clone(missionStop, new JulianDate())
+      }
+
+      if (viewer?.clock) {
+        viewer.clock.currentTime = liveTime
+        viewer.clock.shouldAnimate = true
+        viewer.clock.multiplier = 1
+        viewer.scene?.requestRender()
+      }
+
+      setClockState(liveTime, true, 1)
+      return
+    }
+
+    if (scheduleClockSnapshotRef.current) {
+      const snapshot = scheduleClockSnapshotRef.current
+      if (viewer?.clock) {
+        if (snapshot.time) {
+          viewer.clock.currentTime = snapshot.time
+        }
+        viewer.clock.shouldAnimate = snapshot.shouldAnimate
+        viewer.clock.multiplier = snapshot.multiplier
+        viewer.scene?.requestRender()
+      }
+      setClockState(snapshot.time, snapshot.shouldAnimate, snapshot.multiplier)
+      scheduleClockSnapshotRef.current = null
+    }
+  }, [
+    isScheduleLiveView,
+    loadedDataSource,
+    setClockState,
+    state.missionData,
+    viewportId,
+  ])
 
   useEffect(() => {
     if (!czmlData || czmlData.length === 0) {
@@ -727,21 +820,29 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
 
     // The timeline and the map must agree on which targets exist.
     // When master schedule data is loaded, it becomes the authoritative source.
-    const targetStatus = buildScheduleTargetStatus(scheduleItems, committedOrders, Date.now())
+    const nowTs = Date.now()
+    const targetStatus = buildScheduleTargetStatus(scheduleItems, committedOrders, nowTs)
     if (targetStatus.size === 0) return
-    const lockedTargets = new Set<string>()
+    const targetAcquisitionMap = buildScheduleTargetAcquisitionMap(scheduleItems, committedOrders, nowTs)
+    const acquisitionLockLevels = new Map<string, 'none' | 'hard'>()
 
     for (const item of scheduleItems) {
-      if ((lockLevels.get(item.id) ?? item.lock_level ?? 'none') === 'hard') {
-        lockedTargets.add(item.target_id)
-      }
+      acquisitionLockLevels.set(
+        item.id,
+        (lockLevels.get(item.id) ?? item.lock_level ?? 'none') as 'none' | 'hard',
+      )
     }
 
     for (const order of committedOrders) {
       for (const [index, item] of (order.schedule || []).entries()) {
         const acquisitionId = order.backend_acquisition_ids?.[index] || item.opportunity_id
-        if (acquisitionId && lockLevels.get(acquisitionId) === 'hard') {
-          lockedTargets.add(item.target_id)
+        if (acquisitionId) {
+          acquisitionLockLevels.set(
+            acquisitionId,
+            (lockLevels.get(acquisitionId) ?? acquisitionLockLevels.get(acquisitionId) ?? 'none') as
+              | 'none'
+              | 'hard',
+          )
         }
       }
     }
@@ -761,6 +862,9 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
 
         const entityId = `sched_target_${targetName}`
         const lockLabelId = `sched_lock_${targetName}`
+        const acquisitionId = targetAcquisitionMap.get(targetName) ?? null
+        const isLocked =
+          acquisitionId != null ? acquisitionLockLevels.get(acquisitionId) === 'hard' : false
 
         let fillColor: string
         let strokeColor: string
@@ -800,10 +904,15 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
             verticalOrigin: VerticalOrigin.BOTTOM,
             pixelOffset: new Cartesian2(0, -30),
           },
+          properties: {
+            entity_type: 'sched_target',
+            target_id: targetName,
+            acquisition_id: acquisitionId,
+          },
         })
         newIds.push(entityId)
 
-        if (lockedTargets.has(targetName)) {
+        if (isLocked) {
           viewer.entities.add({
             id: lockLabelId,
             name: `${targetName} lock`,
@@ -818,6 +927,11 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
               horizontalOrigin: HorizontalOrigin.LEFT,
               verticalOrigin: VerticalOrigin.BOTTOM,
               pixelOffset: new Cartesian2(getScheduleLockLabelOffset(targetName), -30),
+            },
+            properties: {
+              entity_type: 'sched_target_lock',
+              target_id: targetName,
+              acquisition_id: acquisitionId,
             },
           })
           newIds.push(lockLabelId)
@@ -965,7 +1079,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
     const viewer = viewerRef.current?.cesiumElement
 
     // Sync Cesium clock cursor to acquisition start time
-    if (focusedStartTime) {
+    if (focusedStartTime && !isScheduleView) {
       try {
         const t = JulianDate.fromIso8601(focusedStartTime)
         setClockTime(t)
@@ -988,7 +1102,14 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
     }
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusedAcquisitionId, focusedTargetCoords, focusedStartTime, focusedTargetId, loadedDataSource])
+  }, [
+    focusedAcquisitionId,
+    focusedTargetCoords,
+    focusedStartTime,
+    focusedTargetId,
+    isScheduleView,
+    loadedDataSource,
+  ])
 
   // Keep Cesium's selected entity aligned with the shared selection store.
   // The selection indicator reads from viewer.selectedEntity, so timeline,
@@ -1142,6 +1263,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
     let lastUpdateTime = 0
     let lastAnimateState = viewer.clock.shouldAnimate
     let lastMultiplier = viewer.clock.multiplier
+    let cleanupClockSync: (() => void) | undefined
 
     // Wait for viewer to be fully ready before setting up clock sync
     const setupClockSync = () => {
@@ -1181,8 +1303,13 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
     }
 
     // Delay setup to ensure viewer is fully initialized
-    const timer = setTimeout(setupClockSync, 1000)
-    return () => clearTimeout(timer)
+    const timer = setTimeout(() => {
+      cleanupClockSync = setupClockSync()
+    }, 1000)
+    return () => {
+      clearTimeout(timer)
+      cleanupClockSync?.()
+    }
   }, [viewportId, viewMode, setClockState, czmlData])
 
   // Secondary viewport syncs complete clock state from store
@@ -1499,7 +1626,14 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
                 const opportunityId = extractLockableOpportunityId(entity)
                 if (opportunityId) {
                   debug.info(`[LockMode] Toggling lock for: ${opportunityId}`)
-                  toggleLock(opportunityId)
+                  if (selectedAcquisitionId !== opportunityId) {
+                    selectAcquisitionInStore(opportunityId, 'map')
+                  }
+                  void toggleLock(opportunityId)
+                } else {
+                  debug.verbose(
+                    `[LockMode] Lockable entity missing acquisition id: ${entity.name || entity.id}`,
+                  )
                 }
               } else {
                 debug.verbose(`[LockMode] Entity not lockable: ${entity.name || entity.id}`)
@@ -1668,6 +1802,8 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
     setHoveredSwath,
     updateDebugInfo,
     selectTargetInStore,
+    selectAcquisitionInStore,
+    selectedAcquisitionId,
   ])
 
   // Focus on opportunity when selected
@@ -1949,7 +2085,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
       <SelectionIndicator viewerRef={viewerRef} />
 
       {/* STK-style timeline + animation controls (primary viewport only) */}
-      {viewportId === 'primary' && <TimelineControls viewerRef={viewerRef} />}
+      {viewportId === 'primary' && !isScheduleView && <TimelineControls viewerRef={viewerRef} />}
 
       {/* Lock mode cursor hint overlay (lock button now in MapControls strip) */}
       {viewportId === 'primary' && isLockMode && (

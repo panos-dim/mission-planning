@@ -13,6 +13,7 @@ Provides endpoints for Order Inbox automation:
 """
 
 import logging
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -78,6 +79,34 @@ class CreateOrderRequest(BaseModel):
     workspace_id: Optional[str] = Field(
         default=None, description="Associated workspace ID"
     )
+    template_id: Optional[str] = Field(
+        default=None,
+        description="Recurring template identity when creating a dated recurring instance",
+    )
+    instance_key: Optional[str] = Field(
+        default=None,
+        description="Deterministic occurrence key for recurring instances",
+    )
+    instance_local_date: Optional[str] = Field(
+        default=None,
+        description="Local occurrence date (YYYY-MM-DD) for recurring instances",
+    )
+    planner_target_id: Optional[str] = Field(
+        default=None,
+        description="Unique scheduler-facing identity for this order instance",
+    )
+    canonical_target_id: Optional[str] = Field(
+        default=None,
+        description="Physical target identity used for grouping/operator meaning",
+    )
+    target_lat: Optional[float] = Field(
+        default=None,
+        description="Optional target latitude snapshot for the actionable instance",
+    )
+    target_lon: Optional[float] = Field(
+        default=None,
+        description="Optional target longitude snapshot for the actionable instance",
+    )
 
 
 class UpdateOrderRequest(BaseModel):
@@ -104,6 +133,13 @@ class OrderResponse(BaseModel):
     notes: Optional[str] = None
     external_ref: Optional[str] = None
     workspace_id: Optional[str] = None
+    template_id: Optional[str] = None
+    instance_key: Optional[str] = None
+    instance_local_date: Optional[str] = None
+    planner_target_id: Optional[str] = None
+    canonical_target_id: Optional[str] = None
+    target_lat: Optional[float] = None
+    target_lon: Optional[float] = None
     # Extended PS2.5 fields
     order_type: str = "IMAGING"
     due_time: Optional[str] = None
@@ -179,6 +215,13 @@ class ExtendedCreateOrderRequest(BaseModel):
         default=None, description="Preferred satellite group"
     )
     user_notes: Optional[str] = Field(default=None, description="User-provided notes")
+    template_id: Optional[str] = Field(default=None)
+    instance_key: Optional[str] = Field(default=None)
+    instance_local_date: Optional[str] = Field(default=None)
+    planner_target_id: Optional[str] = Field(default=None)
+    canonical_target_id: Optional[str] = Field(default=None)
+    target_lat: Optional[float] = Field(default=None)
+    target_lon: Optional[float] = Field(default=None)
 
 
 class ImportOrderItem(BaseModel):
@@ -197,6 +240,13 @@ class ImportOrderItem(BaseModel):
     tags: Optional[List[str]] = None
     requested_satellite_group: Optional[str] = None
     user_notes: Optional[str] = None
+    template_id: Optional[str] = None
+    instance_key: Optional[str] = None
+    instance_local_date: Optional[str] = None
+    planner_target_id: Optional[str] = None
+    canonical_target_id: Optional[str] = None
+    target_lat: Optional[float] = None
+    target_lon: Optional[float] = None
 
 
 class ImportOrdersRequest(BaseModel):
@@ -288,6 +338,13 @@ async def create_order(request: CreateOrderRequest) -> OrderCreateResponse:
             notes=request.notes,
             external_ref=request.external_ref,
             workspace_id=request.workspace_id,
+            template_id=request.template_id,
+            instance_key=request.instance_key,
+            instance_local_date=request.instance_local_date,
+            planner_target_id=request.planner_target_id,
+            canonical_target_id=request.canonical_target_id,
+            target_lat=request.target_lat,
+            target_lon=request.target_lon,
         )
         _bind_order_log_context(workspace_id=order.workspace_id, order_id=order.id)
 
@@ -298,6 +355,18 @@ async def create_order(request: CreateOrderRequest) -> OrderCreateResponse:
             order=OrderResponse(**order.to_dict()),
         )
 
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except sqlite3.IntegrityError as e:
+        message = str(e)
+        if "idx_orders_template_instance_unique" in message or (
+            "orders.template_id, orders.instance_key" in message
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Recurring instance already exists for that template_id + instance_key",
+            ) from e
+        raise HTTPException(status_code=409, detail=message) from e
     except Exception as e:
         logger.error(f"Failed to create order: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -641,6 +710,13 @@ async def import_orders(request: ImportOrdersRequest) -> ImportOrdersResponse:
                 "tags": item.tags,
                 "requested_satellite_group": item.requested_satellite_group,
                 "user_notes": item.user_notes,
+                "template_id": item.template_id,
+                "instance_key": item.instance_key,
+                "instance_local_date": item.instance_local_date,
+                "planner_target_id": item.planner_target_id,
+                "canonical_target_id": item.canonical_target_id,
+                "target_lat": item.target_lat,
+                "target_lon": item.target_lon,
             }
             for item in request.orders
         ]
@@ -661,6 +737,18 @@ async def import_orders(request: ImportOrdersRequest) -> ImportOrdersResponse:
             orders=[OrderResponse(**o.to_dict()) for o in created_orders],
         )
 
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except sqlite3.IntegrityError as e:
+        message = str(e)
+        if "idx_orders_template_instance_unique" in message or (
+            "orders.template_id, orders.instance_key" in message
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Bulk import contains a duplicate recurring instance for template_id + instance_key",
+            ) from e
+        raise HTTPException(status_code=409, detail=message) from e
     except Exception as e:
         logger.error(f"Failed to import orders: {e}")
         raise HTTPException(status_code=500, detail=str(e))

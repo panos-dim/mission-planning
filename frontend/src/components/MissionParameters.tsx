@@ -1,7 +1,14 @@
 import React, { useCallback, useState } from 'react'
 import { Calendar, Clock, Eye, Radar, ChevronDown, ChevronUp, Satellite } from 'lucide-react'
 import DateTimePicker from './DateTimePicker'
-import type { SARImagingMode, SARLookSide, SARPassDirection } from '../types'
+import TimeOfDayPicker from './TimeOfDayPicker'
+import { Checkbox } from './ui'
+import type {
+  AcquisitionTimeWindow,
+  SARImagingMode,
+  SARLookSide,
+  SARPassDirection,
+} from '../types'
 import { LABELS } from '../constants/labels'
 import { parseEndTimeOffset } from '../utils/date'
 import { useSarModes } from '../hooks/queries'
@@ -31,6 +38,7 @@ interface MissionParametersProps {
     imagingType?: 'optical' | 'sar'
     sarMode?: 'stripmap' | 'spotlight' | 'scan'
     sar?: SARParams
+    acquisitionTimeWindow?: AcquisitionTimeWindow
   }
   onChange: (params: Partial<MissionParametersProps['parameters']>) => void
   disabled?: boolean
@@ -38,6 +46,7 @@ interface MissionParametersProps {
   // Satellite display (read-only, set via Admin config)
   allSatellites?: SatelliteSelectorItem[]
   selectedSatelliteIds?: string[]
+  acquisitionTimeWindowError?: string | null
 }
 
 // Fallback SAR mode defaults (used if backend not available)
@@ -51,6 +60,14 @@ const FALLBACK_SAR_DEFAULTS: Record<
   dwell: { incMin: 20, incMax: 40, desc: 'Extended dwell, change detection' },
 }
 
+const DEFAULT_ACQUISITION_TIME_WINDOW: AcquisitionTimeWindow = {
+  enabled: false,
+  start_time: null,
+  end_time: null,
+  timezone: 'UTC',
+  reference: 'off_nadir_time',
+}
+
 const MissionParameters: React.FC<MissionParametersProps> = ({
   parameters,
   onChange,
@@ -58,6 +75,7 @@ const MissionParameters: React.FC<MissionParametersProps> = ({
   maxSatelliteRoll = 45, // Default if not provided
   allSatellites = [],
   selectedSatelliteIds = [],
+  acquisitionTimeWindowError = null,
 }) => {
   const [showAdvancedSAR, setShowAdvancedSAR] = React.useState(false)
   const [satDropdownOpen, setSatDropdownOpen] = useState(false)
@@ -79,6 +97,8 @@ const MissionParameters: React.FC<MissionParametersProps> = ({
   // SAR modes from backend (React Query — cached, deduped, StrictMode-safe)
   const { data: sarModesData } = useSarModes()
   const sarModeConfig = sarModesData?.modes ?? {}
+  const acquisitionTimeWindow =
+    parameters.acquisitionTimeWindow ?? DEFAULT_ACQUISITION_TIME_WINDOW
 
   // Get SAR mode defaults - prefer backend config, fallback to hardcoded
   const getSarModeDefaults = (mode: SARImagingMode) => {
@@ -137,6 +157,20 @@ const MissionParameters: React.FC<MissionParametersProps> = ({
     look_side: 'ANY' as SARLookSide,
     pass_direction: 'ANY' as SARPassDirection,
   }
+
+  const updateAcquisitionTimeWindow = useCallback(
+    (updates: Partial<AcquisitionTimeWindow>) => {
+      onChange({
+        acquisitionTimeWindow: {
+          ...acquisitionTimeWindow,
+          timezone: 'UTC',
+          reference: 'off_nadir_time',
+          ...updates,
+        },
+      })
+    },
+    [acquisitionTimeWindow, onChange],
+  )
 
   return (
     <div className={`space-y-4 ${disabled ? 'opacity-60 pointer-events-none' : ''}`}>
@@ -246,6 +280,60 @@ const MissionParameters: React.FC<MissionParametersProps> = ({
               />
             </div>
           </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between gap-3">
+            <label className="text-xs font-medium text-gray-400">Acquisition Window (UTC)</label>
+            <Checkbox
+              checked={acquisitionTimeWindow.enabled}
+              onChange={(e) => updateAcquisitionTimeWindow({ enabled: e.target.checked })}
+              disabled={disabled}
+              label="Restrict"
+              labelClassName="text-xs text-gray-300"
+              className="flex-shrink-0 flex-row-reverse items-center"
+            />
+          </div>
+
+          {acquisitionTimeWindow.enabled && (
+            <div className="grid grid-cols-2 gap-3">
+              <label htmlFor="acquisition-window-start" className="block min-w-0">
+                <span className="mb-1 block text-[11px] font-medium text-gray-500">From</span>
+                <div className="min-w-[140px]">
+                  <TimeOfDayPicker
+                    id="acquisition-window-start"
+                    value={acquisitionTimeWindow.start_time ?? ''}
+                    onChange={(value) =>
+                      updateAcquisitionTimeWindow({
+                        start_time: value,
+                      })
+                    }
+                    disabled={disabled}
+                  />
+                </div>
+              </label>
+
+              <label htmlFor="acquisition-window-end" className="block min-w-0">
+                <span className="mb-1 block text-[11px] font-medium text-gray-500">To</span>
+                <div className="min-w-[140px]">
+                  <TimeOfDayPicker
+                    id="acquisition-window-end"
+                    value={acquisitionTimeWindow.end_time ?? ''}
+                    onChange={(value) =>
+                      updateAcquisitionTimeWindow({
+                        end_time: value,
+                      })
+                    }
+                    disabled={disabled}
+                  />
+                </div>
+              </label>
+            </div>
+          )}
+
+          {acquisitionTimeWindow.enabled && acquisitionTimeWindowError && (
+            <p className="text-[11px] text-red-400">{acquisitionTimeWindowError}</p>
+          )}
         </div>
 
         {/* SAR-Specific Parameters */}

@@ -4,6 +4,13 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from backend.time_windows import (
+    DailyTimeWindow,
+    OFF_NADIR_TIME_REFERENCE,
+    get_time_zone,
+    parse_hhmm_time,
+)
+
 from backend.schemas.tle import TLEData
 from backend.schemas.target import TargetData
 
@@ -57,6 +64,72 @@ class SARInputParams(BaseModel):
                 f"Invalid pass direction: {v}. Must be one of {valid_dirs}"
             )
         return v.upper()
+
+
+class AcquisitionTimeWindowRequest(BaseModel):
+    """Recurring daily acquisition time window filter."""
+
+    enabled: bool = Field(
+        default=False,
+        description="Whether to restrict feasibility to a recurring daily time window",
+    )
+    start_time: Optional[str] = Field(
+        default=None,
+        description="Window start in HH:MM local time",
+    )
+    end_time: Optional[str] = Field(
+        default=None,
+        description="Window end in HH:MM local time",
+    )
+    timezone: str = Field(
+        default="UTC",
+        description="IANA timezone used for daily time-of-day comparison",
+    )
+    reference: str = Field(
+        default=OFF_NADIR_TIME_REFERENCE,
+        description="Timestamp reference for time window filtering",
+    )
+
+    @field_validator("start_time", "end_time")
+    @classmethod
+    def validate_time_format(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        parse_hhmm_time(v)
+        return v
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: str) -> str:
+        get_time_zone(v)
+        return v
+
+    @field_validator("reference")
+    @classmethod
+    def validate_reference(cls, v: str) -> str:
+        if v != OFF_NADIR_TIME_REFERENCE:
+            raise ValueError(
+                f"Unsupported acquisition time window reference: {v}"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def validate_enabled_window(self) -> "AcquisitionTimeWindowRequest":
+        if not self.enabled:
+            return self
+
+        if not self.start_time or not self.end_time:
+            raise ValueError(
+                "Acquisition time window start_time and end_time are required when enabled"
+            )
+
+        DailyTimeWindow.from_strings(
+            start_time=self.start_time,
+            end_time=self.end_time,
+            timezone_name=self.timezone,
+            reference=self.reference,
+        )
+        return self
 
 
 class MissionRequest(BaseModel):
@@ -130,6 +203,13 @@ class MissionRequest(BaseModel):
     sar: Optional[SARInputParams] = Field(
         default=None,
         description="SAR-specific parameters (only used when imaging_type='sar')",
+    )
+    acquisition_time_window: Optional[AcquisitionTimeWindowRequest] = Field(
+        default=None,
+        description=(
+            "Optional recurring daily time-of-day window filter applied to "
+            "off-nadir time across the planning horizon"
+        ),
     )
 
     @model_validator(mode="after")
