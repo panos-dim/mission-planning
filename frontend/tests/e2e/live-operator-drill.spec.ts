@@ -667,6 +667,51 @@ async function runPlanningViaUi(
   }
 }
 
+async function commitCurrentReview(page: Page) {
+  const commitPromise = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      (response.url().includes('/api/v1/schedule/commit/direct') ||
+        response.url().includes('/api/v1/schedule/repair/commit')),
+  )
+
+  await page.getByRole('button', { name: /Apply (Plan|Anyway)/i }).click()
+  const commitResponse = await commitPromise
+  const bodyText = await commitResponse.text()
+
+  let json: Record<string, unknown> | undefined
+  try {
+    json = JSON.parse(bodyText) as Record<string, unknown>
+  } catch {
+    json = undefined
+  }
+
+  return {
+    status: commitResponse.status(),
+    ok: commitResponse.ok(),
+    bodyText,
+    json,
+  }
+}
+
+async function openScheduleHistory(page: Page) {
+  await page.getByRole('button', { name: 'Schedule', exact: true }).click()
+  const schedulePanel = page
+    .locator('div.h-full.flex.flex-col')
+    .filter({
+      has: page.getByRole('heading', { name: 'Schedule', exact: true }),
+      has: page.locator('button', { hasText: /^History/ }),
+    })
+    .filter({ hasNot: page.getByText('Workspace Library') })
+    .last()
+  const historyTab = schedulePanel.locator('button', { hasText: /^History/ }).first()
+  await expect(historyTab).toBeVisible({ timeout: 30_000 })
+  await historyTab.click({ force: true, timeout: 10_000 })
+  await expect(page.getByText('Schedule History', { exact: true })).toBeVisible({
+    timeout: 30_000,
+  })
+}
+
 async function openScheduleTimeline(page: Page, testInfo?: TestInfo) {
   console.log('[live-ui] open schedule timeline')
   await page.getByRole('button', { name: 'Schedule', exact: true }).click()
@@ -1531,5 +1576,124 @@ test.describe('Live operator drill', () => {
       path: reportPath,
       contentType: 'application/json',
     })
+  })
+
+  test('fails closed in live UI when a second operator applies after another operator commits first', async ({
+    browser,
+    request,
+  }, testInfo) => {
+    test.setTimeout(12 * 60 * 1000)
+
+    const workspaceName = `live_two_operator_apply_${Date.now()}`
+    const workspaceId = await createWorkspace(request, workspaceName)
+
+    await analyzeWorkspace(request, workspaceId, liveIceyeSatellite, modTargetsA, {
+      startOffsetMs: 6 * 60 * 60 * 1000,
+    })
+
+    const contextA = await browser.newContext()
+    const contextB = await browser.newContext()
+    const pageA = await contextA.newPage()
+    const pageB = await contextB.newPage()
+
+    try {
+      const operatorA = await runPlanningViaUi(
+        pageA,
+        workspaceName,
+        'live-two-operator-review-a.png',
+        testInfo,
+        { autoCommit: false },
+      )
+      const operatorB = await runPlanningViaUi(
+        pageB,
+        workspaceName,
+        'live-two-operator-review-b.png',
+        testInfo,
+        { autoCommit: false },
+      )
+
+      expect(operatorA.uiSummary?.actionState).toBe('review_ready')
+      expect(operatorB.uiSummary?.actionState).toBe('review_ready')
+
+      const winnerCommit = await commitCurrentReview(pageA)
+      expect(winnerCommit.ok, winnerCommit.bodyText).toBeTruthy()
+      expect(Number(winnerCommit.json?.committed ?? 0)).toBeGreaterThan(0)
+
+      const winnerPlanId = String(winnerCommit.json?.plan_id ?? '')
+      const winnerAuditLogId = String(winnerCommit.json?.audit_log_id ?? '')
+      expect(winnerPlanId).toBeTruthy()
+      expect(winnerAuditLogId).toBeTruthy()
+
+      const loserCommit = await commitCurrentReview(pageB)
+      expect(loserCommit.status, loserCommit.bodyText).toBe(409)
+
+      const loserDetail =
+        loserCommit.json?.detail && typeof loserCommit.json.detail === 'object'
+          ? (loserCommit.json.detail as Record<string, unknown>)
+          : {}
+      const loserMessage =
+        typeof loserCommit.json?.detail === 'string'
+          ? loserCommit.json.detail
+          : String(loserDetail.message ?? '')
+
+      expect(
+        /Schedule changed before apply completed|Duplicate commit detected/i.test(loserMessage),
+        loserMessage,
+      ).toBeTruthy()
+
+      await expect(
+        pageB.getByText(/Schedule changed before apply completed|Duplicate commit detected/i),
+      ).toBeVisible({ timeout: 30_000 })
+      await expect(
+        pageB
+          .getByRole('heading', { level: 3 })
+          .filter({ hasText: /Ready to Apply|Review Changes|Conflicts Detected/ })
+          .first(),
+      ).toBeVisible()
+
+      const headerWorkspaceBadge = pageB.locator('div[title^="Selected workspace:"]')
+      await pageB.reload({ waitUntil: 'domcontentloaded' })
+      await expect(headerWorkspaceBadge).toContainText(workspaceName, { timeout: 60_000 })
+
+      await openScheduleHistory(pageB)
+      await expect(pageB.getByText('Schedule Apply', { exact: true })).toBeVisible({
+        timeout: 30_000,
+      })
+      await expect(pageB.getByText(winnerPlanId, { exact: true })).toBeVisible({
+        timeout: 30_000,
+      })
+      await expect(pageB.getByText(winnerAuditLogId, { exact: true })).toBeVisible({
+        timeout: 30_000,
+      })
+
+      const summaryPath = testInfo.outputPath('live-two-operator-summary.json')
+      writeFileSync(
+        summaryPath,
+        JSON.stringify(
+          {
+            workspace_id: workspaceId,
+            workspace_name: workspaceName,
+            winner: {
+              status: winnerCommit.status,
+              plan_id: winnerPlanId,
+              audit_log_id: winnerAuditLogId,
+            },
+            loser: {
+              status: loserCommit.status,
+              message: loserMessage,
+            },
+          },
+          null,
+          2,
+        ),
+      )
+      await testInfo.attach('live-two-operator-summary', {
+        path: summaryPath,
+        contentType: 'application/json',
+      })
+    } finally {
+      await contextA.close()
+      await contextB.close()
+    }
   })
 })
