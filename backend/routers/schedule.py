@@ -2291,6 +2291,23 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
             workspace_id=effective_workspace_id,
         )
 
+        # A concurrent identical request can slip past the pre-check if another
+        # commit reaches persistence first. In that case the acquisition unique
+        # index prevents duplicate rows and commit_plan returns zero created.
+        # Treat that as a duplicate race instead of reporting a false success.
+        if result["committed"] == 0:
+            duplicate_plan_id = _find_existing_direct_commit_plan(db, input_hash)
+            db.update_plan_status(plan.id, "superseded")
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": (
+                        "Duplicate commit detected. This exact schedule was already applied."
+                    ),
+                    "duplicate_plan_id": duplicate_plan_id or plan.id,
+                },
+            )
+
         logger.info(
             f"[Direct Commit] Created and committed plan {plan.id}: "
             f"{result['committed']} acquisitions"

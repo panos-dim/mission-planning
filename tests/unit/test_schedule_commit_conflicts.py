@@ -85,6 +85,7 @@ from backend.main import (
     set_cached_opportunities,
     set_current_mission_data,
 )
+from backend.routers import schedule as schedule_router
 from backend.schedule_persistence import (
     DEFAULT_WORKSPACE_ID,
     ScheduleDB,
@@ -667,6 +668,83 @@ class TestScheduleCommitConflictDetection:
             statuses = [row["status"] for row in cursor.fetchall()]
 
         assert statuses == ["candidate", "committed"], statuses
+
+    def test_direct_commit_rejects_zero_created_duplicate_race_result(
+        self,
+        isolated_schedule_api: Tuple[TestClient, ScheduleDB, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A duplicate race that creates zero acquisitions must fail closed."""
+        client, db, workspace_id = isolated_schedule_api
+
+        base_start = datetime.now(timezone.utc) + timedelta(days=19)
+        request_body = {
+            "workspace_id": workspace_id,
+            "algorithm": "regression_test",
+            "lock_level": "none",
+            "items": [
+                {
+                    "opportunity_id": "duplicate-race-1",
+                    "satellite_id": "SAT-1",
+                    "target_id": "RACE-A",
+                    "start_time": _iso(base_start),
+                    "end_time": _iso(base_start + timedelta(minutes=5)),
+                    "roll_angle_deg": 0.0,
+                    "pitch_angle_deg": 0.0,
+                }
+            ],
+        }
+
+        first_commit = client.post("/api/v1/schedule/commit/direct", json=request_body)
+        assert first_commit.status_code == 200, first_commit.json()
+        first_plan_id = first_commit.json()["plan_id"]
+
+        original_find_duplicate = schedule_router._find_existing_direct_commit_plan
+        duplicate_lookup_calls = 0
+
+        def bypass_first_duplicate_lookup(*args, **kwargs):
+            nonlocal duplicate_lookup_calls
+            duplicate_lookup_calls += 1
+            if duplicate_lookup_calls == 1:
+                return None
+            return original_find_duplicate(*args, **kwargs)
+
+        monkeypatch.setattr(
+            schedule_router,
+            "_find_existing_direct_commit_plan",
+            bypass_first_duplicate_lookup,
+        )
+        monkeypatch.setattr(
+            schedule_router,
+            "_predict_direct_commit_conflicts",
+            lambda *_args, **_kwargs: [],
+        )
+
+        second_commit = client.post("/api/v1/schedule/commit/direct", json=request_body)
+        assert second_commit.status_code == 409, second_commit.json()
+        detail = second_commit.json()["detail"]
+        assert "Duplicate commit detected" in detail["message"], detail
+        assert detail["duplicate_plan_id"] == first_plan_id, detail
+
+        state = client.get(
+            "/api/v1/schedule/state",
+            params={"workspace_id": workspace_id},
+        )
+        assert state.status_code == 200, state.json()
+        acquisitions = state.json()["state"]["acquisitions"]
+        assert len(acquisitions) == 1, state.json()
+        assert acquisitions[0]["target_id"] == "RACE-A", state.json()
+
+        with db._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, status FROM plans WHERE workspace_id = ? ORDER BY created_at ASC",
+                (workspace_id,),
+            )
+            plans = [(row["id"], row["status"]) for row in cursor.fetchall()]
+
+        assert plans[0] == (first_plan_id, "committed"), plans
+        assert plans[1][1] == "superseded", plans
 
     def test_direct_commit_materializes_missing_workspace_scope(
         self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
