@@ -2104,6 +2104,7 @@ class DirectCommitResponse(BaseModel):
     plan_id: str
     committed: int
     acquisition_ids: List[str]
+    audit_log_id: Optional[str] = None
     conflicts_detected: int = 0
     conflict_ids: List[str] = Field(default_factory=list)
 
@@ -2416,6 +2417,21 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
         )
         conflicts_detected = len(detected_conflicts)
         conflict_ids = new_conflict_ids
+        audit_log = db.create_commit_audit_log(
+            plan_id=plan.id,
+            commit_type="force" if request.force else "normal",
+            config_hash=input_hash,
+            acquisitions_created=result["committed"],
+            acquisitions_dropped=0,
+            workspace_id=effective_workspace_id,
+            committed_by=None,
+            repair_diff=None,
+            score_before=None,
+            score_after=None,
+            conflicts_before=len(predicted_conflicts),
+            conflicts_after=conflicts_detected,
+            notes=request.notes,
+        )
 
         return DirectCommitResponse(
             success=True,
@@ -2423,6 +2439,7 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
             plan_id=plan.id,
             committed=result["committed"],
             acquisition_ids=[a["id"] for a in result["acquisitions_created"]],
+            audit_log_id=audit_log.id,
             conflicts_detected=conflicts_detected,
             conflict_ids=conflict_ids,
         )

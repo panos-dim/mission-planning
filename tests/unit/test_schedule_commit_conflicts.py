@@ -646,6 +646,7 @@ class TestScheduleCommitConflictDetection:
         second_commit = client.post("/api/v1/schedule/commit/direct", json=request_body)
         assert second_commit.status_code == 200, second_commit.json()
         assert second_commit.json()["committed"] == 1, second_commit.json()
+        assert second_commit.json()["audit_log_id"], second_commit.json()
         assert commit_attempts == 2
 
         third_commit = client.post("/api/v1/schedule/commit/direct", json=request_body)
@@ -671,6 +672,54 @@ class TestScheduleCommitConflictDetection:
             statuses = [row["status"] for row in cursor.fetchall()]
 
         assert statuses == ["candidate", "committed"], statuses
+
+    def test_direct_commit_writes_commit_history_audit_log(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Successful direct commits should create a traceable audit log entry."""
+        client, _db, workspace_id = isolated_schedule_api
+
+        base_start = datetime.now(timezone.utc) + timedelta(days=19)
+        direct_commit = client.post(
+            "/api/v1/schedule/commit/direct",
+            json={
+                "workspace_id": workspace_id,
+                "algorithm": "audit_regression",
+                "lock_level": "none",
+                "notes": "operator promoted approved schedule",
+                "items": [
+                    {
+                        "opportunity_id": "audit-direct-1",
+                        "satellite_id": "SAT-1",
+                        "target_id": "AUDIT-A",
+                        "start_time": _iso(base_start),
+                        "end_time": _iso(base_start + timedelta(minutes=5)),
+                        "roll_angle_deg": 0.0,
+                        "pitch_angle_deg": 0.0,
+                    }
+                ],
+            },
+        )
+        assert direct_commit.status_code == 200, direct_commit.json()
+        payload = direct_commit.json()
+        assert payload["audit_log_id"], payload
+
+        history = client.get(
+            "/api/v1/schedule/commit-history",
+            params={"workspace_id": workspace_id},
+        )
+        assert history.status_code == 200, history.json()
+        body = history.json()
+        assert body["total"] == 1, body
+        audit_log = body["audit_logs"][0]
+        assert audit_log["id"] == payload["audit_log_id"], body
+        assert audit_log["plan_id"] == payload["plan_id"], body
+        assert audit_log["commit_type"] == "normal", body
+        assert audit_log["acquisitions_created"] == 1, body
+        assert audit_log["acquisitions_dropped"] == 0, body
+        assert audit_log["conflicts_before"] == 0, body
+        assert audit_log["conflicts_after"] == 0, body
+        assert audit_log["notes"] == "operator promoted approved schedule", body
 
     def test_direct_commit_rejects_zero_created_duplicate_race_result(
         self,
@@ -1121,6 +1170,10 @@ class TestScheduleCommitConflictDetection:
             409: sum(1 for response in responses if response.status_code == 409),
         }
         assert status_counts == {200: 2, 409: 2}, [response.json() for response in responses]
+        success_payloads = [
+            response.json() for response in responses if response.status_code == 200
+        ]
+        successful_plan_ids = {payload["plan_id"] for payload in success_payloads}
 
         state = client.get(
             "/api/v1/schedule/state",
@@ -1149,6 +1202,20 @@ class TestScheduleCommitConflictDetection:
         )
         assert conflicts.status_code == 200, conflicts.json()
         assert len(conflicts.json()["conflicts"]) == 0, conflicts.json()
+
+        history = client.get(
+            "/api/v1/schedule/commit-history",
+            params={"workspace_id": workspace_id},
+        )
+        assert history.status_code == 200, history.json()
+        audit_logs = history.json()["audit_logs"]
+        assert history.json()["total"] == 2, history.json()
+        assert {log["plan_id"] for log in audit_logs} == successful_plan_ids, history.json()
+        assert all(log["acquisitions_created"] == 1 for log in audit_logs), history.json()
+        assert all(log["commit_type"] == "normal" for log in audit_logs), history.json()
+        assert {
+            payload["audit_log_id"] for payload in success_payloads
+        } == {log["id"] for log in audit_logs}, history.json()
 
     def test_direct_commit_materializes_missing_workspace_scope(
         self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
