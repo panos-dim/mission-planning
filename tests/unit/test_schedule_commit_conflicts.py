@@ -618,21 +618,21 @@ class TestScheduleCommitConflictDetection:
             ],
         }
 
-        original_commit_plan = db.commit_plan
+        original_commit_plan = db.commit_plan_atomic
         commit_attempts = 0
 
         def flaky_commit_plan(*args, **kwargs):
             nonlocal commit_attempts
             commit_attempts += 1
             if commit_attempts == 1:
-                raise RuntimeError("simulated commit_plan failure")
+                raise RuntimeError("simulated commit_plan_atomic failure")
             return original_commit_plan(*args, **kwargs)
 
-        monkeypatch.setattr(db, "commit_plan", flaky_commit_plan)
+        monkeypatch.setattr(db, "commit_plan_atomic", flaky_commit_plan)
 
         first_commit = client.post("/api/v1/schedule/commit/direct", json=request_body)
         assert first_commit.status_code == 500, first_commit.json()
-        assert "simulated commit_plan failure" in first_commit.json()["detail"]
+        assert "simulated commit_plan_atomic failure" in first_commit.json()["detail"]
 
         state_after_failure = client.get(
             "/api/v1/schedule/state",
@@ -925,6 +925,87 @@ class TestScheduleCommitConflictDetection:
         acquisitions = state.json()["state"]["acquisitions"]
         assert len(acquisitions) == 1, state.json()
         assert acquisitions[0]["target_id"] == "BURST-A", state.json()
+
+    def test_parallel_overlapping_direct_commits_allow_only_one_winner(
+        self,
+        isolated_schedule_api: Tuple[TestClient, ScheduleDB, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Concurrent overlapping direct commits must not both persist."""
+        client, _db, workspace_id = isolated_schedule_api
+
+        base_start = datetime.now(timezone.utc) + timedelta(days=19)
+        request_a = {
+            "workspace_id": workspace_id,
+            "algorithm": "operator_a",
+            "lock_level": "none",
+            "items": [
+                {
+                    "opportunity_id": "parallel-overlap-a",
+                    "satellite_id": "SAT-1",
+                    "target_id": "OVERLAP-A",
+                    "start_time": _iso(base_start),
+                    "end_time": _iso(base_start + timedelta(minutes=5)),
+                    "roll_angle_deg": 0.0,
+                    "pitch_angle_deg": 0.0,
+                }
+            ],
+        }
+        request_b = {
+            "workspace_id": workspace_id,
+            "algorithm": "operator_b",
+            "lock_level": "none",
+            "items": [
+                {
+                    "opportunity_id": "parallel-overlap-b",
+                    "satellite_id": "SAT-1",
+                    "target_id": "OVERLAP-B",
+                    "start_time": _iso(base_start + timedelta(minutes=2)),
+                    "end_time": _iso(base_start + timedelta(minutes=7)),
+                    "roll_angle_deg": 0.0,
+                    "pitch_angle_deg": 0.0,
+                }
+            ],
+        }
+
+        precheck_barrier = threading.Barrier(2)
+
+        original_predict = schedule_router._predict_direct_commit_conflicts
+
+        def synchronized_predict(db_arg, items, workspace_id_arg):
+            precheck_barrier.wait(timeout=5)
+            return original_predict(db_arg, items, workspace_id_arg)
+
+        monkeypatch.setattr(
+            schedule_router,
+            "_predict_direct_commit_conflicts",
+            synchronized_predict,
+        )
+
+        with ExitStack() as stack:
+            client_a = stack.enter_context(TestClient(app))
+            client_b = stack.enter_context(TestClient(app))
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                future_a = executor.submit(
+                    client_a.post, "/api/v1/schedule/commit/direct", json=request_a
+                )
+                future_b = executor.submit(
+                    client_b.post, "/api/v1/schedule/commit/direct", json=request_b
+                )
+                response_a = future_a.result()
+                response_b = future_b.result()
+
+        statuses = sorted([response_a.status_code, response_b.status_code])
+        assert statuses == [200, 409], [response_a.json(), response_b.json()]
+
+        state = client.get(
+            "/api/v1/schedule/state",
+            params={"workspace_id": workspace_id},
+        )
+        assert state.status_code == 200, state.json()
+        acquisitions = state.json()["state"]["acquisitions"]
+        assert len(acquisitions) == 1, state.json()
 
     def test_direct_commit_materializes_missing_workspace_scope(
         self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]

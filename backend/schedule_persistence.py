@@ -3672,6 +3672,8 @@ class ScheduleDB:
         workspace_id: Optional[str] = None,
         drop_acquisition_ids: Optional[List[str]] = None,
         expected_revision: Optional[int] = None,
+        enforce_current_conflict_check: bool = False,
+        allow_conflicts: bool = False,
     ) -> Dict[str, Any]:
         """Atomically commit plan items and optionally drop acquisitions.
 
@@ -3687,6 +3689,9 @@ class ScheduleDB:
             drop_acquisition_ids: Acquisitions to delete (for repair commits)
             expected_revision: If set, reject commit if workspace revision has changed
                 (optimistic concurrency control to prevent stale-read conflicts)
+            enforce_current_conflict_check: Re-run conflict prediction while the
+                write lock is held before inserting acquisitions
+            allow_conflicts: If True, do not block on error-severity conflicts
 
         Returns:
             Dict with results or raises exception on failure
@@ -3765,6 +3770,51 @@ class ScheduleDB:
                     )
 
                 items = cursor.fetchall()
+
+                if enforce_current_conflict_check and items:
+                    from backend.incremental_planning import predict_commit_conflicts
+
+                    item_bounds: List[tuple[datetime, datetime]] = []
+                    new_items: List[Dict[str, Any]] = []
+                    for item in items:
+                        start_dt = datetime.fromisoformat(
+                            str(item["start_time"]).replace("Z", "+00:00")
+                        )
+                        end_dt = datetime.fromisoformat(
+                            str(item["end_time"]).replace("Z", "+00:00")
+                        )
+                        item_bounds.append((start_dt, end_dt))
+                        new_items.append(
+                            {
+                                "satellite_id": item["satellite_id"],
+                                "target_id": item["target_id"],
+                                "start_time": item["start_time"],
+                                "end_time": item["end_time"],
+                                "roll_angle_deg": item["roll_angle_deg"],
+                                "pitch_angle_deg": item["pitch_angle_deg"],
+                            }
+                        )
+
+                    horizon_start = min(start for start, _ in item_bounds)
+                    horizon_end = max(end for _, end in item_bounds)
+                    predicted_conflicts, _ = predict_commit_conflicts(
+                        db=self,
+                        workspace_id=effective_workspace_id,
+                        new_items=new_items,
+                        horizon_start=horizon_start,
+                        horizon_end=horizon_end,
+                    )
+                    error_conflicts = [
+                        conflict
+                        for conflict in predicted_conflicts
+                        if conflict.get("severity") == "error"
+                    ]
+                    if error_conflicts and not allow_conflicts:
+                        raise ValueError(
+                            "Concurrent schedule conflict detected: "
+                            f"{len(error_conflicts)} error-severity conflict(s) "
+                            "would be introduced"
+                        )
 
                 # v2.5: resolve target coords from workspace scenario_config
                 target_coords = self._resolve_target_coords(

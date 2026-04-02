@@ -14,6 +14,7 @@ Endpoints:
 import hashlib
 import json
 import logging
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -2198,6 +2199,7 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
     if not request.items:
         raise HTTPException(status_code=400, detail="No items to commit")
 
+    expected_revision = db.get_schedule_revision(effective_workspace_id)
     predicted_conflicts = _predict_direct_commit_conflicts(
         db,
         request.items,
@@ -2283,18 +2285,102 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
             )
 
         # Commit the plan
-        result = db.commit_plan(
-            plan_id=plan.id,
-            item_ids=[],  # Commit all items
-            lock_level=request.lock_level,
-            mode=request.mode,
-            workspace_id=effective_workspace_id,
-        )
+        try:
+            result = db.commit_plan_atomic(
+                plan_id=plan.id,
+                item_ids=[],  # Commit all items
+                lock_level=request.lock_level,
+                mode=request.mode,
+                workspace_id=effective_workspace_id,
+                expected_revision=expected_revision,
+                enforce_current_conflict_check=True,
+                allow_conflicts=request.force,
+            )
+        except ValueError as exc:
+            error_message = str(exc)
+            if "Schedule revision conflict" in error_message:
+                db.update_plan_status(plan.id, "superseded")
+                current_conflicts: List[Dict[str, Any]] = []
+                try:
+                    current_conflicts = _predict_direct_commit_conflicts(
+                        db,
+                        request.items,
+                        effective_workspace_id,
+                    )
+                except Exception:
+                    logger.warning(
+                        "[Direct Commit] Failed to recompute conflicts after revision conflict",
+                        exc_info=True,
+                    )
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": (
+                            "Schedule changed before apply completed. "
+                            "Review the latest conflicts and re-plan before retrying."
+                        ),
+                        "reason": "schedule_revision_conflict",
+                        "stale_detail": error_message,
+                        "predicted_conflicts": current_conflicts,
+                    },
+                ) from exc
+            if "Concurrent schedule conflict detected" in error_message:
+                db.update_plan_status(plan.id, "superseded")
+                duplicate_plan_id = _find_existing_direct_commit_plan(db, input_hash)
+                if duplicate_plan_id and duplicate_plan_id != plan.id:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "message": (
+                                "Duplicate commit detected. This exact schedule was already applied."
+                            ),
+                            "duplicate_plan_id": duplicate_plan_id,
+                        },
+                    ) from exc
+                current_conflicts: List[Dict[str, Any]] = []
+                try:
+                    current_conflicts = _predict_direct_commit_conflicts(
+                        db,
+                        request.items,
+                        effective_workspace_id,
+                    )
+                except Exception:
+                    logger.warning(
+                        "[Direct Commit] Failed to recompute conflicts after concurrent conflict",
+                        exc_info=True,
+                    )
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": (
+                            "Schedule changed during apply and now conflicts with "
+                            "another committed acquisition."
+                        ),
+                        "reason": "concurrent_schedule_conflict",
+                        "stale_detail": error_message,
+                        "predicted_conflicts": current_conflicts,
+                    },
+                ) from exc
+            raise
+        except sqlite3.IntegrityError as exc:
+            if "UNIQUE constraint failed: acquisitions." not in str(exc):
+                raise
+            duplicate_plan_id = _find_existing_direct_commit_plan(db, input_hash)
+            db.update_plan_status(plan.id, "superseded")
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": (
+                        "Duplicate commit detected. This exact schedule was already applied."
+                    ),
+                    "duplicate_plan_id": duplicate_plan_id or plan.id,
+                },
+            ) from exc
 
         # A concurrent identical request can slip past the pre-check if another
         # commit reaches persistence first. In that case the acquisition unique
-        # index prevents duplicate rows and commit_plan returns zero created.
-        # Treat that as a duplicate race instead of reporting a false success.
+        # index can still surface through lower layers; treat that as a duplicate
+        # race instead of reporting a false success.
         if result["committed"] == 0:
             duplicate_plan_id = _find_existing_direct_commit_plan(db, input_hash)
             db.update_plan_status(plan.id, "superseded")
