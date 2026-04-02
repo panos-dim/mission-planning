@@ -1,18 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import {
-  Download,
-  Copy,
-  Trash2,
-  Edit2,
-  Check,
-  X,
-  ChevronDown,
-  ChevronRight,
-  Satellite,
-  Target,
-  Camera,
-} from 'lucide-react'
+import { Trash2, ChevronDown, ChevronRight, Satellite, Target, Camera } from 'lucide-react'
 import { bulkDeleteAcquisitions, deleteOrder } from '../api/scheduleApi'
 import { AcceptedOrder } from '../types'
 import { formatDateTimeShort } from '../utils/date'
@@ -22,22 +10,12 @@ interface AcceptedOrdersProps {
   onOrdersChange: (orders: AcceptedOrder[]) => void
 }
 
-const algorithmNames: Record<string, string> = {
-  first_fit: 'First-Fit',
-  best_fit: 'Best-Fit',
-  optimal: 'Optimal',
-  roll_pitch_best_fit: 'Optimized',
-  roll_pitch_first_fit: 'Standard',
-}
-
 export default function AcceptedOrders({
   orders,
   onOrdersChange,
 }: AcceptedOrdersProps): JSX.Element {
   const queryClient = useQueryClient()
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
-  const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
-  const [editedName, setEditedName] = useState<string>('')
 
   const selectedOrder = orders.find((o) => o.order_id === selectedOrderId)
 
@@ -58,51 +36,6 @@ export default function AcceptedOrders({
     return windows
   }, [orders])
 
-  const handleExportCSV = (order: AcceptedOrder) => {
-    const csv = [
-      ['#', 'Satellite', 'Target', 'Start', 'End', 'Δroll (°)'].join(','),
-      ...order.schedule.map((item, idx) =>
-        [
-          idx + 1,
-          item.satellite_id,
-          item.target_id,
-          item.start_time,
-          item.end_time,
-          item.droll_deg.toFixed(2),
-        ].join(','),
-      ),
-    ].join('\n')
-
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${order.name}_schedule.csv`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
-  const handleExportJSON = (order: AcceptedOrder) => {
-    const json = JSON.stringify(order, null, 2)
-    const blob = new Blob([json], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${order.name}_order.json`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
-  const handleDuplicate = (order: AcceptedOrder) => {
-    const copy: AcceptedOrder = {
-      ...order,
-      order_id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      name: `${order.name}-copy`,
-      created_at: new Date().toISOString(),
-    }
-    onOrdersChange([...orders, copy])
-  }
-
   const handleClear = async (orderId: string) => {
     if (!confirm('Remove this schedule entry?')) return
 
@@ -111,9 +44,7 @@ export default function AcceptedOrders({
 
     // Remove from local state immediately
     onOrdersChange(orders.filter((o) => o.order_id !== orderId))
-    if (selectedOrderId === orderId) {
-      setSelectedOrderId(null)
-    }
+    if (selectedOrderId === orderId) setSelectedOrderId(null)
 
     // Delete from backend DB using real acquisition IDs
     if (order) {
@@ -138,25 +69,6 @@ export default function AcceptedOrders({
     }
   }
 
-  const handleStartEdit = (order: AcceptedOrder) => {
-    setEditingOrderId(order.order_id)
-    setEditedName(order.name)
-  }
-
-  const handleSaveEdit = () => {
-    if (editingOrderId && editedName.trim()) {
-      onOrdersChange(
-        orders.map((o) => (o.order_id === editingOrderId ? { ...o, name: editedName.trim() } : o)),
-      )
-      setEditingOrderId(null)
-    }
-  }
-
-  const handleCancelEdit = () => {
-    setEditingOrderId(null)
-    setEditedName('')
-  }
-
   const formatDateTime = (isoString: string) => {
     try {
       return formatDateTimeShort(isoString)
@@ -165,13 +77,40 @@ export default function AcceptedOrders({
     }
   }
 
+  const totalAcquisitions = useMemo(
+    () => orders.reduce((sum, order) => sum + order.schedule.length, 0),
+    [orders],
+  )
+
+  const getPlanLabel = (order: AcceptedOrder, index: number) => {
+    if (orders.length === 1) return 'Active Plan'
+    if (order.name?.trim() && !order.name.startsWith('Recovered')) return order.name
+    return `Plan ${index + 1}`
+  }
+
+  const getPlanSummary = (order: AcceptedOrder) => {
+    const acquisitionCount = order.schedule.length
+    const satelliteCount = order.satellites_involved?.length || 0
+    const targetCount = order.targets_covered?.length || 0
+    return `${acquisitionCount} acquisition${acquisitionCount === 1 ? '' : 's'} • ${satelliteCount} sat${satelliteCount === 1 ? '' : 's'} • ${targetCount} target${targetCount === 1 ? '' : 's'}`
+  }
+
+  const sortedSelectedSchedule = useMemo(() => {
+    if (!selectedOrder) return []
+    return [...selectedOrder.schedule].sort(
+      (a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime(),
+    )
+  }, [selectedOrder])
+
   return (
     <div className="h-full flex flex-col bg-gray-900 text-white">
       {/* Header */}
       <div className="flex items-center justify-between bg-gray-800 border-b border-gray-700 px-4 py-2.5">
         <div className="flex items-center gap-2">
-          <h2 className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Schedule</h2>
-          <span className="text-[10px] text-gray-500">{orders.length} entries</span>
+          <h2 className="text-xs font-semibold text-gray-300 uppercase">Upcoming Plan</h2>
+          <span className="text-[10px] text-gray-500 tabular-nums">
+            {totalAcquisitions} acquisition{totalAcquisitions === 1 ? '' : 's'}
+          </span>
         </div>
       </div>
 
@@ -181,18 +120,18 @@ export default function AcceptedOrders({
           <div className="flex items-center justify-center h-full">
             <div className="text-center px-6 py-8">
               <Camera className="w-8 h-8 text-gray-600 mx-auto mb-3" />
-              <h3 className="text-sm font-medium text-gray-400 mb-1">No schedules yet</h3>
-              <p className="text-xs text-gray-500 max-w-[240px]">
-                Run an algorithm in Mission Planning, then click Apply to add acquisitions.
+              <h3 className="text-sm font-medium text-gray-400 mb-1">No scheduled acquisitions</h3>
+              <p className="text-xs text-gray-500 text-pretty max-w-[240px]">
+                When a planner applies a schedule, the upcoming acquisitions will appear here.
               </p>
             </div>
           </div>
         ) : (
           <div className="divide-y divide-gray-800">
-            {orders.map((order) => {
+            {orders.map((order, index) => {
               const isSelected = selectedOrderId === order.order_id
-              const isEditing = editingOrderId === order.order_id
               const timeWindow = orderTimeWindows[order.order_id]
+              const planLabel = getPlanLabel(order, index)
 
               return (
                 <div
@@ -205,7 +144,7 @@ export default function AcceptedOrders({
                   onClick={() => setSelectedOrderId(isSelected ? null : order.order_id)}
                 >
                   {/* Compact row */}
-                  <div className="flex items-center gap-2 px-3 py-2">
+                  <div className="flex items-start gap-2 px-3 py-2.5">
                     {/* Expand indicator */}
                     <div className="w-4 flex-shrink-0 text-gray-600">
                       {isSelected ? (
@@ -215,55 +154,21 @@ export default function AcceptedOrders({
                       )}
                     </div>
 
-                    {/* Name + algorithm */}
+                    {/* Plan summary */}
                     <div className="flex-1 min-w-0">
-                      {isEditing ? (
-                        <div className="flex items-center gap-1.5">
-                          <input
-                            type="text"
-                            value={editedName}
-                            onChange={(e) => setEditedName(e.target.value)}
-                            className="flex-1 bg-gray-700 border border-gray-600 rounded px-1.5 py-0.5 text-xs"
-                            autoFocus
-                            onClick={(e) => e.stopPropagation()}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') handleSaveEdit()
-                              if (e.key === 'Escape') handleCancelEdit()
-                            }}
-                          />
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              handleSaveEdit()
-                            }}
-                            className="p-0.5 text-green-400 hover:text-green-300"
-                          >
-                            <Check className="w-3 h-3" />
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              handleCancelEdit()
-                            }}
-                            className="p-0.5 text-red-400 hover:text-red-300"
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs font-medium text-white truncate max-w-[140px]">
-                            {order.name}
-                          </span>
-                          <span className="px-1.5 py-0 text-[9px] font-medium rounded bg-blue-900/60 text-blue-300 flex-shrink-0">
-                            {algorithmNames[order.algorithm] || order.algorithm}
-                          </span>
+                      <div className="text-sm font-medium text-white truncate">{planLabel}</div>
+                      <div className="mt-1 text-[11px] text-gray-400 text-pretty">
+                        {getPlanSummary(order)}
+                      </div>
+                      {timeWindow && (
+                        <div className="mt-1 text-[11px] text-gray-500 tabular-nums">
+                          {formatDateTime(timeWindow.start)} → {formatDateTime(timeWindow.end)}
                         </div>
                       )}
                     </div>
 
                     {/* Inline metrics */}
-                    <div className="flex items-center gap-2.5 flex-shrink-0 text-[10px]">
+                    <div className="flex items-center gap-2.5 flex-shrink-0 pt-0.5 text-[10px]">
                       <span
                         className="flex items-center gap-0.5 text-green-400"
                         title="Acquisitions"
@@ -280,62 +185,21 @@ export default function AcceptedOrders({
                         {order.targets_covered?.length || 0}
                       </span>
                     </div>
-
-                    {/* Actions — visible on hover or selection */}
-                    <div
-                      className={`flex items-center gap-0.5 flex-shrink-0 transition-opacity ${
-                        isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-                      }`}
-                    >
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleStartEdit(order)
-                        }}
-                        className="p-1 text-gray-500 hover:text-white rounded hover:bg-gray-700"
-                        title="Rename"
-                      >
-                        <Edit2 className="w-3 h-3" />
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleExportCSV(order)
-                        }}
-                        className="p-1 text-gray-500 hover:text-white rounded hover:bg-gray-700"
-                        title="Export CSV"
-                      >
-                        <Download className="w-3 h-3" />
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleDuplicate(order)
-                        }}
-                        className="p-1 text-gray-500 hover:text-white rounded hover:bg-gray-700"
-                        title="Duplicate"
-                      >
-                        <Copy className="w-3 h-3" />
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleClear(order.order_id)
-                        }}
-                        className="p-1 text-gray-500 hover:text-red-400 rounded hover:bg-red-900/20"
-                        title="Remove"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
                   </div>
 
-                  {/* Time window — shown below name, subtle */}
-                  {timeWindow && (
-                    <div className="flex items-center gap-1 px-3 pb-2 pl-9 text-[10px] text-gray-500">
-                      <span>{formatDateTime(timeWindow.start)}</span>
-                      <span>→</span>
-                      <span>{formatDateTime(timeWindow.end)}</span>
+                  {isSelected && (
+                    <div className="border-t border-gray-800 px-3 py-2 pl-9">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void handleClear(order.order_id)
+                        }}
+                        className="inline-flex items-center gap-1 rounded border border-red-800/70 px-2 py-1 text-[11px] text-red-200 hover:bg-red-950/40"
+                        aria-label={`Remove ${planLabel}`}
+                      >
+                        <Trash2 className="size-3.5" />
+                        <span>Remove this plan</span>
+                      </button>
                     </div>
                   )}
                 </div>
@@ -351,60 +215,37 @@ export default function AcceptedOrders({
           {/* Detail header */}
           <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700 sticky top-0 bg-gray-800 z-10">
             <div className="flex items-center gap-2">
-              <h3 className="text-xs font-semibold text-white">
-                {selectedOrder.metrics.accepted} Acquisitions
-              </h3>
-              <span className="text-[10px] text-gray-500">
-                {selectedOrder.satellites_involved?.length || 0} sats ·{' '}
-                {selectedOrder.targets_covered?.length || 0} targets
+              <h3 className="text-xs font-semibold text-white uppercase">Upcoming Passes</h3>
+              <span className="text-[10px] text-gray-500 tabular-nums">
+                {selectedOrder.schedule.length} item{selectedOrder.schedule.length === 1 ? '' : 's'}
               </span>
             </div>
-            <div className="flex items-center gap-1.5">
-              <button
-                onClick={() => handleExportJSON(selectedOrder)}
-                className="px-2 py-0.5 bg-gray-700 hover:bg-gray-600 rounded text-[10px] text-gray-300"
-              >
-                JSON
-              </button>
-              <button
-                onClick={() => handleExportCSV(selectedOrder)}
-                className="px-2 py-0.5 bg-blue-600 hover:bg-blue-700 rounded text-[10px] text-white"
-              >
-                CSV
-              </button>
+            <div className="text-[10px] text-gray-500 text-pretty">
+              Review the next acquisitions in time order
             </div>
           </div>
 
-          {/* Acquisitions table — ops-focused columns only */}
-          <table className="w-full text-[11px]">
-            <thead className="bg-gray-750 text-gray-400 sticky top-[33px] z-10">
-              <tr>
-                <th className="text-left py-1.5 px-3 font-medium">Target</th>
-                <th className="text-left py-1.5 px-2 font-medium">Satellite</th>
-                <th className="text-left py-1.5 px-2 font-medium">Start</th>
-                <th className="text-left py-1.5 px-2 font-medium">End</th>
-                <th className="text-right py-1.5 px-3 font-medium">Δroll°</th>
-              </tr>
-            </thead>
-            <tbody className="text-gray-300">
-              {(() => {
-                const sorted = [...selectedOrder.schedule].sort(
-                  (a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime(),
-                )
-                return sorted.map((item, idx) => (
-                  <tr key={idx} className="border-t border-gray-700/50 hover:bg-gray-700/30">
-                    <td className="py-1 px-3 text-white font-medium">{item.target_id}</td>
-                    <td className="py-1 px-2">{item.satellite_id}</td>
-                    <td className="py-1 px-2 text-gray-400">{formatDateTime(item.start_time)}</td>
-                    <td className="py-1 px-2 text-gray-400">{formatDateTime(item.end_time)}</td>
-                    <td className="py-1 px-3 text-right font-mono text-gray-400">
-                      {item.droll_deg.toFixed(1)}
-                    </td>
-                  </tr>
-                ))
-              })()}
-            </tbody>
-          </table>
+          <div className="divide-y divide-gray-700/70">
+            {sortedSelectedSchedule.map((item, idx) => (
+              <div key={`${item.opportunity_id}-${idx}`} className="px-3 py-2.5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-white truncate">{item.target_id}</div>
+                    <div className="mt-1 text-[11px] text-gray-400">
+                      Satellite {item.satellite_id}
+                    </div>
+                    <div className="mt-1 text-[11px] text-gray-500 tabular-nums">
+                      {formatDateTime(item.start_time)} → {formatDateTime(item.end_time)}
+                    </div>
+                  </div>
+                  <div className="text-right text-[11px] text-gray-400 tabular-nums">
+                    <div>Roll {item.droll_deg.toFixed(1)}°</div>
+                    {item.t_slew_s > 0 && <div className="mt-1">Slew {item.t_slew_s.toFixed(0)}s</div>}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>

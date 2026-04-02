@@ -676,8 +676,8 @@ async function openApplyPage(
   }
   await demoPause(page)
 
-  await expect(page.getByRole('button', { name: /^Next$/i })).toBeVisible()
-  await page.getByRole('button', { name: /^Next$/i }).click()
+  await expect(page.getByRole('button', { name: /^Review Plan$/i })).toBeVisible()
+  await page.getByRole('button', { name: /^Review Plan$/i }).click()
   await demoPause(page, 1.5)
 
   await page.screenshot({
@@ -943,7 +943,7 @@ test.describe('Complex planning operator journey', () => {
     await startOrderAndAnalyze(page, [alpha, bravo])
     await openApplyPage(page, testInfo, 'complex-journey-step-1-from-scratch.png', 'schedule')
 
-    await expect(page.getByRole('heading', { name: 'Ready to Apply' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Ready to Schedule' })).toBeVisible()
     await expectApplyStats(page, ['2', '1', '2'])
     await expect(page.getByText('2 new', { exact: true })).toBeVisible()
     await expect(assignmentRow(page, 'Alpha', 'NEW')).toBeVisible()
@@ -954,7 +954,7 @@ test.describe('Complex planning operator journey', () => {
     await startOrderAndAnalyze(page, [alpha, bravo, charlie, delta])
     await openApplyPage(page, testInfo, 'complex-journey-step-2-incremental.png', 'schedule')
 
-    await expect(page.getByRole('heading', { name: 'Ready to Apply' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Ready to Schedule' })).toBeVisible()
     await expectApplyStats(page, ['6', '1', '4'])
     await expect(page.getByText('2 new', { exact: true })).toBeVisible()
     await expect(assignmentRow(page, 'Charlie', 'NEW')).toBeVisible()
@@ -965,7 +965,7 @@ test.describe('Complex planning operator journey', () => {
     await startOrderAndAnalyze(page, [alpha, bravo, charlie, delta, priorityEcho])
     await openApplyPage(page, testInfo, 'complex-journey-step-3-repair-mixed.png', 'repair')
 
-    await expect(page.getByRole('heading', { name: 'Review Changes' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Review Plan' })).toBeVisible()
     await expectApplyStats(page, ['4', '1', '4'])
     await expect(page.getByText('2 kept', { exact: true })).toBeVisible()
     await expect(page.getByText('1 added', { exact: true })).toBeVisible()

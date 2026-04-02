@@ -583,8 +583,8 @@ async function runPlanningViaUi(
 
   const modeJson = (await modeResponse.json()) as PlanningModeSelection
   const planJson = (await planResponse.json()) as Record<string, unknown>
-  const nextButton = page.getByRole('button', { name: /^Next$/i })
-  const noChangesButton = page.getByRole('button', { name: /No Changes to Apply/i })
+  const nextButton = page.getByRole('button', { name: /^Review Plan$/i })
+  const noChangesButton = page.getByRole('button', { name: /Nothing to Apply/i })
 
   let actionState: 'review_ready' | 'no_changes' | 'pending' = 'pending'
   const waitDeadline = Date.now() + 60_000
@@ -612,11 +612,11 @@ async function runPlanningViaUi(
 
   const applyHeading = page
     .getByRole('heading', { level: 3 })
-    .filter({ hasText: /Ready to Apply|Review Changes|Conflicts Detected/ })
+    .filter({ hasText: /Ready to Schedule|Review Plan|Needs Attention/ })
     .first()
   const heading =
     actionState === 'no_changes'
-      ? 'No Changes to Apply'
+      ? 'Nothing to Apply'
       : (await applyHeading.textContent().catch(() => null)) ||
         (await page.locator('h3.text-sm.font-semibold.text-white').first().textContent()) ||
         ''
@@ -711,18 +711,7 @@ async function commitCurrentReview(page: Page) {
 
 async function openScheduleHistory(page: Page) {
   await page.getByRole('button', { name: 'Schedule', exact: true }).click()
-  const schedulePanel = page
-    .locator('div.h-full.flex.flex-col')
-    .filter({
-      has: page.getByRole('heading', { name: 'Schedule', exact: true }),
-      has: page.locator('button', { hasText: /^History/ }),
-    })
-    .filter({ hasNot: page.getByText('Workspace Library') })
-    .last()
-  const historyTab = schedulePanel.locator('button', { hasText: /^History/ }).first()
-  await expect(historyTab).toBeVisible({ timeout: 30_000 })
-  await historyTab.click({ force: true, timeout: 10_000 })
-  await expect(page.getByText('Schedule History', { exact: true })).toBeVisible({
+  await expect(page.getByText('Schedule Summary', { exact: true })).toBeVisible({
     timeout: 30_000,
   })
 }
@@ -1220,13 +1209,13 @@ test.describe('Live operator drill', () => {
     expect(modeSelection.planning_mode).toBe('repair')
     expect(repairChangeCount).toBeGreaterThan(0)
 
-    await expect(page.getByRole('button', { name: /^Next$/i })).toBeVisible({ timeout: 60_000 })
-    await page.getByRole('button', { name: /^Next$/i }).click()
+    await expect(page.getByRole('button', { name: /^Review Plan$/i })).toBeVisible({ timeout: 60_000 })
+    await page.getByRole('button', { name: /^Review Plan$/i }).click()
     await page.waitForTimeout(1500)
 
     const applyHeading = page
       .getByRole('heading', { level: 3 })
-      .filter({ hasText: /Ready to Apply|Review Changes|Conflicts Detected/ })
+      .filter({ hasText: /Ready to Schedule|Review Plan|Needs Attention/ })
       .first()
     await expect(applyHeading).toBeVisible()
     const badgeCount =
@@ -1662,7 +1651,7 @@ test.describe('Live operator drill', () => {
       await expect(
         pageB
           .getByRole('heading', { level: 3 })
-          .filter({ hasText: /Ready to Apply|Review Changes|Conflicts Detected/ })
+          .filter({ hasText: /Ready to Schedule|Review Plan|Needs Attention/ })
           .first(),
       ).toBeVisible()
 

@@ -958,10 +958,10 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
                       <div className="text-sm text-gray-300 leading-relaxed">
                         {isRepair && rd ? (
                           rd.change_score.num_changes === 0 ? (
-                            <p>No changes needed. The current schedule is already optimal.</p>
+                            <p>No schedule changes are needed right now.</p>
                           ) : (
                             <p>
-                              Schedule updated:{' '}
+                              Updated schedule:{' '}
                               <span className="text-white font-medium">{scheduled}</span> total
                               acquisition{scheduled !== 1 ? 's' : ''}
                               {ps ? (
@@ -995,7 +995,7 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
                           <p>
                             {scheduled > 0 ? (
                               <>
-                                New schedule with{' '}
+                                Planned schedule with{' '}
                                 <span className="text-white font-medium">{scheduled}</span>{' '}
                                 acquisition{scheduled !== 1 ? 's' : ''}
                                 {ts ? (
@@ -1013,7 +1013,7 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
                                 .
                               </>
                             ) : (
-                              'No feasible acquisitions were found for the current targets and horizon.'
+                              'No workable acquisitions were found for the selected targets and schedule window.'
                             )}
                           </p>
                         )}
@@ -1023,7 +1023,7 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
                       {ps && ps.target_acquisitions.length > 0 && (
                         <div className="space-y-1 pt-1 border-t border-gray-700/30">
                           <div className="text-[11px] text-gray-500 font-medium uppercase tracking-wide mb-1">
-                            Target Assignments
+                            Scheduled Targets
                           </div>
                           {ps.target_acquisitions.map((acq, i) => (
                             <div
@@ -1056,7 +1056,7 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
                       {ps && ps.targets_not_scheduled.length > 0 && (
                         <div className="space-y-1 pt-1 border-t border-gray-700/30">
                           <div className="text-[11px] text-gray-500 font-medium uppercase tracking-wide mb-1">
-                            Not Scheduled
+                            Still Unscheduled
                           </div>
                           {ps.targets_not_scheduled.map((t, i) => (
                             <div
@@ -1085,12 +1085,12 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
                       {/* Horizon info */}
                       {ps?.horizon && (
                         <div className="text-[10px] text-gray-600 text-center pt-1 border-t border-gray-700/30">
-                          Planning horizon: {fmtTime(ps.horizon.start)} → {fmtTime(ps.horizon.end)}
+                          Schedule window: {fmtTime(ps.horizon.start)} → {fmtTime(ps.horizon.end)}
                         </div>
                       )}
 
                       <p className="text-[10px] text-gray-600 text-center">
-                        Changes are preview-only until applied.
+                        These updates stay in review until you apply them.
                       </p>
                     </div>
                   </div>
@@ -1540,21 +1540,21 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
                 className="w-full px-3 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-semibold text-white"
                 title={
                   hasCommittablePlan
-                    ? 'Proceed to apply confirmation'
-                    : 'No changes are available to apply'
+                    ? 'Open the final schedule review'
+                    : 'No schedule changes are available to apply'
                 }
               >
                 {isPreparingCommitPreview
                   ? 'Preparing Review...'
                   : hasCommittablePlan
-                    ? 'Next'
-                    : 'No Changes to Apply'}
+                    ? 'Review Plan'
+                    : 'Nothing to Apply'}
               </button>
               <button
                 onClick={handleClearResults}
                 className="w-full text-xs text-gray-500 hover:text-gray-300 py-1 transition-colors"
               >
-                Change Presets &amp; Re-run
+                Adjust settings and run again
               </button>
             </>
           ) : (

@@ -522,13 +522,13 @@ async function openPlanningApply(page: Page, testInfo: TestInfo, screenshotName:
   const modeSelection = (await modeResponse.json()) as PlanningModeSelection
   const repairPlan = (await planResponse.json()) as RepairPlanResponse
 
-  await expect(page.getByRole('button', { name: /^Next$/i })).toBeVisible({ timeout: 60_000 })
-  await page.getByRole('button', { name: /^Next$/i }).click()
+  await expect(page.getByRole('button', { name: /^Review Plan$/i })).toBeVisible({ timeout: 60_000 })
+  await page.getByRole('button', { name: /^Review Plan$/i }).click()
   await page.waitForTimeout(1500)
 
   const heading = page
     .getByRole('heading', { level: 3 })
-    .filter({ hasText: /Ready to Apply|Review Changes|Conflicts Detected/ })
+    .filter({ hasText: /Ready to Schedule|Review Plan|Needs Attention/ })
     .first()
   await expect(heading).toBeVisible()
 

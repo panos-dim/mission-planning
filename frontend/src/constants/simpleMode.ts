@@ -31,7 +31,6 @@ export const LEFT_SIDEBAR_PANELS = {
   MISSION_ANALYSIS: 'mission',
   PLANNING: 'planning',
   SCHEDULE: 'schedule',
-  CONFLICTS: 'conflicts',
   EXPLORER: 'explorer', // Object Explorer - useful for planners to browse mission data
 } as const
 
@@ -39,7 +38,6 @@ export const SIMPLE_MODE_LEFT_PANELS = [
   LEFT_SIDEBAR_PANELS.MISSION_ANALYSIS,
   LEFT_SIDEBAR_PANELS.PLANNING,
   LEFT_SIDEBAR_PANELS.SCHEDULE,
-  LEFT_SIDEBAR_PANELS.CONFLICTS,
   LEFT_SIDEBAR_PANELS.EXPLORER,
   LEFT_SIDEBAR_PANELS.WORKSPACES,
 ] as const
@@ -75,13 +73,11 @@ export const SIMPLE_MODE_RIGHT_PANELS = [
 export const SCHEDULE_TABS = {
   COMMITTED: 'committed',
   TIMELINE: 'timeline',
-  HISTORY: 'history',
 } as const
 
 export const SIMPLE_MODE_SCHEDULE_TABS = [
   SCHEDULE_TABS.COMMITTED,
   SCHEDULE_TABS.TIMELINE,
-  SCHEDULE_TABS.HISTORY,
 ] as const
 
 /**

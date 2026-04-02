@@ -5,7 +5,6 @@ import {
   Shield,
   Calendar,
   CheckSquare,
-  AlertTriangle,
   FolderOpen,
   GitBranch,
   FlaskConical,
@@ -14,7 +13,6 @@ import MissionControls from './MissionControls'
 import MissionPlanning from './MissionPlanning'
 import DemoScenarioRunner from './DemoScenarioRunner'
 import SchedulePanel from './SchedulePanel'
-import ConflictsPanel from './ConflictsPanel'
 import WorkspacePanel from './WorkspacePanel'
 import { ObjectExplorerTree } from './ObjectExplorer'
 import ResizeHandle from './ResizeHandle'
@@ -26,7 +24,6 @@ import { usePreviewTargetsStore } from '../store/previewTargetsStore'
 import { useOrdersStore } from '../store/ordersStore'
 import { usePlanningStore } from '../store/planningStore'
 import { useSlewVisStore } from '../store/slewVisStore'
-import { useConflictStore } from '../store/conflictStore'
 import { useSessionStore } from '../store/sessionStore'
 import { AlgorithmResult, AcceptedOrder, WorkspaceData, SceneObject, TargetData } from '../types'
 import { commitScheduleDirect, commitRepairPlan } from '../api/scheduleApi'
@@ -75,7 +72,6 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
   const setOrdersInStore = useOrdersStore((s) => s.setOrders)
   const setPlanningResults = usePlanningStore((s) => s.setResults)
   const setActiveAlgorithm = usePlanningStore((s) => s.setActiveAlgorithm)
-  const conflictCount = useConflictStore((s) => s.summary.total)
   const ordersHydratingRef = useRef(true)
   const missionDataRef = useRef(state.missionData)
   const autoRestoredWorkspaceRef = useRef<string | null>(null)
@@ -361,9 +357,6 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
           if (repairResponse.success) {
             backendCommitSuccess = true
             planId = repairResponse.plan_id
-            if (repairResponse.conflicts_after > 0) {
-              nextPanel = LEFT_SIDEBAR_PANELS.CONFLICTS
-            }
             // Only store NEWLY CREATED acquisition IDs — NOT kept ones from previous orders.
             // Kept acquisitions belong to their original orders; storing them here would
             // cause them to be deleted if THIS order is deleted later.
@@ -394,9 +387,6 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
           if (commitResponse.success) {
             backendCommitSuccess = true
             planId = commitResponse.plan_id
-            if ((commitResponse.conflicts_detected ?? 0) > 0) {
-              nextPanel = LEFT_SIDEBAR_PANELS.CONFLICTS
-            }
             backendAcqIds = commitResponse.acquisition_ids || []
             console.log('[PromoteToOrders] Backend commit successful:', {
               planId,
@@ -542,14 +532,6 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
           />
         ),
       },
-      {
-        id: LEFT_SIDEBAR_PANELS.CONFLICTS,
-        title: 'Conflicts',
-        icon: AlertTriangle,
-        badge: conflictCount > 0 ? conflictCount : undefined,
-        badgeColor: 'red',
-        component: <ConflictsPanel />,
-      },
       // Object Explorer
       {
         id: LEFT_SIDEBAR_PANELS.EXPLORER,
@@ -619,7 +601,6 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
     handlePromoteToOrders,
     setOrders,
     isDeveloperMode,
-    conflictCount,
   ])
 
   const handlePanelClick = (panelId: string) => {

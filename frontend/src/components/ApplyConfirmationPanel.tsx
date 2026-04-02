@@ -223,6 +223,11 @@ export default function ApplyConfirmationPanel({
         : sortedAssignmentRows.filter((row) => row.kind === activeFilter),
     [activeFilter, sortedAssignmentRows],
   )
+  const reviewHeading = hasErrors
+    ? 'Needs Attention'
+    : hasWarnings
+      ? 'Review Plan'
+      : 'Ready to Schedule'
 
   return (
     <div className="flex flex-col h-full">
@@ -253,7 +258,7 @@ export default function ApplyConfirmationPanel({
             <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
           )}
           <h3 className="text-sm font-semibold text-white truncate">
-            {hasErrors ? 'Conflicts Detected' : hasWarnings ? 'Review Changes' : 'Ready to Apply'}
+            {reviewHeading}
           </h3>
         </div>
       </div>
@@ -268,10 +273,10 @@ export default function ApplyConfirmationPanel({
 
         <div className="space-y-1">
           <h4 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
-            Operations Snapshot
+            Plan Summary
           </h4>
           <div className="text-[11px] text-gray-500">
-            Review the exact changes and any conflicts before committing.
+            Review the planned updates before sending them to the schedule.
           </div>
         </div>
 
@@ -326,7 +331,7 @@ export default function ApplyConfirmationPanel({
             <div className="flex items-center justify-between gap-3">
               <div>
                 <h4 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
-                  Target Assignments
+                  Scheduled Targets
                 </h4>
                 <div className="mt-1 text-[11px] text-gray-500">
                   {filteredAssignmentRows.length}/{assignmentRows.length} visible
@@ -481,11 +486,11 @@ export default function ApplyConfirmationPanel({
           <div className="flex items-center gap-3 p-3 bg-emerald-950/20 border border-emerald-800/25 rounded-lg">
             <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0" />
             <div>
-              <div className="text-sm font-medium text-emerald-300">No conflicts</div>
+              <div className="text-sm font-medium text-emerald-300">Ready to schedule</div>
               <div className="text-[11px] text-emerald-400/60">
                 {isRepairMode
-                  ? 'Existing acquisitions preserved. New targets added safely.'
-                  : 'Schedule is ready to be committed.'}
+                  ? 'This update fits the existing schedule.'
+                  : 'This plan can be added without schedule issues.'}
               </div>
             </div>
           </div>
@@ -495,7 +500,7 @@ export default function ApplyConfirmationPanel({
         {preview.conflicts.length > 0 && (
           <div className="space-y-2">
             <h4 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
-              Conflicts ({preview.conflicts.length})
+              Issues to Review ({preview.conflicts.length})
             </h4>
             <div className="space-y-1.5">
               {preview.conflicts.map((conflict, idx) => (
@@ -509,7 +514,7 @@ export default function ApplyConfirmationPanel({
         {preview.warnings.length > 0 && (
           <div className="space-y-2">
             <h4 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
-              Warnings ({preview.warnings.length})
+              Planning Notes ({preview.warnings.length})
             </h4>
             <div className="space-y-1.5">
               {preview.warnings.map((warning, idx) => (
@@ -529,7 +534,7 @@ export default function ApplyConfirmationPanel({
         {hasErrors && (
           <div className="p-3 bg-red-950/20 border border-red-800/30 rounded-lg">
             <div className="text-xs text-red-300/90">
-              <strong>Caution:</strong> Applying with conflicts may cause scheduling issues.
+              <strong>Caution:</strong> This update will introduce schedule issues if applied as shown.
             </div>
           </div>
         )}
@@ -567,9 +572,9 @@ export default function ApplyConfirmationPanel({
               Applying…
             </>
           ) : hasErrors ? (
-            'Apply Anyway'
+            'Apply with Issues'
           ) : (
-            'Apply Plan'
+            'Apply to Schedule'
           )}
         </button>
       </div>

@@ -388,8 +388,8 @@ async function openPlanningApply(page: Page, testInfo: TestInfo, screenshotName:
   expect(modeResponse.ok()).toBeTruthy()
   expect(repairResponse.ok()).toBeTruthy()
 
-  await expect(page.getByRole('button', { name: /^Next$/i })).toBeVisible()
-  await page.getByRole('button', { name: /^Next$/i }).click()
+  await expect(page.getByRole('button', { name: /^Review Plan$/i })).toBeVisible()
+  await page.getByRole('button', { name: /^Review Plan$/i }).click()
 
   await page.screenshot({
     path: testInfo.outputPath(screenshotName),
@@ -611,7 +611,7 @@ test('opens details when a timeline acquisition is selected', async ({
 
     await openPlanningApply(page, testInfo, 'repair-unlocked-page2.png')
 
-    await expect(page.getByRole('heading', { name: 'Review Changes' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Review Plan' })).toBeVisible()
     await expect(assignmentRows(page, 'LegacyAnchor', 'REMOVED')).toHaveCount(1)
     await expect(assignmentRows(page, 'LegacyAnchor', 'REMOVED').first()).toBeVisible()
     await expect(assignmentRows(page, 'PriorityAnchor', 'NEW')).toHaveCount(1)
@@ -641,7 +641,7 @@ test('opens details when a timeline acquisition is selected', async ({
 
     await openPlanningApply(page, testInfo, 'repair-locked-page2.png')
 
-    await expect(page.getByRole('heading', { name: 'Review Changes' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Review Plan' })).toBeVisible()
     await expect(assignmentRows(page, 'LegacyFallback', 'REMOVED')).toHaveCount(1)
     await expect(assignmentRows(page, 'LegacyFallback', 'REMOVED').first()).toBeVisible()
     await expect(assignmentRows(page, 'LegacyAnchor', 'REMOVED')).toHaveCount(0)

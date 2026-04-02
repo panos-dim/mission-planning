@@ -258,7 +258,7 @@ export default function RepairCommitModal({
             ) : (
               <CheckCircle className="w-5 h-5 text-green-400" />
             )}
-            Apply Preview
+            Review Update
           </h2>
           <button
             onClick={onClose}
@@ -330,7 +330,7 @@ export default function RepairCommitModal({
               </div>
             </div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-gray-400">Conflicts after apply</span>
+              <span className="text-gray-400">Issues after apply</span>
               <span
                 className={`font-medium ${risk.conflictCount > 0 ? 'text-red-400' : 'text-green-400'}`}
               >
@@ -370,7 +370,7 @@ export default function RepairCommitModal({
             <div className="bg-yellow-900/20 border border-yellow-700/50 rounded-lg p-3 space-y-2">
               <div className="flex items-center gap-2">
                 <AlertTriangle className="w-4 h-4 text-yellow-400 shrink-0" />
-                <span className="text-sm font-medium text-yellow-400">Risk Detected</span>
+                <span className="text-sm font-medium text-yellow-400">Needs attention</span>
               </div>
               <ul className="space-y-1 pl-6">
                 {risk.warnings.map((w, idx) => (
@@ -387,7 +387,7 @@ export default function RepairCommitModal({
             <div className="bg-red-900/15 border border-red-800/40 rounded-lg p-3">
               <h4 className="text-xs font-medium text-red-400 mb-2 flex items-center gap-1">
                 <AlertTriangle className="w-3 h-3" />
-                Conflict Details (top {topConflicts.length})
+                Issue details (top {topConflicts.length})
               </h4>
               <div className="space-y-1.5 max-h-40 overflow-y-auto">
                 {topConflicts.map((c, idx) => (
@@ -403,7 +403,7 @@ export default function RepairCommitModal({
                 ))}
                 {conflicts_if_committed.length > 3 && (
                   <div className="text-[10px] text-red-400/60 italic">
-                    +{conflicts_if_committed.length - 3} more conflicts
+                    +{conflicts_if_committed.length - 3} more issues
                   </div>
                 )}
               </div>
@@ -464,11 +464,11 @@ export default function RepairCommitModal({
               />
               <label htmlFor="acknowledge-conflicts" className="text-sm cursor-pointer select-none">
                 <span className="text-red-300 font-medium">
-                  I understand this will create conflicts
+                  I understand this update will create schedule issues
                 </span>
                 <span className="text-red-400/60 text-xs block mt-0.5">
-                  {risk.conflictCount} conflict
-                  {risk.conflictCount !== 1 ? 's' : ''} will need resolution after apply
+                  {risk.conflictCount} issue
+                  {risk.conflictCount !== 1 ? 's' : ''} will need follow-up after apply
                 </span>
               </label>
             </div>
@@ -476,11 +476,13 @@ export default function RepairCommitModal({
 
           {/* Notes */}
           <div>
-            <label className="block text-xs font-medium text-gray-400 mb-1">Notes (optional)</label>
+            <label className="block text-xs font-medium text-gray-400 mb-1">
+              Notes for operators (optional)
+            </label>
             <textarea
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              placeholder="Reason for this change..."
+              placeholder="Add context for this update..."
               className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 resize-none"
               rows={2}
             />
@@ -489,9 +491,7 @@ export default function RepairCommitModal({
 
         {/* Footer */}
         <div className="flex items-center justify-between px-5 py-4 border-t border-gray-700 bg-gray-800/50">
-          <div className="text-xs text-gray-500">
-            Plan: <span className="font-mono">{planId ? planId.slice(0, 12) + '...' : '—'}</span>
-          </div>
+          <div className="text-xs text-gray-500">Check the update before sending it to the schedule.</div>
           <div className="flex gap-2">
             <button
               onClick={onClose}
@@ -506,7 +506,7 @@ export default function RepairCommitModal({
               className="px-3 py-2 text-sm bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition flex items-center gap-1.5 disabled:opacity-50"
             >
               <Eye className="w-3.5 h-3.5" />
-              Review Changes
+              Back to Review
             </button>
             <button
               onClick={handleCommit}
@@ -529,7 +529,7 @@ export default function RepairCommitModal({
               ) : (
                 <>
                   <CheckCircle className="w-4 h-4" />
-                  Confirm Apply
+                  Apply to Schedule
                 </>
               )}
             </button>

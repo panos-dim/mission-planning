@@ -685,9 +685,9 @@ async function openApplyPage(
   expect(modeResponse.ok()).toBeTruthy()
   expect(planResponse.ok()).toBeTruthy()
 
-  await expect(page.getByRole('button', { name: /^Next$/i })).toBeVisible()
+  await expect(page.getByRole('button', { name: /^Review Plan$/i })).toBeVisible()
   await demoPause(page, 2)
-  await page.getByRole('button', { name: /^Next$/i }).click()
+  await page.getByRole('button', { name: /^Review Plan$/i }).click()
   await demoPause(page, 2)
 }
 
@@ -1003,7 +1003,7 @@ test.describe('Weekly operator schedule simulation', () => {
           await expect(page.getByText(`${plan.dropped.length} dropped`, { exact: true })).toBeVisible()
         }
       } else {
-        await expect(page.getByRole('heading', { name: 'Ready to Apply' })).toBeVisible()
+        await expect(page.getByRole('heading', { name: 'Ready to Schedule' })).toBeVisible()
       }
       await demoPause(page, 2)
 

@@ -5,18 +5,35 @@
  */
 
 import React, { useState, useMemo, useCallback, useEffect } from 'react'
-import { CheckSquare, History, Clock, RefreshCw, AlertTriangle } from 'lucide-react'
+import {
+  CheckSquare,
+  Clock,
+  RefreshCw,
+  AlertTriangle,
+  ChevronDown,
+  ChevronRight,
+  Trash2,
+} from 'lucide-react'
 import AcceptedOrders from './AcceptedOrders'
 import ScheduleTimeline from './ScheduleTimeline'
+import ConflictsPanel from './ConflictsPanel'
 import { useLockStore } from '../store/lockStore'
 import { AcceptedOrder } from '../types'
 import { SCHEDULE_TABS, SIMPLE_MODE_SCHEDULE_TABS } from '../constants/simpleMode'
 import type { ScheduledAcquisition } from './ScheduleTimeline'
 import { useMission } from '../context/MissionContext'
 import { useScheduleStore } from '../store/scheduleStore'
+import { useConflictStore } from '../store/conflictStore'
 import { useVisStore } from '../store/visStore'
 import { useSelectionStore } from '../store/selectionStore'
-import { AuditLogEntry, getCommitHistory } from '../api/scheduleApi'
+import {
+  AuditLogEntry,
+  getCommitHistory,
+  getConflicts,
+  getScheduleState,
+  bulkDeleteAcquisitions,
+} from '../api/scheduleApi'
+import { queryClient, queryKeys } from '../lib/queryClient'
 import {
   buildRecoveredOrdersFromScheduleItems,
   getAcceptedOrderAcquisitionCount,
@@ -25,7 +42,7 @@ import {
 interface SchedulePanelProps {
   orders: AcceptedOrder[]
   onOrdersChange: (orders: AcceptedOrder[]) => void
-  showHistoryTab?: boolean // Admin only
+  showHistoryTab?: boolean
 }
 
 type TabId = (typeof SCHEDULE_TABS)[keyof typeof SCHEDULE_TABS]
@@ -40,15 +57,53 @@ interface Tab {
 
 const POLL_INTERVAL_MS = 15_000
 
+function formatHistorySummary(log: AuditLogEntry): string {
+  const parts: string[] = []
+
+  if (log.acquisitions_created > 0) {
+    parts.push(`${log.acquisitions_created} added`)
+  }
+  if (log.acquisitions_dropped > 0) {
+    parts.push(`${log.acquisitions_dropped} removed`)
+  }
+  if (parts.length === 0) {
+    parts.push('No schedule changes')
+  }
+
+  return parts.join(' • ')
+}
+
+function formatHistoryTitle(log: AuditLogEntry): string {
+  if (log.commit_type === 'repair') return 'Schedule updated'
+  if (log.commit_type === 'force') return 'Schedule applied with override'
+  return 'Schedule applied'
+}
+
+function formatHistoryTime(value: string): string {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return 'Recent'
+  return parsed.toLocaleString()
+}
+
+function formatHistoryLabel(log: AuditLogEntry): string {
+  if (log.commit_type === 'repair') return 'Repair'
+  if (log.commit_type === 'force') return 'Override'
+  return 'Applied'
+}
+
 const SchedulePanel: React.FC<SchedulePanelProps> = ({
   orders,
   onOrdersChange,
   showHistoryTab = false,
 }) => {
   const [activeTab, setActiveTab] = useState<TabId>(SCHEDULE_TABS.COMMITTED)
+  const [showIssueReview, setShowIssueReview] = useState(false)
+  const [showRecentActions, setShowRecentActions] = useState(false)
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState<string | null>(null)
+  const [clearInProgress, setClearInProgress] = useState(false)
+  const [clearError, setClearError] = useState<string | null>(null)
   // PR-LOCK-OPS-01: Lock store for merging lock levels into timeline acquisitions
   const lockLevels = useLockStore((s) => s.levels)
   const toggleLock = useLockStore((s) => s.toggleLock)
@@ -66,6 +121,10 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
   const setTimeRangeFromIso = useVisStore((s) => s.setTimeRangeFromIso)
   const activeLeftPanel = useVisStore((s) => s.activeLeftPanel)
   const clearAcquisitionSelection = useSelectionStore((s) => s.selectAcquisition)
+  const conflicts = useConflictStore((s) => s.conflicts)
+  const setConflicts = useConflictStore((s) => s.setConflicts)
+  const setConflictLoading = useConflictStore((s) => s.setLoading)
+  const setConflictError = useConflictStore((s) => s.setError)
   const workspaceId = missionState.activeWorkspace || 'default'
   const currentWorkspaceScheduleItems = useMemo(
     () =>
@@ -202,12 +261,37 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
     if (currentWorkspaceScheduleItems.length === 0) return []
     return buildRecoveredOrdersFromScheduleItems(currentWorkspaceScheduleItems)
   }, [orders, currentWorkspaceScheduleItems])
+  const activeAcquisitionIds = useMemo(
+    () => masterAcquisitions.map((item) => item.id),
+    [masterAcquisitions],
+  )
+  const activeAcquisitionIdSet = useMemo(
+    () => new Set(activeAcquisitionIds),
+    [activeAcquisitionIds],
+  )
+  const activeConflicts = useMemo(
+    () =>
+      conflicts.filter((conflict) =>
+        conflict.acquisition_ids.some((id) => activeAcquisitionIdSet.has(id)),
+      ),
+    [conflicts, activeAcquisitionIdSet],
+  )
+  const activeConflictSummary = useMemo(
+    () => ({
+      total: activeConflicts.length,
+      errorCount: activeConflicts.filter((conflict) => conflict.severity === 'error').length,
+      warningCount: activeConflicts.filter((conflict) => conflict.severity === 'warning').length,
+    }),
+    [activeConflicts],
+  )
 
   const committedAcquisitionCount = useMemo(
     () => getAcceptedOrderAcquisitionCount(committedOrders),
     [committedOrders],
   )
-  const historyCount = auditLogs.length
+  const recentAuditLogs = useMemo(() => auditLogs.slice(0, 6), [auditLogs])
+  const latestAuditLog = recentAuditLogs[0] ?? null
+  const hasActiveSchedule = committedAcquisitionCount > 0
 
   const fetchCommitHistory = useCallback(async () => {
     if (!workspaceId) return
@@ -223,6 +307,19 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
     }
   }, [workspaceId])
 
+  const fetchScheduleConflicts = useCallback(async () => {
+    if (!workspaceId) return
+    setConflictLoading(true)
+    try {
+      const response = await getConflicts({ workspace_id: workspaceId })
+      setConflicts(response.conflicts)
+    } catch (error) {
+      setConflictError(error instanceof Error ? error.message : 'Failed to load schedule issues')
+    } finally {
+      setConflictLoading(false)
+    }
+  }, [workspaceId, setConflictError, setConflictLoading, setConflicts])
+
   // Selection persistence: if polling removes the focused acquisition, clear both stores
   useEffect(() => {
     if (!focusedAcquisitionId) return
@@ -236,12 +333,64 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
   useEffect(() => {
     if (activeLeftPanel !== 'schedule' || !workspaceId) return
     void fetchCommitHistory()
-  }, [activeLeftPanel, workspaceId, fetchCommitHistory])
+    void fetchScheduleConflicts()
+  }, [activeLeftPanel, workspaceId, fetchCommitHistory, fetchScheduleConflicts])
 
   useEffect(() => {
-    if (activeLeftPanel !== 'schedule' || activeTab !== SCHEDULE_TABS.HISTORY) return
-    void fetchCommitHistory()
-  }, [activeLeftPanel, activeTab, fetchCommitHistory])
+    if (activeConflictSummary.total === 0) {
+      setShowIssueReview(false)
+    }
+  }, [activeConflictSummary.total])
+
+  useEffect(() => {
+    if (!hasActiveSchedule) {
+      setShowRecentActions(false)
+    }
+  }, [hasActiveSchedule])
+
+  const handleClearSchedule = useCallback(async () => {
+    if (!workspaceId || clearInProgress) return
+
+    const confirmed = window.confirm(
+      'Clear all scheduled acquisitions in this workspace? This is intended for resetting the schedule view before a new planning run.',
+    )
+    if (!confirmed) return
+
+    setClearInProgress(true)
+    setClearError(null)
+
+    try {
+      const stateResponse = await getScheduleState(workspaceId, { include_failed: true })
+      const acquisitionIds = (stateResponse.state.acquisitions || []).map((acq) => acq.id)
+
+      if (acquisitionIds.length > 0) {
+        await bulkDeleteAcquisitions({
+          acquisition_ids: acquisitionIds,
+          workspace_id: workspaceId,
+          force: true,
+        })
+      }
+
+      onOrdersChange([])
+      focusAcquisition(null)
+      clearAcquisitionSelection(null)
+      await queryClient.invalidateQueries({ queryKey: queryKeys.schedule.all })
+      await fetchMaster({ workspace_id: workspaceId })
+      await fetchScheduleConflicts()
+    } catch (error) {
+      setClearError(error instanceof Error ? error.message : 'Failed to clear the current schedule')
+    } finally {
+      setClearInProgress(false)
+    }
+  }, [
+    clearAcquisitionSelection,
+    clearInProgress,
+    fetchMaster,
+    fetchScheduleConflicts,
+    focusAcquisition,
+    onOrdersChange,
+    workspaceId,
+  ])
 
   const tabs: Tab[] = [
     {
@@ -259,19 +408,12 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
       badge: masterAcquisitions.length > 0 ? masterAcquisitions.length : undefined,
       badgeColor: 'green',
     },
-    {
-      id: SCHEDULE_TABS.HISTORY,
-      label: 'History',
-      icon: History,
-      badge: historyCount > 0 ? historyCount : undefined,
-      badgeColor: 'green',
-    },
   ]
 
   // Filter tabs based on Simple Mode config
-  const visibleTabs = showHistoryTab
-    ? tabs
-    : tabs.filter((tab) => (SIMPLE_MODE_SCHEDULE_TABS as readonly string[]).includes(tab.id))
+  const visibleTabs = tabs.filter((tab) =>
+    (SIMPLE_MODE_SCHEDULE_TABS as readonly string[]).includes(tab.id),
+  )
 
   return (
     <div className="h-full flex flex-col bg-gray-900">
@@ -324,7 +466,178 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
       {/* Tab Content */}
       <div className="flex-1 overflow-hidden">
         {activeTab === SCHEDULE_TABS.COMMITTED && (
-          <AcceptedOrders orders={committedOrders} onOrdersChange={onOrdersChange} />
+          <div className="h-full flex min-h-0 flex-col">
+            <div className="border-b border-gray-700 px-4 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-medium text-gray-100">Schedule Summary</h3>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {hasActiveSchedule
+                      ? `${committedAcquisitionCount} scheduled acquisition${
+                          committedAcquisitionCount === 1 ? '' : 's'
+                        } ready in this schedule window`
+                      : 'No scheduled acquisitions right now'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void fetchCommitHistory()}
+                  className="inline-flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-xs text-gray-300 hover:bg-gray-800"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${historyLoading ? 'animate-spin' : ''}`} />
+                  <span>Refresh</span>
+                </button>
+              </div>
+
+              {clearError && (
+                <div className="mt-3 rounded border border-red-900 bg-red-950/40 px-3 py-2 text-xs text-red-200">
+                  {clearError}
+                </div>
+              )}
+
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {activeConflictSummary.errorCount > 0 && (
+                  <span className="rounded bg-red-900/30 px-2 py-1 text-xs font-medium text-red-300">
+                    {activeConflictSummary.errorCount} blocking issue
+                    {activeConflictSummary.errorCount === 1 ? '' : 's'}
+                  </span>
+                )}
+                {activeConflictSummary.warningCount > 0 && (
+                  <span className="rounded bg-yellow-900/30 px-2 py-1 text-xs font-medium text-yellow-300">
+                    {activeConflictSummary.warningCount} warning{activeConflictSummary.warningCount === 1 ? '' : 's'}
+                  </span>
+                )}
+                {activeConflictSummary.total === 0 && (
+                  <span className="rounded bg-green-900/30 px-2 py-1 text-xs font-medium text-green-300">
+                    {hasActiveSchedule ? 'Schedule clear' : 'Nothing scheduled'}
+                  </span>
+                )}
+                {hasActiveSchedule && latestAuditLog && (
+                  <span className="rounded bg-gray-800 px-2 py-1 text-xs text-gray-300">
+                    Last change: {formatHistorySummary(latestAuditLog)}
+                  </span>
+                )}
+              </div>
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                {committedAcquisitionCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => void handleClearSchedule()}
+                    disabled={clearInProgress}
+                    className="inline-flex items-center gap-1 rounded border border-red-800/80 px-2 py-1 text-xs text-red-200 hover:bg-red-950/40 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>{clearInProgress ? 'Clearing…' : 'Clear current schedule'}</span>
+                  </button>
+                )}
+                {activeConflictSummary.total > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowIssueReview((value) => !value)}
+                    className="inline-flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-xs text-gray-300 hover:bg-gray-800"
+                  >
+                    {showIssueReview ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                    <span>Review issues</span>
+                  </button>
+                )}
+                {hasActiveSchedule && recentAuditLogs.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowRecentActions((value) => !value)}
+                    className="inline-flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-xs text-gray-300 hover:bg-gray-800"
+                  >
+                    {showRecentActions ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                    <span>Recent changes</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {showIssueReview && (
+              <div className="border-b border-gray-800">
+                <ConflictsPanel
+                  className="max-h-[260px]"
+                  heading="Needs Attention"
+                  refreshOnPanel="schedule"
+                  loadingMessage="Loading schedule status..."
+                  emptyMessage="No active issues in this schedule window."
+                  clearLabel="Schedule clear"
+                  compact
+                  maxItems={4}
+                  allowedAcquisitionIds={activeAcquisitionIds}
+                />
+              </div>
+            )}
+
+            {showRecentActions && hasActiveSchedule && (
+              <div className="border-b border-gray-800">
+                {historyError && (
+                  <div className="m-4 rounded border border-red-900 bg-red-950/40 p-3 text-xs text-red-200">
+                    <div className="flex items-center gap-2 font-medium">
+                      <AlertTriangle className="h-4 w-4" />
+                      <span>Unable to load recent schedule actions</span>
+                    </div>
+                    <p className="mt-1 text-red-200/80">{historyError}</p>
+                  </div>
+                )}
+
+                {!historyError && historyLoading && recentAuditLogs.length === 0 && (
+                  <div className="flex-1 flex items-center justify-center text-sm text-gray-400">
+                    Loading recent schedule actions...
+                  </div>
+                )}
+
+                {!historyError && !historyLoading && recentAuditLogs.length === 0 && (
+                  <div className="flex-1 flex flex-col items-center justify-center px-6 text-center text-gray-500">
+                    <CheckSquare className="w-10 h-10 mb-3 opacity-50" />
+                    <h4 className="text-sm font-medium text-gray-300">No recent activity yet</h4>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Applied schedules and repairs will appear here after planners submit changes.
+                    </p>
+                  </div>
+                )}
+
+                {recentAuditLogs.length > 0 && (
+                  <div className="max-h-[260px] overflow-y-auto">
+                    {recentAuditLogs.map((log) => (
+                      <article
+                        key={log.id}
+                        className="border-b border-gray-800 px-4 py-3"
+                        data-history-entry={log.id}
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <div className="text-sm font-medium text-gray-100">
+                              {formatHistoryTitle(log)}
+                            </div>
+                            <p className="mt-1 text-xs text-gray-400">
+                              {formatHistoryTime(log.created_at)}
+                            </p>
+                            <p className="mt-2 text-sm text-gray-200">{formatHistorySummary(log)}</p>
+                            {log.notes && (
+                              <p className="mt-1 text-xs text-gray-400 line-clamp-2">{log.notes}</p>
+                            )}
+                          </div>
+                          <div className="text-right">
+                            <div
+                              className="rounded bg-gray-800 px-2 py-1 text-xs font-medium text-gray-300"
+                            >
+                              {formatHistoryLabel(log)}
+                            </div>
+                          </div>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="min-h-0 flex-1">
+              <AcceptedOrders orders={committedOrders} onOrdersChange={onOrdersChange} />
+            </div>
+          </div>
         )}
 
         {/* PR-UI-006 / PR-UI-030: Timeline tab — uses live master schedule + Cesium sync */}
@@ -339,112 +652,6 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
           />
         )}
 
-        {activeTab === SCHEDULE_TABS.HISTORY && showHistoryTab && (
-          <div className="h-full flex flex-col bg-gray-900">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
-              <div>
-                <h3 className="text-sm font-medium text-gray-100">Schedule History</h3>
-                <p className="text-xs text-gray-500">
-                  Recent committed schedule changes for this workspace
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => void fetchCommitHistory()}
-                className="inline-flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-xs text-gray-300 hover:bg-gray-800"
-              >
-                <RefreshCw className={`h-3.5 w-3.5 ${historyLoading ? 'animate-spin' : ''}`} />
-                <span>Refresh</span>
-              </button>
-            </div>
-
-            {historyError && (
-              <div className="m-4 rounded border border-red-900 bg-red-950/40 p-3 text-xs text-red-200">
-                <div className="flex items-center gap-2 font-medium">
-                  <AlertTriangle className="h-4 w-4" />
-                  <span>Unable to load schedule history</span>
-                </div>
-                <p className="mt-1 text-red-200/80">{historyError}</p>
-              </div>
-            )}
-
-            {!historyError && historyLoading && auditLogs.length === 0 && (
-              <div className="flex-1 flex items-center justify-center text-sm text-gray-400">
-                Loading schedule history...
-              </div>
-            )}
-
-            {!historyError && !historyLoading && auditLogs.length === 0 && (
-              <div className="flex-1 flex flex-col items-center justify-center px-6 text-center text-gray-500">
-                <History className="w-10 h-10 mb-3 opacity-50" />
-                <h4 className="text-sm font-medium text-gray-300">No schedule history yet</h4>
-                <p className="mt-1 text-xs text-gray-500">
-                  Committed schedule changes will appear here for operator review.
-                </p>
-              </div>
-            )}
-
-            {auditLogs.length > 0 && (
-              <div className="flex-1 overflow-y-auto">
-                {auditLogs.map((log) => (
-                  <article
-                    key={log.id}
-                    className="border-b border-gray-800 px-4 py-3"
-                    data-history-entry={log.id}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-gray-100">
-                            {log.commit_type === 'force'
-                              ? 'Forced Apply'
-                              : log.commit_type === 'repair'
-                                ? 'Repair Apply'
-                                : 'Schedule Apply'}
-                          </span>
-                          <span className="rounded bg-gray-800 px-2 py-0.5 text-[11px] uppercase tracking-wide text-gray-300">
-                            {log.commit_type}
-                          </span>
-                        </div>
-                        <p className="mt-1 text-xs text-gray-400">
-                          {new Date(log.created_at).toLocaleString()}
-                        </p>
-                      </div>
-                      <div className="text-right text-xs text-gray-400">
-                        <div>{log.acquisitions_created} created</div>
-                        {log.acquisitions_dropped > 0 && <div>{log.acquisitions_dropped} dropped</div>}
-                        {log.conflicts_after > 0 && (
-                          <div className="text-yellow-400">{log.conflicts_after} conflicts remain</div>
-                        )}
-                      </div>
-                    </div>
-
-                    <dl className="mt-3 grid grid-cols-2 gap-2 text-xs text-gray-400">
-                      <div>
-                        <dt className="text-gray-500">Plan</dt>
-                        <dd className="font-mono text-gray-300">{log.plan_id}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-gray-500">Audit</dt>
-                        <dd className="font-mono text-gray-300">{log.id}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-gray-500">Conflicts Before</dt>
-                        <dd className="text-gray-300">{log.conflicts_before}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-gray-500">Conflicts After</dt>
-                        <dd className="text-gray-300">{log.conflicts_after}</dd>
-                      </div>
-                    </dl>
-
-                    {log.notes && <p className="mt-3 text-xs text-gray-300">{log.notes}</p>}
-                  </article>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
       </div>
     </div>
   )

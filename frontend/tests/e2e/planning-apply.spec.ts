@@ -691,8 +691,8 @@ async function openPlanningApplyStep(
     await generateButton.click({ force: true })
   }
 
-  await expect(page.getByRole('button', { name: /^Next$/i })).toBeVisible()
-  await page.getByRole('button', { name: /^Next$/i }).click()
+  await expect(page.getByRole('button', { name: /^Review Plan$/i })).toBeVisible()
+  await page.getByRole('button', { name: /^Review Plan$/i }).click()
 
   await page.screenshot({
     path: testInfo.outputPath(screenshotName),
@@ -782,12 +782,12 @@ test.describe('Planning apply confirmation UI', () => {
       workspace_id: 'default',
     })
 
-    await expect(page.getByText('Operations Snapshot', { exact: true })).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Ready to Apply' })).toBeVisible()
-    await expect(page.getByText('No conflicts', { exact: true })).toBeVisible()
+    await expect(page.getByText('Plan Summary', { exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Ready to Schedule' })).toBeVisible()
+    await expect(page.getByText('Ready to schedule', { exact: true })).toBeVisible()
     await expect(page.getByText('2 new', { exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Apply Plan' })).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Target Assignments' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Apply to Schedule' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Scheduled Targets' })).toBeVisible()
     await expect(assignmentFilter(page, 'All', 2)).toBeVisible()
     await expect(assignmentFilter(page, 'New', 2)).toBeVisible()
     await expect(page.getByRole('button', { name: /^Moved/ })).toHaveCount(0)
@@ -841,13 +841,13 @@ test.describe('Planning apply confirmation UI', () => {
       workspace_id: 'default',
     })
 
-    await expect(page.getByText('Operations Snapshot', { exact: true })).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Conflicts Detected' })).toBeVisible()
+    await expect(page.getByText('Plan Summary', { exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Needs Attention' })).toBeVisible()
     await expect(page.getByText('1 kept', { exact: true })).toBeVisible()
     await expect(page.getByText('1 added', { exact: true })).toBeVisible()
     await expect(page.getByText('1 dropped', { exact: true })).toBeVisible()
-    await expect(page.getByText('Conflicts (1)', { exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Apply Anyway' })).toBeVisible()
+    await expect(page.getByText('Issues to Review (1)', { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Apply with Issues' })).toBeVisible()
     await expect(assignmentRow(page, 'PriorityAnchor', 'NEW')).toBeVisible()
     await expect(assignmentRow(page, 'LegacyDrop', 'REMOVED')).toBeVisible()
     await expect(assignmentFilter(page, 'All', 2)).toBeVisible()
@@ -902,8 +902,8 @@ test.describe('Planning apply confirmation UI', () => {
 
     await openPlanningApplyStep(page, targets, testInfo, 'planning-apply-repair-moved.png')
 
-    await expect(page.getByText('Operations Snapshot', { exact: true })).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Review Changes' })).toBeVisible()
+    await expect(page.getByText('Plan Summary', { exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Review Plan' })).toBeVisible()
     await expect(page.getByText('1 kept', { exact: true })).toBeVisible()
     await expect(page.getByText('1 moved', { exact: true })).toBeVisible()
     await expect(assignmentFilter(page, 'All', 1)).toBeVisible()
@@ -912,9 +912,9 @@ test.describe('Planning apply confirmation UI', () => {
     await expect(page.getByRole('button', { name: /^Removed/ })).toHaveCount(0)
     await expect(page.getByText('MOVED', { exact: true })).toHaveCount(1)
     await expect(assignmentRow(page, 'RescheduledBravo', 'MOVED')).toBeVisible()
-    await expect(page.getByText('Conflicts (1)', { exact: true })).toBeVisible()
+    await expect(page.getByText('Issues to Review (1)', { exact: true })).toBeVisible()
     await expect(page.getByText('Slew Infeasible', { exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Apply Plan' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Apply to Schedule' })).toBeVisible()
     await expect(page.getByText(/Mar 24, 03:45.*→.*Mar 24, 04:15/)).toBeVisible()
   })
 
@@ -1060,13 +1060,13 @@ test.describe('Planning apply confirmation UI', () => {
 
     await openPlanningApplyStep(page, targets, testInfo, 'planning-apply-forced-conflict.png')
 
-    await expect(page.getByRole('heading', { name: 'Conflicts Detected' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Needs Attention' })).toBeVisible()
     await expect(page.getByText('Time Overlap', { exact: true })).toBeVisible()
 
     const commitResponsePromise = page.waitForResponse((response) =>
       response.url().includes('/api/v1/schedule/commit/direct'),
     )
-    await page.getByRole('button', { name: 'Apply Anyway' }).click()
+    await page.getByRole('button', { name: 'Apply with Issues' }).click()
     const commitResponse = await commitResponsePromise
     expect(commitResponse.ok()).toBeTruthy()
 
@@ -1076,8 +1076,11 @@ test.describe('Planning apply confirmation UI', () => {
       force: true,
     })
 
-    await openLeftPanel(page, 'Conflicts', page.getByText('1 errors', { exact: true }))
-    await expect(page.getByText('1 errors', { exact: true })).toBeVisible()
+    const summaryHeading = page.getByText('Schedule Summary', { exact: true })
+    await openLeftPanel(page, 'Schedule', summaryHeading)
+    await expect(page.getByText('Schedule Summary', { exact: true })).toBeVisible()
+    await expect(page.getByText('1 blocking issue', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Review issues', exact: true }).click()
     await expect(page.getByText('Time Overlap', { exact: true })).toBeVisible()
     await expect(page.getByText(/Alpha and Bravo overlap by 60.0s/)).toBeVisible()
   })
@@ -1133,7 +1136,7 @@ test.describe('Planning apply confirmation UI', () => {
 
     await openPlanningApplyStep(page, targets, testInfo, 'planning-apply-double-submit-guard.png')
 
-    const applyButton = page.getByRole('button', { name: 'Apply Plan' })
+    const applyButton = page.getByRole('button', { name: 'Apply to Schedule' })
     await expect(applyButton).toBeVisible()
 
     await applyButton.evaluate((button) => {
@@ -1144,7 +1147,7 @@ test.describe('Planning apply confirmation UI', () => {
     await expect
       .poll(() => commitRequestCount, { timeout: 5000 })
       .toBe(1)
-    await expect(page.getByRole('button', { name: /Apply Plan/i })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /Apply to Schedule/i })).toHaveCount(0)
   })
 
   test('keeps the review flow open when backend apply fails with a stale schedule conflict', async ({
@@ -1192,23 +1195,23 @@ test.describe('Planning apply confirmation UI', () => {
 
     await openPlanningApplyStep(page, targets, testInfo, 'planning-apply-stale-conflict.png')
 
-    await expect(page.getByRole('heading', { name: 'Ready to Apply' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Ready to Schedule' })).toBeVisible()
 
     const commitResponsePromise = page.waitForResponse((response) =>
       response.url().includes('/api/v1/schedule/commit/direct'),
     )
-    await page.getByRole('button', { name: 'Apply Plan' }).click()
+    await page.getByRole('button', { name: 'Apply to Schedule' }).click()
     const commitResponse = await commitResponsePromise
     expect(commitResponse.status()).toBe(409)
 
-    await expect(page.getByRole('heading', { name: 'Ready to Apply' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Ready to Schedule' })).toBeVisible()
     await expect(
       page.getByText(
         'Schedule state changed before apply. Refresh conflicts and review the latest plan.',
         { exact: true },
       ),
     ).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Apply Plan' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Apply to Schedule' })).toBeVisible()
   })
 
   test('blocks a second operator after another session commits first', async ({ browser }, testInfo) => {
@@ -1298,13 +1301,13 @@ test.describe('Planning apply confirmation UI', () => {
         'planning-apply-two-operator-b.png',
       )
 
-      await expect(operatorAPage.getByRole('heading', { name: 'Ready to Apply' })).toBeVisible()
-      await expect(operatorBPage.getByRole('heading', { name: 'Ready to Apply' })).toBeVisible()
+      await expect(operatorAPage.getByRole('heading', { name: 'Ready to Schedule' })).toBeVisible()
+      await expect(operatorBPage.getByRole('heading', { name: 'Ready to Schedule' })).toBeVisible()
 
       const operatorACommitResponse = operatorAPage.waitForResponse((response) =>
         response.url().includes('/api/v1/schedule/commit/direct'),
       )
-      await operatorAPage.getByRole('button', { name: 'Apply Plan' }).click()
+      await operatorAPage.getByRole('button', { name: 'Apply to Schedule' }).click()
       expect((await operatorACommitResponse).ok()).toBeTruthy()
 
       await expect.poll(() => successfulCommitCount, { timeout: 5000 }).toBe(1)
@@ -1312,7 +1315,7 @@ test.describe('Planning apply confirmation UI', () => {
       const operatorBCommitResponse = operatorBPage.waitForResponse((response) =>
         response.url().includes('/api/v1/schedule/commit/direct'),
       )
-      await operatorBPage.getByRole('button', { name: 'Apply Plan' }).click()
+      await operatorBPage.getByRole('button', { name: 'Apply to Schedule' }).click()
       expect((await operatorBCommitResponse).status()).toBe(409)
 
       await expect(
@@ -1321,8 +1324,8 @@ test.describe('Planning apply confirmation UI', () => {
           { exact: true },
         ),
       ).toBeVisible()
-      await expect(operatorBPage.getByRole('heading', { name: 'Ready to Apply' })).toBeVisible()
-      await expect(operatorBPage.getByRole('button', { name: 'Apply Plan' })).toBeVisible()
+      await expect(operatorBPage.getByRole('heading', { name: 'Ready to Schedule' })).toBeVisible()
+      await expect(operatorBPage.getByRole('button', { name: 'Apply to Schedule' })).toBeVisible()
     } finally {
       await operatorAContext.close().catch(() => undefined)
       await operatorBContext.close().catch(() => undefined)
@@ -1432,28 +1435,28 @@ test.describe('Planning apply confirmation UI', () => {
       const operatorACommitResponse = operatorAPage.waitForResponse((response) =>
         response.url().includes('/api/v1/schedule/commit/direct'),
       )
-      await operatorAPage.getByRole('button', { name: 'Apply Plan' }).click()
+      await operatorAPage.getByRole('button', { name: 'Apply to Schedule' }).click()
       await delayedRouteReady
       await expect(operatorAPage.getByRole('button', { name: 'Applying…' })).toBeVisible()
 
       const operatorBCommitResponse = operatorBPage.waitForResponse((response) =>
         response.url().includes('/api/v1/schedule/commit/direct'),
       )
-      await operatorBPage.getByRole('button', { name: 'Apply Plan' }).click()
+      await operatorBPage.getByRole('button', { name: 'Apply to Schedule' }).click()
       expect((await operatorBCommitResponse).ok()).toBeTruthy()
       await expect.poll(() => successfulCommitCount, { timeout: 5000 }).toBe(1)
 
       releaseDelayedCommit?.()
       expect((await operatorACommitResponse).status()).toBe(409)
 
-      await expect(operatorAPage.getByRole('heading', { name: 'Ready to Apply' })).toBeVisible()
+      await expect(operatorAPage.getByRole('heading', { name: 'Ready to Schedule' })).toBeVisible()
       await expect(
         operatorAPage.getByText(
           'Schedule state changed before apply. Refresh conflicts and review the latest plan.',
           { exact: true },
         ),
       ).toBeVisible()
-      await expect(operatorAPage.getByRole('button', { name: 'Apply Plan' })).toBeVisible()
+      await expect(operatorAPage.getByRole('button', { name: 'Apply to Schedule' })).toBeVisible()
     } finally {
       await operatorAContext.close().catch(() => undefined)
       await operatorBContext.close().catch(() => undefined)
@@ -1515,7 +1518,7 @@ test.describe('Planning apply confirmation UI', () => {
 
     await openPlanningApplyStep(page, targets, testInfo, 'planning-apply-transport-retry.png')
 
-    await page.getByRole('button', { name: 'Apply Plan' }).click()
+    await page.getByRole('button', { name: 'Apply to Schedule' }).click()
 
     await expect
       .poll(() => commitAttempts, { timeout: 5000 })
@@ -1525,19 +1528,19 @@ test.describe('Planning apply confirmation UI', () => {
         exact: true,
       }),
     ).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Ready to Apply' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Apply Plan' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Ready to Schedule' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Apply to Schedule' })).toBeVisible()
 
     const retryCommitResponse = page.waitForResponse((response) =>
       response.url().includes('/api/v1/schedule/commit/direct'),
     )
-    await page.getByRole('button', { name: 'Apply Plan' }).click()
+    await page.getByRole('button', { name: 'Apply to Schedule' }).click()
     expect((await retryCommitResponse).ok()).toBeTruthy()
 
     await expect
       .poll(() => commitAttempts, { timeout: 5000 })
       .toBe(2)
-    await expect(page.getByRole('button', { name: /Apply Plan/i })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /Apply to Schedule/i })).toHaveCount(0)
   })
 
   test('fails closed on retry when the first dropped apply may already have committed', async ({
@@ -1602,7 +1605,7 @@ test.describe('Planning apply confirmation UI', () => {
       'planning-apply-transport-unknown-outcome.png',
     )
 
-    await page.getByRole('button', { name: 'Apply Plan' }).click()
+    await page.getByRole('button', { name: 'Apply to Schedule' }).click()
 
     await expect
       .poll(() => commitAttempts, { timeout: 5000 })
@@ -1612,12 +1615,12 @@ test.describe('Planning apply confirmation UI', () => {
         exact: true,
       }),
     ).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Apply Plan' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Apply to Schedule' })).toBeVisible()
 
     const retryCommitResponse = page.waitForResponse((response) =>
       response.url().includes('/api/v1/schedule/commit/direct'),
     )
-    await page.getByRole('button', { name: 'Apply Plan' }).click()
+    await page.getByRole('button', { name: 'Apply to Schedule' }).click()
     expect((await retryCommitResponse).status()).toBe(409)
 
     await expect
@@ -1629,8 +1632,8 @@ test.describe('Planning apply confirmation UI', () => {
         { exact: true },
       ),
     ).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Ready to Apply' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Apply Plan' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Ready to Schedule' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Apply to Schedule' })).toBeVisible()
   })
 
   test('reloads into committed schedule state after an ambiguous dropped apply', async ({
@@ -1780,7 +1783,7 @@ test.describe('Planning apply confirmation UI', () => {
 
     await openPlanningApplyStep(page, targets, testInfo, 'planning-apply-refresh-recovery.png')
 
-    await page.getByRole('button', { name: 'Apply Plan' }).click()
+    await page.getByRole('button', { name: 'Apply to Schedule' }).click()
     await expect(
       page.getByText('Apply request did not complete. Verify schedule state before retrying.', {
         exact: true,
@@ -1794,14 +1797,14 @@ test.describe('Planning apply confirmation UI', () => {
         exact: true,
       }),
     ).toHaveCount(0)
-    await expect(page.getByRole('heading', { name: 'Ready to Apply' })).toHaveCount(0)
+    await expect(page.getByRole('heading', { name: 'Ready to Schedule' })).toHaveCount(0)
 
-    const historyTab = page.getByRole('button', { name: /^History/ })
-    await openLeftPanel(page, 'Schedule', historyTab)
-    await historyTab.click()
-    await expect(page.getByText('Schedule History', { exact: true })).toBeVisible()
+    const summaryHeading = page.getByText('Schedule Summary', { exact: true })
+    await openLeftPanel(page, 'Schedule', summaryHeading)
+    await expect(page.getByText('Schedule Summary', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Recent changes', exact: true }).click()
     await expect(page.getByText('Recovered after transport interruption', { exact: true })).toBeVisible()
-    await expect(page.getByText('2 created', { exact: true })).toBeVisible()
-    await expect(page.getByText('recovered-plan-1', { exact: true })).toBeVisible()
+    await expect(page.getByText('2 added', { exact: true })).toBeVisible()
+    await expect(page.getByText('Applied', { exact: true })).toBeVisible()
   })
 })
