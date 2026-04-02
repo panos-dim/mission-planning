@@ -588,6 +588,86 @@ class TestScheduleCommitConflictDetection:
         assert state.status_code == 200, state.json()
         assert len(state.json()["state"]["acquisitions"]) == 2, state.json()
 
+    def test_direct_commit_retry_recovers_after_internal_commit_failure(
+        self,
+        isolated_schedule_api: Tuple[TestClient, ScheduleDB, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A failed commit attempt must not poison a later identical retry."""
+        client, db, workspace_id = isolated_schedule_api
+
+        base_start = datetime.now(timezone.utc) + timedelta(days=19)
+        request_body = {
+            "workspace_id": workspace_id,
+            "algorithm": "regression_test",
+            "lock_level": "none",
+            "items": [
+                {
+                    "opportunity_id": "retry-after-failure-1",
+                    "satellite_id": "SAT-1",
+                    "target_id": "RECOVER-A",
+                    "start_time": _iso(base_start),
+                    "end_time": _iso(base_start + timedelta(minutes=5)),
+                    "roll_angle_deg": 0.0,
+                    "pitch_angle_deg": 0.0,
+                }
+            ],
+        }
+
+        original_commit_plan = db.commit_plan
+        commit_attempts = 0
+
+        def flaky_commit_plan(*args, **kwargs):
+            nonlocal commit_attempts
+            commit_attempts += 1
+            if commit_attempts == 1:
+                raise RuntimeError("simulated commit_plan failure")
+            return original_commit_plan(*args, **kwargs)
+
+        monkeypatch.setattr(db, "commit_plan", flaky_commit_plan)
+
+        first_commit = client.post("/api/v1/schedule/commit/direct", json=request_body)
+        assert first_commit.status_code == 500, first_commit.json()
+        assert "simulated commit_plan failure" in first_commit.json()["detail"]
+
+        state_after_failure = client.get(
+            "/api/v1/schedule/state",
+            params={"workspace_id": workspace_id},
+        )
+        assert state_after_failure.status_code == 200, state_after_failure.json()
+        assert (
+            len(state_after_failure.json()["state"]["acquisitions"]) == 0
+        ), state_after_failure.json()
+
+        second_commit = client.post("/api/v1/schedule/commit/direct", json=request_body)
+        assert second_commit.status_code == 200, second_commit.json()
+        assert second_commit.json()["committed"] == 1, second_commit.json()
+        assert commit_attempts == 2
+
+        third_commit = client.post("/api/v1/schedule/commit/direct", json=request_body)
+        assert third_commit.status_code == 409, third_commit.json()
+        detail = third_commit.json()["detail"]
+        assert "Duplicate commit detected" in detail["message"], detail
+
+        final_state = client.get(
+            "/api/v1/schedule/state",
+            params={"workspace_id": workspace_id},
+        )
+        assert final_state.status_code == 200, final_state.json()
+        acquisitions = final_state.json()["state"]["acquisitions"]
+        assert len(acquisitions) == 1, final_state.json()
+        assert acquisitions[0]["target_id"] == "RECOVER-A", final_state.json()
+
+        with db._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT status FROM plans WHERE workspace_id = ? ORDER BY created_at ASC",
+                (workspace_id,),
+            )
+            statuses = [row["status"] for row in cursor.fetchall()]
+
+        assert statuses == ["candidate", "committed"], statuses
+
     def test_direct_commit_materializes_missing_workspace_scope(
         self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
     ) -> None:
