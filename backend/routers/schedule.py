@@ -28,10 +28,16 @@ from backend.scheduling_mode import (
     record_schedule_diff,
 )
 from backend.order_materialization import prepare_recurring_planner_inputs
+from backend.reshuffle_explainer import (
+    build_reshuffle_explainer,
+    get_reshuffle_artifact_paths,
+    write_reshuffle_artifacts,
+)
 from backend.schedule_persistence import (
     DEFAULT_WORKSPACE_ID,
     SCHEMA_VERSION,
     Acquisition,
+    Plan,
     ScheduleDB,
     get_schedule_db,
 )
@@ -78,6 +84,119 @@ def _opportunity_lineage(opp: Any) -> Dict[str, Optional[str]]:
             canonical_target_id or target_id,
         ),
     }
+
+
+def _parse_plan_config(plan: Optional[Plan]) -> Dict[str, Any]:
+    """Parse a persisted plan config defensively."""
+    if plan is None or not plan.config_json:
+        return {}
+    try:
+        parsed = json.loads(plan.config_json)
+        return parsed if isinstance(parsed, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def _resolve_mode_used(plan: Optional[Plan], *, fallback: str) -> str:
+    """Resolve the scheduling/apply mode recorded for audit summaries."""
+    config = _parse_plan_config(plan)
+    planning_mode = config.get("planning_mode")
+    if isinstance(planning_mode, str) and planning_mode.strip():
+        return planning_mode.strip()
+
+    schedule_context = config.get("schedule_context")
+    if isinstance(schedule_context, dict):
+        nested_mode = schedule_context.get("planning_mode")
+        if isinstance(nested_mode, str) and nested_mode.strip():
+            return nested_mode.strip()
+
+    source = config.get("source")
+    if isinstance(source, str) and source.strip() == "direct_commit":
+        return "direct_commit"
+
+    return fallback
+
+
+def _capture_revision_baseline(
+    db: ScheduleDB,
+    workspace_id: str,
+) -> tuple[int, List[Acquisition]]:
+    """Capture the active schedule state before an apply mutates it."""
+    return (
+        db.get_schedule_revision(workspace_id),
+        db.list_workspace_acquisitions_strict(workspace_id, include_failed=False),
+    )
+
+
+def _create_commit_audit_with_explainer(
+    db: ScheduleDB,
+    *,
+    workspace_id: str,
+    plan_id: str,
+    commit_type: str,
+    config_hash: str,
+    mode_used: str,
+    previous_revision_id: int,
+    before_acquisitions: List[Acquisition],
+    acquisitions_created: int,
+    acquisitions_dropped: int,
+    committed_by: Optional[str] = None,
+    repair_diff: Optional[Dict[str, Any]] = None,
+    score_before: Optional[float] = None,
+    score_after: Optional[float] = None,
+    conflicts_before: int = 0,
+    conflicts_after: int = 0,
+    notes: Optional[str] = None,
+):
+    """Persist a commit audit log plus the latest reshuffle explainer artifacts."""
+    revision_id = db.get_schedule_revision(workspace_id)
+    after_acquisitions = db.list_workspace_acquisitions_strict(
+        workspace_id,
+        include_failed=False,
+    )
+    explainer = build_reshuffle_explainer(
+        before_acquisitions,
+        after_acquisitions,
+        workspace_id=workspace_id,
+        revision_id=revision_id,
+        previous_revision_id=previous_revision_id,
+        mode_used=mode_used,
+        plan_id=plan_id,
+        commit_type=commit_type,
+    )
+    explainer["artifact_paths"] = get_reshuffle_artifact_paths()
+
+    audit_log = db.create_commit_audit_log(
+        plan_id=plan_id,
+        commit_type=commit_type,
+        config_hash=config_hash,
+        acquisitions_created=acquisitions_created,
+        acquisitions_dropped=acquisitions_dropped,
+        workspace_id=workspace_id,
+        committed_by=committed_by,
+        repair_diff=repair_diff,
+        score_before=score_before,
+        score_after=score_after,
+        conflicts_before=conflicts_before,
+        conflicts_after=conflicts_after,
+        notes=notes,
+        revision_id=revision_id,
+        previous_revision_id=previous_revision_id,
+        mode_used=mode_used,
+        diff_summary=explainer["diff_summary"],
+        reshuffle_explainer=explainer,
+    )
+
+    explainer["audit_log_id"] = audit_log.id
+    try:
+        write_reshuffle_artifacts(explainer)
+    except Exception:
+        logger.warning(
+            "[Reshuffle Explainer] Failed to write demo artifacts",
+            exc_info=True,
+        )
+
+    return audit_log, explainer
 
 
 # =============================================================================
@@ -1791,6 +1910,18 @@ async def commit_plan(request: CommitPlanRequest) -> CommitPlanResponse:
             detail=f"Plan {request.plan_id} is already committed",
         )
 
+    previous_revision_id, before_acquisitions = _capture_revision_baseline(
+        db,
+        request.workspace_id,
+    )
+    mode_used = _resolve_mode_used(plan, fallback="repair")
+
+    previous_revision_id, before_acquisitions = _capture_revision_baseline(
+        db,
+        effective_workspace_id,
+    )
+    mode_used = _resolve_mode_used(plan, fallback="from_scratch")
+
     # Pre-commit conflict prediction: reject if error-severity conflicts
     # would be introduced, unless force=true
     if not request.force:
@@ -1880,6 +2011,23 @@ async def commit_plan(request: CommitPlanRequest) -> CommitPlanResponse:
         )
         if conflicts_detected > 0:
             message += f" ({conflicts_detected} conflicts detected)"
+
+        if result["committed"] > 0:
+            _create_commit_audit_with_explainer(
+                db,
+                workspace_id=effective_workspace_id,
+                plan_id=request.plan_id,
+                commit_type="force" if request.force else "normal",
+                config_hash=plan.input_hash,
+                mode_used=mode_used,
+                previous_revision_id=previous_revision_id,
+                before_acquisitions=before_acquisitions,
+                acquisitions_created=result["committed"],
+                acquisitions_dropped=0,
+                conflicts_before=0,
+                conflicts_after=conflicts_detected,
+                notes=request.notes,
+            )
 
         return CommitPlanResponse(
             success=True,
@@ -2151,7 +2299,11 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
     if not request.items:
         raise HTTPException(status_code=400, detail="No items to commit")
 
-    expected_revision = db.get_schedule_revision(effective_workspace_id)
+    previous_revision_id, before_acquisitions = _capture_revision_baseline(
+        db,
+        effective_workspace_id,
+    )
+    expected_revision = previous_revision_id
     predicted_conflicts = _predict_direct_commit_conflicts(
         db,
         request.items,
@@ -2379,13 +2531,17 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
         )
         conflicts_detected = len(detected_conflicts)
         conflict_ids = new_conflict_ids
-        audit_log = db.create_commit_audit_log(
+        audit_log, _explainer = _create_commit_audit_with_explainer(
+            db,
+            workspace_id=effective_workspace_id,
             plan_id=plan.id,
             commit_type="force" if request.force else "normal",
             config_hash=input_hash,
+            mode_used="direct_commit",
+            previous_revision_id=previous_revision_id,
+            before_acquisitions=before_acquisitions,
             acquisitions_created=result["committed"],
             acquisitions_dropped=0,
-            workspace_id=effective_workspace_id,
             committed_by=None,
             repair_diff=None,
             score_before=None,
@@ -4349,14 +4505,18 @@ async def commit_repair_plan(request: RepairCommitRequest) -> RepairCommitRespon
             f"sha256:{hashlib.sha256(request.plan_id.encode()).hexdigest()[:16]}"
         )
 
-        audit_log = db.create_commit_audit_log(
+        audit_log, _explainer = _create_commit_audit_with_explainer(
+            db,
+            workspace_id=request.workspace_id,
             plan_id=request.plan_id,
             commit_type="repair" if request.drop_acquisition_ids else "normal",
             config_hash=config_hash,
+            mode_used=mode_used,
+            previous_revision_id=previous_revision_id,
+            before_acquisitions=before_acquisitions,
             acquisitions_created=result["committed"],
             acquisitions_dropped=result["dropped"],
-            workspace_id=request.workspace_id,
-            committed_by=None,  # Could be set from auth context
+            committed_by=None,
             repair_diff={
                 "dropped": request.drop_acquisition_ids,
                 "created": [a["id"] for a in result["acquisitions_created"]],
@@ -4436,6 +4596,10 @@ class AuditLogResponse(BaseModel):
     conflicts_before: int
     conflicts_after: int
     notes: Optional[str]
+    revision_id: Optional[int] = None
+    previous_revision_id: Optional[int] = None
+    mode_used: Optional[str] = None
+    diff_summary: Optional[Dict[str, Any]] = None
 
 
 class AuditLogListResponse(BaseModel):

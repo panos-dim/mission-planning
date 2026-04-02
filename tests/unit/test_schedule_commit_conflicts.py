@@ -3035,3 +3035,61 @@ class TestPlanningModeSelection:
         assert body["success"] is True, body
         schedule = body["results"]["roll_pitch_best_fit"]["schedule"]
         assert [item["target_id"] for item in schedule] == ["TGT-2"], body
+
+    def test_commit_plan_persists_revision_summary_and_dev_explainer(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Regular plan commits should persist revision summaries and dev explainers."""
+        client, db, workspace_id = isolated_schedule_api
+
+        base_start = datetime.now(timezone.utc) + timedelta(days=4)
+        plan_id = _create_plan(
+            db,
+            workspace_id,
+            run_suffix="reshuffle_commit_history",
+            satellite_id="SAT-7",
+            target_id="RESHUFFLE-TGT",
+            start_time=_iso(base_start),
+            end_time=_iso(base_start + timedelta(minutes=5)),
+        )
+
+        commit = client.post(
+            "/api/v1/schedule/commit",
+            json={"plan_id": plan_id, "workspace_id": workspace_id},
+        )
+        assert commit.status_code == 200, commit.json()
+
+        history = client.get(
+            "/api/v1/schedule/commit-history",
+            params={"workspace_id": workspace_id},
+        )
+        assert history.status_code == 200, history.json()
+        history_body = history.json()
+        assert history_body["total"] == 1, history_body
+
+        audit_log = history_body["audit_logs"][0]
+        assert audit_log["plan_id"] == plan_id, history_body
+        assert audit_log["revision_id"] == 2, history_body
+        assert audit_log["previous_revision_id"] == 1, history_body
+        assert audit_log["mode_used"] == "from_scratch", history_body
+        assert audit_log["diff_summary"]["added_count"] == 1, history_body
+        assert audit_log["diff_summary"]["removed_count"] == 0, history_body
+        assert audit_log["diff_summary"]["kept_count"] == 0, history_body
+
+        explainer = client.get(
+            "/api/v1/dev/reshuffle-explainer",
+            params={"workspace_id": workspace_id},
+        )
+        assert explainer.status_code == 200, explainer.json()
+        explainer_body = explainer.json()
+        assert explainer_body["has_data"] is True, explainer_body
+        assert explainer_body["revision_id"] == 2, explainer_body
+        assert explainer_body["previous_revision_id"] == 1, explainer_body
+        assert explainer_body["mode_used"] == "from_scratch", explainer_body
+        assert explainer_body["diff_summary"]["added_count"] == 1, explainer_body
+        assert (
+            explainer_body["explainer"]["diff"]["added"][0]["planner_target_id"]
+            == "RESHUFFLE-TGT"
+        ), explainer_body
+        assert Path(explainer_body["artifact_paths"]["json_path"]).exists(), explainer_body
+        assert Path(explainer_body["artifact_paths"]["md_path"]).exists(), explainer_body

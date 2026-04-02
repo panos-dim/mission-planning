@@ -24,7 +24,7 @@ from typing import Any, Dict, Generator, List, Optional
 logger = logging.getLogger(__name__)
 
 # Schema version for this module
-SCHEMA_VERSION = "2.8"
+SCHEMA_VERSION = "2.9"
 DEFAULT_WORKSPACE_ID = "default"
 
 # Default database path (same as workspace_persistence.py)
@@ -563,13 +563,30 @@ class CommitAuditLog:
     conflicts_before: int
     conflicts_after: int
     notes: Optional[str]
+    revision_id: Optional[int] = None
+    previous_revision_id: Optional[int] = None
+    mode_used: Optional[str] = None
+    diff_summary_json: Optional[str] = None
+    reshuffle_explainer_json: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API response."""
         repair_diff = None
+        diff_summary = None
+        reshuffle_explainer = None
         if self.repair_diff_json:
             try:
                 repair_diff = json.loads(self.repair_diff_json)
+            except json.JSONDecodeError:
+                pass
+        if self.diff_summary_json:
+            try:
+                diff_summary = json.loads(self.diff_summary_json)
+            except json.JSONDecodeError:
+                pass
+        if self.reshuffle_explainer_json:
+            try:
+                reshuffle_explainer = json.loads(self.reshuffle_explainer_json)
             except json.JSONDecodeError:
                 pass
 
@@ -589,6 +606,11 @@ class CommitAuditLog:
             "conflicts_before": self.conflicts_before,
             "conflicts_after": self.conflicts_after,
             "notes": self.notes,
+            "revision_id": self.revision_id,
+            "previous_revision_id": self.previous_revision_id,
+            "mode_used": self.mode_used,
+            "diff_summary": diff_summary,
+            "reshuffle_explainer": reshuffle_explainer,
         }
 
 
@@ -679,6 +701,9 @@ class ScheduleDB:
 
             if current_version < "2.8":
                 self._migrate_to_v2_8(conn)
+
+            if current_version < "2.9":
+                self._migrate_to_v2_9(conn)
 
             conn.commit()
 
@@ -1667,6 +1692,52 @@ class ScheduleDB:
         )
 
         logger.info("Migration to schema v2.8 complete")
+
+    def _migrate_to_v2_9(self, conn: sqlite3.Connection) -> None:
+        """Migrate database schema to v2.9 - reshuffle revision audit fields."""
+        cursor = conn.cursor()
+        now = _utc_now_z()
+
+        logger.info("Running migration to schema v2.9...")
+
+        new_columns = [
+            ("revision_id", "INTEGER"),
+            ("previous_revision_id", "INTEGER"),
+            ("mode_used", "TEXT"),
+            ("diff_summary_json", "TEXT"),
+            ("reshuffle_explainer_json", "TEXT"),
+        ]
+
+        for col_name, col_type in new_columns:
+            try:
+                cursor.execute(
+                    f"ALTER TABLE commit_audit_logs ADD COLUMN {col_name} {col_type}"
+                )
+                logger.info(f"  Added column commit_audit_logs.{col_name}")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_audit_workspace_revision
+            ON commit_audit_logs(workspace_id, revision_id)
+        """
+        )
+
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO schema_migrations (version, applied_at, description)
+            VALUES (?, ?, ?)
+        """,
+            (
+                "2.9",
+                now,
+                "Add revision summary + reshuffle explainer columns to commit audit logs",
+            ),
+        )
+
+        logger.info("Migration to schema v2.9 complete")
 
     # =========================================================================
     # Recurring Order Template Operations
@@ -2789,6 +2860,29 @@ class ScheduleDB:
             query += " ORDER BY start_time ASC LIMIT ? OFFSET ?"
             params.extend([limit, offset])
 
+            cursor.execute(query, params)
+            return [self._row_to_acquisition(row) for row in cursor.fetchall()]
+
+    def list_workspace_acquisitions_strict(
+        self,
+        workspace_id: str,
+        *,
+        include_failed: bool = False,
+        include_tentative: bool = True,
+    ) -> List[Acquisition]:
+        """Return all acquisitions for one workspace without NULL fallback behavior."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            query = "SELECT * FROM acquisitions WHERE workspace_id = ?"
+            params: List[Any] = [workspace_id]
+
+            if not include_tentative:
+                query += " AND state != 'tentative'"
+            if not include_failed:
+                query += " AND state != 'failed'"
+
+            query += " ORDER BY start_time ASC, id ASC"
             cursor.execute(query, params)
             return [self._row_to_acquisition(row) for row in cursor.fetchall()]
 
@@ -3966,6 +4060,18 @@ class ScheduleDB:
                 ("committed" if created_acquisitions else "candidate", plan_id),
             )
 
+            if created_acquisitions:
+                cursor.execute(
+                    """
+                    INSERT INTO workspace_schedule_revision
+                        (workspace_id, revision, updated_at)
+                    VALUES (?, 2, ?)
+                    ON CONFLICT(workspace_id) DO UPDATE
+                    SET revision = revision + 1, updated_at = ?
+                """,
+                    (effective_workspace_id, now, now),
+                )
+
             conn.commit()
 
         logger.info(
@@ -4558,6 +4664,11 @@ class ScheduleDB:
         conflicts_before: int = 0,
         conflicts_after: int = 0,
         notes: Optional[str] = None,
+        revision_id: Optional[int] = None,
+        previous_revision_id: Optional[int] = None,
+        mode_used: Optional[str] = None,
+        diff_summary: Optional[Dict[str, Any]] = None,
+        reshuffle_explainer: Optional[Dict[str, Any]] = None,
     ) -> CommitAuditLog:
         """Create a commit audit log entry.
 
@@ -4582,6 +4693,10 @@ class ScheduleDB:
         audit_id = f"audit_{uuid.uuid4().hex[:12]}"
         now = _utc_now_z()
         repair_diff_json = json.dumps(repair_diff) if repair_diff else None
+        diff_summary_json = json.dumps(diff_summary) if diff_summary else None
+        reshuffle_explainer_json = (
+            json.dumps(reshuffle_explainer) if reshuffle_explainer else None
+        )
         effective_workspace_id = (
             _normalize_workspace_id(workspace_id) if workspace_id else None
         )
@@ -4596,8 +4711,10 @@ class ScheduleDB:
                     id, created_at, plan_id, workspace_id, committed_by,
                     commit_type, config_hash, repair_diff_json,
                     acquisitions_created, acquisitions_dropped,
-                    score_before, score_after, conflicts_before, conflicts_after, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    score_before, score_after, conflicts_before, conflicts_after, notes,
+                    revision_id, previous_revision_id, mode_used,
+                    diff_summary_json, reshuffle_explainer_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     audit_id,
@@ -4615,6 +4732,11 @@ class ScheduleDB:
                     conflicts_before,
                     conflicts_after,
                     notes,
+                    revision_id,
+                    previous_revision_id,
+                    mode_used,
+                    diff_summary_json,
+                    reshuffle_explainer_json,
                 ),
             )
             conn.commit()
@@ -4640,6 +4762,11 @@ class ScheduleDB:
             conflicts_before=conflicts_before,
             conflicts_after=conflicts_after,
             notes=notes,
+            revision_id=revision_id,
+            previous_revision_id=previous_revision_id,
+            mode_used=mode_used,
+            diff_summary_json=diff_summary_json,
+            reshuffle_explainer_json=reshuffle_explainer_json,
         )
 
     def get_commit_audit_logs(
@@ -4689,6 +4816,7 @@ class ScheduleDB:
 
     def _row_to_audit_log(self, row: sqlite3.Row) -> CommitAuditLog:
         """Convert database row to CommitAuditLog object."""
+        row_keys = row.keys()
         return CommitAuditLog(
             id=row["id"],
             created_at=row["created_at"],
@@ -4705,6 +4833,21 @@ class ScheduleDB:
             conflicts_before=row["conflicts_before"],
             conflicts_after=row["conflicts_after"],
             notes=row["notes"],
+            revision_id=row["revision_id"] if "revision_id" in row_keys else None,
+            previous_revision_id=(
+                row["previous_revision_id"]
+                if "previous_revision_id" in row_keys
+                else None
+            ),
+            mode_used=row["mode_used"] if "mode_used" in row_keys else None,
+            diff_summary_json=(
+                row["diff_summary_json"] if "diff_summary_json" in row_keys else None
+            ),
+            reshuffle_explainer_json=(
+                row["reshuffle_explainer_json"]
+                if "reshuffle_explainer_json" in row_keys
+                else None
+            ),
         )
 
     # =========================================================================

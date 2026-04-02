@@ -6,6 +6,7 @@ These endpoints are read-only and guarded behind DEV_MODE plus local/token acces
 
 Endpoints:
 - GET  /api/v1/dev/schedule-snapshot  — snapshot metadata + acquisition IDs for a workspace
+- GET  /api/v1/dev/reshuffle-explainer — latest persisted revision diff/explainer for a workspace
 - POST /api/v1/dev/write-artifacts    — write demo evidence artifacts to disk
 - GET  /api/v1/dev/metrics            — process RSS/VMS + last feasibility timing
 - GET  /api/v1/dev/route-latency      — inspect in-memory route latency batches
@@ -14,6 +15,7 @@ Endpoints:
 import gc
 import json
 import logging
+import os
 import resource
 import time
 from datetime import datetime, timezone
@@ -23,6 +25,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from backend.reshuffle_explainer import get_reshuffle_artifact_paths
 from backend.security import require_dev_access
 from backend.schedule_persistence import get_schedule_db
 
@@ -108,6 +111,21 @@ class ScheduleSnapshotResponse(BaseModel):
     by_target: Dict[str, int] = Field(default_factory=dict)
     by_satellite: Dict[str, int] = Field(default_factory=dict)
     by_state: Dict[str, int] = Field(default_factory=dict)
+
+
+class ReshuffleExplainerResponse(BaseModel):
+    """Latest persisted reshuffle explainer for a workspace."""
+
+    success: bool
+    has_data: bool
+    workspace_id: str
+    revision_id: Optional[int] = None
+    previous_revision_id: Optional[int] = None
+    mode_used: Optional[str] = None
+    diff_summary: Dict[str, Any] = Field(default_factory=dict)
+    audit_log_id: Optional[str] = None
+    artifact_paths: Dict[str, str] = Field(default_factory=dict)
+    explainer: Optional[Dict[str, Any]] = None
 
 
 class WriteArtifactsRequest(BaseModel):
@@ -275,19 +293,10 @@ async def get_schedule_snapshot(
     """
     db = get_schedule_db()
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-    # Get acquisitions strictly for this workspace (no NULL fallback)
-    # list_acquisitions includes workspace_id IS NULL by default, so we
-    # query directly for strict matching.
-    with db._get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM acquisitions WHERE workspace_id = ? LIMIT 500",
-            (workspace_id,),
-        )
-        rows = cursor.fetchall()
-
-    acquisitions = [db._row_to_acquisition(r) for r in rows]
+    acquisitions = db.list_workspace_acquisitions_strict(
+        workspace_id,
+        include_failed=True,
+    )[:500]
 
     acq_snapshots = [
         AcquisitionSnapshot(
@@ -350,6 +359,45 @@ async def get_schedule_snapshot(
         by_target=by_target,
         by_satellite=by_satellite,
         by_state=by_state,
+    )
+
+
+@router.get("/reshuffle-explainer", response_model=ReshuffleExplainerResponse)
+async def get_reshuffle_explainer(
+    workspace_id: str = Query(..., description="Workspace ID to inspect"),
+) -> ReshuffleExplainerResponse:
+    """Return the latest persisted reshuffle explainer for a workspace."""
+    db = get_schedule_db()
+
+    for audit_log in db.get_commit_audit_logs(workspace_id=workspace_id, limit=100):
+        audit_dict = audit_log.to_dict()
+        explainer = audit_dict.get("reshuffle_explainer")
+        if not explainer:
+            continue
+
+        artifact_paths = get_reshuffle_artifact_paths()
+        explainer = dict(explainer)
+        explainer["audit_log_id"] = audit_log.id
+        explainer["artifact_paths"] = artifact_paths
+
+        return ReshuffleExplainerResponse(
+            success=True,
+            has_data=True,
+            workspace_id=workspace_id,
+            revision_id=audit_log.revision_id,
+            previous_revision_id=audit_log.previous_revision_id,
+            mode_used=audit_log.mode_used,
+            diff_summary=audit_dict.get("diff_summary") or {},
+            audit_log_id=audit_log.id,
+            artifact_paths=artifact_paths,
+            explainer=explainer,
+        )
+
+    return ReshuffleExplainerResponse(
+        success=True,
+        has_data=False,
+        workspace_id=workspace_id,
+        artifact_paths=get_reshuffle_artifact_paths(),
     )
 
 
