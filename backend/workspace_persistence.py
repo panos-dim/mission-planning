@@ -69,6 +69,96 @@ def _placeholder_workspace_name(workspace_id: str) -> str:
     return f"Workspace {workspace_id[:8]}"
 
 
+def _serialize_workspace_target(target: Any) -> Dict[str, Any]:
+    """Normalize target objects and dicts for workspace snapshots."""
+    if isinstance(target, dict):
+        return {
+            "name": target.get("name"),
+            "latitude": target.get("latitude"),
+            "longitude": target.get("longitude"),
+            "priority": target.get("priority", 5),
+            "color": target.get("color"),
+        }
+
+    return {
+        "name": getattr(target, "name", None),
+        "latitude": getattr(target, "latitude", None),
+        "longitude": getattr(target, "longitude", None),
+        "priority": getattr(target, "priority", 5),
+        "color": getattr(target, "color", None),
+    }
+
+
+def build_workspace_analysis_state(
+    *,
+    mission_data: Dict[str, Any],
+    targets: List[Any],
+    passes: List[Any],
+) -> Dict[str, Any]:
+    """Build the persisted analysis snapshot using the live mission-data contract.
+
+    This keeps imported/file-based feasibility runs aligned with the normal
+    analyzed mission flow by persisting the same demand-aware fields that the
+    API response already returns.
+    """
+
+    serialized_targets = [
+        target_summary
+        for target_summary in (_serialize_workspace_target(target) for target in targets)
+        if target_summary.get("name")
+    ]
+    serialized_passes = [
+        pass_detail.to_dict() if hasattr(pass_detail, "to_dict") else pass_detail
+        for pass_detail in passes
+    ]
+    persisted_targets = list(mission_data.get("targets") or serialized_targets)
+    persisted_passes = list(mission_data.get("passes") or serialized_passes)
+    run_timestamp = mission_data.get("analysis_timestamp") or _isoformat_z(
+        datetime.now(timezone.utc)
+    )
+
+    persisted_mission_data = dict(mission_data)
+    persisted_mission_data.update(
+        {
+            "satellite_name": mission_data.get("satellite_name"),
+            "satellites": mission_data.get("satellites", []),
+            "is_constellation": mission_data.get("is_constellation", False),
+            "mission_type": mission_data.get("mission_type", "imaging"),
+            "imaging_type": mission_data.get("imaging_type"),
+            "start_time": mission_data.get("start_time"),
+            "end_time": mission_data.get("end_time"),
+            "elevation_mask": mission_data.get("elevation_mask", 10),
+            "sensor_fov_half_angle_deg": mission_data.get(
+                "sensor_fov_half_angle_deg"
+            ),
+            "max_spacecraft_roll_deg": mission_data.get(
+                "max_spacecraft_roll_deg", 45
+            ),
+            "max_spacecraft_pitch_deg": mission_data.get(
+                "max_spacecraft_pitch_deg"
+            ),
+            "acquisition_time_window": mission_data.get("acquisition_time_window"),
+            "total_passes": len(persisted_passes),
+            "targets": persisted_targets,
+            "passes": persisted_passes,
+            "coverage_percentage": mission_data.get("coverage_percentage"),
+            "pass_statistics": mission_data.get("pass_statistics"),
+            "run_order": mission_data.get("run_order"),
+            "planning_demands": list(mission_data.get("planning_demands") or []),
+            "planning_demand_summary": mission_data.get("planning_demand_summary"),
+        }
+    )
+
+    return {
+        "run_timestamp": run_timestamp,
+        "passes": persisted_passes,
+        "statistics": {
+            "total_passes": len(persisted_passes),
+        },
+        "mission_data": persisted_mission_data,
+    }
+
+
 @dataclass
 class WorkspaceSummary:
     """Summary information for workspace listing."""

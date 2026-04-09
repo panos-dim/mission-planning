@@ -6,6 +6,7 @@ verify the full plan -> commit workflow without needing a live server.
 """
 
 import hashlib
+import io
 import os
 import sys
 import tempfile
@@ -2088,6 +2089,155 @@ class TestPlanningModeSelection:
             )
             assert response.status_code == 200, response.text
             assert get_cached_opportunities(workspace_id) == []
+        finally:
+            _restore_analysis_state(original_state)
+
+    def test_uploaded_targets_analysis_persists_planning_demand_summary(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Import-based feasibility should restore the same demand-aware contract."""
+        client, _db, workspace_id = isolated_schedule_api
+        original_state = _snapshot_analysis_state()
+        csv_content = (
+            "name,latitude,longitude,priority,description\n"
+            "Audit Alpha,25.2048,55.2708,1,Imported target A\n"
+            "Audit Bravo,24.4539,54.3773,3,Imported target B\n"
+            "Audit Charlie,25.0657,55.1713,5,Imported target C\n"
+        ).encode("utf-8")
+
+        start = datetime.now(timezone.utc) + timedelta(days=1)
+        end = start + timedelta(days=1)
+
+        try:
+            upload_response = client.post(
+                "/api/v1/targets/upload",
+                files={
+                    "file": (
+                        "import-feasibility.csv",
+                        io.BytesIO(csv_content),
+                        "text/csv",
+                    )
+                },
+            )
+            assert upload_response.status_code == 200, upload_response.text
+            uploaded_targets = upload_response.json()["targets"]
+            assert len(uploaded_targets) == 3
+
+            analyze_response = client.post(
+                "/api/v1/mission/analyze",
+                json={
+                    "workspace_id": workspace_id,
+                    "tle": _sample_tle_payload(),
+                    "targets": uploaded_targets,
+                    "start_time": _iso(start),
+                    "end_time": _iso(end),
+                    "mission_type": "imaging",
+                    "imaging_type": "optical",
+                },
+            )
+            assert analyze_response.status_code == 200, analyze_response.text
+
+            mission_data = analyze_response.json()["data"]["mission_data"]
+            planning_demands = mission_data["planning_demands"]
+            planning_summary = mission_data["planning_demand_summary"]
+
+            assert mission_data["run_order"] is not None
+            assert mission_data["run_order"]["planning_demand_count"] == len(
+                uploaded_targets
+            )
+            assert planning_summary is not None
+            assert len(planning_demands) == len(uploaded_targets)
+            assert planning_summary["total_demands"] == len(uploaded_targets)
+            assert planning_summary["one_time_demands"] == len(uploaded_targets)
+            assert planning_summary["recurring_instance_demands"] == 0
+            assert (
+                planning_summary["feasible_demands"]
+                + planning_summary["infeasible_demands"]
+                == planning_summary["total_demands"]
+            )
+            assert {demand["demand_type"] for demand in planning_demands} == {
+                "one_time"
+            }
+            assert {
+                demand["display_target_name"] for demand in planning_demands
+            } == {target["name"] for target in uploaded_targets}
+
+            workspace = get_workspace_db().get_workspace(
+                workspace_id, include_czml=False
+            )
+            assert workspace is not None
+            assert workspace.analysis_state is not None
+
+            stored_mission_data = workspace.analysis_state["mission_data"]
+            assert stored_mission_data["run_order"] == mission_data["run_order"]
+            assert stored_mission_data["planning_demands"] == planning_demands
+            assert stored_mission_data["planning_demand_summary"] == planning_summary
+            assert stored_mission_data["targets"] == mission_data["targets"]
+            assert stored_mission_data["passes"] == mission_data["passes"]
+        finally:
+            _restore_analysis_state(original_state)
+
+    def test_100_target_import_analysis_returns_demand_summary(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """The 100-target import fixture should produce a populated demand summary."""
+        client, _db, workspace_id = isolated_schedule_api
+        original_state = _snapshot_analysis_state()
+        fixture_path = (
+            Path(__file__).resolve().parents[1] / "fixtures" / "audit_100_targets.csv"
+        )
+        start = datetime.now(timezone.utc) + timedelta(days=1)
+        end = start + timedelta(days=2)
+
+        try:
+            upload_response = client.post(
+                "/api/v1/targets/upload",
+                files={
+                    "file": (
+                        fixture_path.name,
+                        io.BytesIO(fixture_path.read_bytes()),
+                        "text/csv",
+                    )
+                },
+            )
+            assert upload_response.status_code == 200, upload_response.text
+            uploaded_targets = upload_response.json()["targets"]
+            assert len(uploaded_targets) == 100
+
+            analyze_response = client.post(
+                "/api/v1/mission/analyze",
+                json={
+                    "workspace_id": workspace_id,
+                    "tle": _sample_tle_payload(),
+                    "targets": uploaded_targets,
+                    "start_time": _iso(start),
+                    "end_time": _iso(end),
+                    "mission_type": "imaging",
+                    "imaging_type": "optical",
+                },
+            )
+            assert analyze_response.status_code == 200, analyze_response.text
+
+            mission_data = analyze_response.json()["data"]["mission_data"]
+            planning_summary = mission_data["planning_demand_summary"]
+
+            assert mission_data["run_order"] is not None
+            assert mission_data["run_order"]["target_count"] == 100
+            assert mission_data["run_order"]["planning_demand_count"] == 100
+            assert planning_summary is not None
+            assert planning_summary["total_demands"] == 100
+            assert planning_summary["one_time_demands"] == 100
+            assert planning_summary["recurring_instance_demands"] == 0
+
+            workspace = get_workspace_db().get_workspace(
+                workspace_id, include_czml=False
+            )
+            assert workspace is not None
+            assert workspace.analysis_state is not None
+            assert (
+                workspace.analysis_state["mission_data"]["planning_demand_summary"]
+                == planning_summary
+            )
         finally:
             _restore_analysis_state(original_state)
 

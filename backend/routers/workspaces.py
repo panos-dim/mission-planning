@@ -22,7 +22,10 @@ from pydantic import BaseModel, Field
 
 from backend.config_resolver import get_config_hash, get_config_snapshot
 from backend.schedule_persistence import get_schedule_db
-from backend.workspace_persistence import get_workspace_db
+from backend.workspace_persistence import (
+    build_workspace_analysis_state,
+    get_workspace_db,
+)
 from mission_planner.utils import update_log_context
 
 logger = logging.getLogger(__name__)
@@ -618,62 +621,11 @@ async def save_current_mission(request: SaveCurrentRequest) -> Dict[str, Any]:
             },
         }
 
-        # Build analysis state with FULL mission_data for proper restoration
-        analysis_state = {
-            "run_timestamp": mission_data.get("analysis_timestamp"),
-            "passes": [p.to_dict() if hasattr(p, "to_dict") else p for p in passes],
-            "statistics": {
-                "total_passes": len(passes),
-            },
-            # Store full mission_data for complete restoration on load
-            "mission_data": {
-                "satellite_name": mission_data.get("satellite_name"),
-                "satellites": mission_data.get("satellites", []),
-                "is_constellation": mission_data.get("is_constellation", False),
-                "mission_type": mission_data.get("mission_type", "imaging"),
-                "imaging_type": mission_data.get("imaging_type"),
-                "start_time": mission_data.get("start_time"),
-                "end_time": mission_data.get("end_time"),
-                "elevation_mask": mission_data.get("elevation_mask", 10),
-                "sensor_fov_half_angle_deg": mission_data.get(
-                    "sensor_fov_half_angle_deg"
-                ),
-                "max_spacecraft_roll_deg": mission_data.get(
-                    "max_spacecraft_roll_deg", 45
-                ),
-                "acquisition_time_window": mission_data.get(
-                    "acquisition_time_window"
-                ),
-                "total_passes": len(passes),
-                "targets": [
-                    {
-                        "name": t.name if hasattr(t, "name") else t.get("name"),
-                        "latitude": (
-                            t.latitude if hasattr(t, "latitude") else t.get("latitude")
-                        ),
-                        "longitude": (
-                            t.longitude
-                            if hasattr(t, "longitude")
-                            else t.get("longitude")
-                        ),
-                        "priority": (
-                            getattr(t, "priority", 5)
-                            if hasattr(t, "priority")
-                            else t.get("priority", 5)
-                        ),
-                        "color": (
-                            getattr(t, "color", None)
-                            if hasattr(t, "color")
-                            else t.get("color")
-                        ),
-                    }
-                    for t in targets
-                ],
-                "passes": [p.to_dict() if hasattr(p, "to_dict") else p for p in passes],
-                "coverage_percentage": mission_data.get("coverage_percentage"),
-                "pass_statistics": mission_data.get("pass_statistics"),
-            },
-        }
+        analysis_state = build_workspace_analysis_state(
+            mission_data=mission_data,
+            targets=targets,
+            passes=passes,
+        )
 
         # Mission mode
         mission_type = mission_data.get("mission_type", "imaging")
