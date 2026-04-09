@@ -106,7 +106,10 @@ from backend.scheduling_mode import compute_request_hash, resolve_scheduling_mod
 from backend.security import require_admin_access, require_dev_access
 from backend.satellite_manager import SatelliteManager
 from backend.schedule_persistence import get_schedule_db
-from backend.workspace_persistence import get_workspace_db
+from backend.workspace_persistence import (
+    build_workspace_analysis_state,
+    get_workspace_db,
+)
 from backend.validation.mission_input_validator import (
     reload_validation_config,
     validate_mission_input,
@@ -1028,39 +1031,11 @@ def _persist_workspace_analysis_snapshot(
         },
     }
 
-    serialized_passes = [
-        pass_detail.to_dict() if hasattr(pass_detail, "to_dict") else pass_detail
-        for pass_detail in passes
-    ]
-    analysis_state = {
-        "run_timestamp": mission_data.get("analysis_timestamp"),
-        "passes": serialized_passes,
-        "statistics": {
-            "total_passes": len(serialized_passes),
-        },
-        "mission_data": {
-            "satellite_name": mission_data.get("satellite_name"),
-            "satellites": mission_data.get("satellites", []),
-            "is_constellation": mission_data.get("is_constellation", False),
-            "mission_type": mission_data.get("mission_type", "imaging"),
-            "imaging_type": mission_data.get("imaging_type"),
-            "start_time": mission_data.get("start_time"),
-            "end_time": mission_data.get("end_time"),
-            "elevation_mask": mission_data.get("elevation_mask", 10),
-            "sensor_fov_half_angle_deg": mission_data.get(
-                "sensor_fov_half_angle_deg"
-            ),
-            "max_spacecraft_roll_deg": mission_data.get(
-                "max_spacecraft_roll_deg", 45
-            ),
-            "acquisition_time_window": mission_data.get("acquisition_time_window"),
-            "total_passes": len(serialized_passes),
-            "targets": serialized_targets,
-            "passes": serialized_passes,
-            "coverage_percentage": mission_data.get("coverage_percentage"),
-            "pass_statistics": mission_data.get("pass_statistics"),
-        },
-    }
+    analysis_state = build_workspace_analysis_state(
+        mission_data=mission_data,
+        targets=targets,
+        passes=passes,
+    )
 
     mission_mode = str(mission_data.get("mission_type", "imaging")).upper()
     ws_db.update_workspace(
