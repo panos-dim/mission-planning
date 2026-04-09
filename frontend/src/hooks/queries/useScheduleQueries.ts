@@ -55,6 +55,8 @@ export function useScheduleContext(params: ScheduleContextParams, enabled = true
   return useQuery<ScheduleContextData>({
     queryKey: queryKeys.schedule.context({
       workspace_id: params.workspace_id,
+      from: params.from,
+      to: params.to,
       include_tentative: params.include_tentative,
     }),
     queryFn: () => getScheduleContext(params),

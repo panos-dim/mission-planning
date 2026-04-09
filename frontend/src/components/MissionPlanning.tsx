@@ -25,6 +25,7 @@ import { type CommitPreview, type ConflictInfo } from './ConflictWarningModal'
 import ApplyConfirmationPanel from './ApplyConfirmationPanel'
 import { RepairDiffPanel } from './RepairDiffPanel'
 import { scheduleToDirectCommitItems } from '../utils/commitItems'
+import { getMissionHorizon, getMissionHorizonDurationDays } from '../utils/missionHorizon'
 
 import { isDebugMode } from '../constants/simpleMode'
 
@@ -58,6 +59,14 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
   // Opportunities from last mission analysis (React Query)
   const hasMissionData = !!state.missionData
   const workspaceId = state.activeWorkspace || 'default'
+  const missionHorizon = useMemo(
+    () => getMissionHorizon(state.missionData),
+    [state.missionData?.start_time, state.missionData?.end_time],
+  )
+  const missionHorizonDays = useMemo(
+    () => getMissionHorizonDurationDays(missionHorizon),
+    [missionHorizon],
+  )
   const { data: opportunitiesData } = useOpportunities(workspaceId, hasMissionData)
   const opportunities = opportunitiesData?.opportunities ?? []
 
@@ -192,17 +201,15 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
   const activeResult = results?.[activeTab]
 
   // Schedule context — always loaded so auto-detect can decide the mode
-  const scheduleContextEnabled = true
+  const scheduleContextEnabled = hasMissionData && !!missionHorizon
   const scheduleContextParams = useMemo(() => {
-    const now = new Date()
-    const horizonEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
     return {
       workspace_id: workspaceId,
-      from: now.toISOString(),
-      to: horizonEnd.toISOString(),
+      from: missionHorizon?.start,
+      to: missionHorizon?.end,
       include_tentative: includeTentative,
     }
-  }, [workspaceId, includeTentative])
+  }, [workspaceId, missionHorizon, includeTentative])
 
   const {
     data: scheduleContextData,
@@ -217,10 +224,10 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
       count: scheduleContextData?.count ?? 0,
       byState: scheduleContextData?.by_state ?? {},
       bySatellite: scheduleContextData?.by_satellite ?? {},
-      horizonDays: 7,
+      horizonDays: missionHorizonDays ?? 0,
       error: scheduleContextError?.message,
     }),
-    [scheduleContextData, scheduleContextLoading, scheduleContextError],
+    [scheduleContextData, scheduleContextLoading, missionHorizonDays, scheduleContextError],
   )
 
   // Let the backend choose the scheduling path internally.
@@ -233,6 +240,12 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
     setSchedulingReasoning(null)
 
     try {
+      if (!missionHorizon) {
+        throw new Error(
+          'Mission Parameters planning horizon is missing. Re-run Feasibility Analysis with a start and end time before generating a plan.',
+        )
+      }
+
       // Refetch schedule queries from DB to guarantee fresh mode selection
       await queryClient.invalidateQueries({ queryKey: queryKeys.schedule.all })
       await queryClient.invalidateQueries({
@@ -241,8 +254,8 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
 
       const modeSelection = await getPlanningModeSelection({
         workspace_id: workspaceId,
-        horizon_from: scheduleContextParams.from,
-        horizon_to: scheduleContextParams.to,
+        horizon_from: missionHorizon.start,
+        horizon_to: missionHorizon.end,
         weight_priority: weightConfig.weight_priority,
         weight_geometry: weightConfig.weight_geometry,
         weight_timing: weightConfig.weight_timing,
