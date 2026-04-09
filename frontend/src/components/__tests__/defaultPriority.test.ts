@@ -40,8 +40,10 @@ describe('UI-010 Default Priority = 5', () => {
         color: '#EF4444',
       })
 
-      const orders = usePreFeasibilityOrdersStore.getState().orders
-      const target = orders.find((o) => o.id === orderId)!.targets[0]
+      const target = usePreFeasibilityOrdersStore.getState().order?.targets[0]
+      if (!target) {
+        throw new Error('Expected target to be created in the single run order')
+      }
       expect(target.priority).toBe(5)
     })
   })
@@ -115,7 +117,7 @@ describe('UI-010 Default Priority = 5', () => {
       }))
 
       usePreFeasibilityOrdersStore.getState().addTargets(orderId, sampleTargets)
-      const order = usePreFeasibilityOrdersStore.getState().orders.find((o) => o.id === orderId)!
+      const order = usePreFeasibilityOrdersStore.getState().order!
 
       for (const target of order.targets) {
         expect(target.priority).toBe(5)
@@ -144,16 +146,18 @@ describe('UI-010 Default Priority = 5', () => {
       }
 
       usePreFeasibilityOrdersStore.getState().addTarget(orderId, target)
-      const order = usePreFeasibilityOrdersStore.getState().orders.find((o) => o.id === orderId)!
+      const order = usePreFeasibilityOrdersStore.getState().order!
       expect(order.targets[0].priority).toBe(5)
     })
   })
 
-  describe('getAllTargets flattening preserves priority', () => {
-    it('flattened targets retain their priority values', () => {
+  describe('single-order run shape preserves priority', () => {
+    it('guards against creating a second parallel order and retains target priority values', () => {
       const store = usePreFeasibilityOrdersStore.getState()
       const id1 = store.createOrder()
       const id2 = usePreFeasibilityOrdersStore.getState().createOrder()
+
+      expect(id2).toBe(id1)
 
       usePreFeasibilityOrdersStore.getState().addTarget(id1, {
         name: 'A',

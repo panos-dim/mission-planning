@@ -17,7 +17,7 @@ export { usePreviewTargetsStore } from './previewTargetsStore'
 // Lock mode store (map lock interaction mode)
 export { useLockModeStore } from './lockModeStore'
 
-// Pre-feasibility orders store (orders + targets before running feasibility)
+// Pre-feasibility order store (single run-level order + targets before feasibility)
 export { usePreFeasibilityOrdersStore, type PreFeasibilityOrder } from './preFeasibilityOrdersStore'
 
 // Selection store (unified selection state)

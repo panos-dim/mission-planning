@@ -13,6 +13,11 @@ import { useTargetAddStore } from '../store/targetAddStore'
 import { usePlanningStore } from '../store/planningStore'
 import { useSlewVisStore } from '../store/slewVisStore'
 import { useVisStore } from '../store/visStore'
+import { getRecurrenceValidationIssues } from '../utils/recurrence'
+import {
+  getTemplateMutationErrorMessage,
+  syncRecurringTemplatesForOrder,
+} from '../utils/orderTemplateSync'
 import { LEFT_SIDEBAR_PANELS, RIGHT_SIDEBAR_PANELS } from '../constants/simpleMode'
 
 const DEFAULT_ACQUISITION_TIME_WINDOW: AcquisitionTimeWindow = {
@@ -22,6 +27,14 @@ const DEFAULT_ACQUISITION_TIME_WINDOW: AcquisitionTimeWindow = {
   timezone: 'UTC',
   reference: 'off_nadir_time',
 }
+
+const isRecurrenceValidationIssue = (issue: string) =>
+  issue.includes('Frequency is required') ||
+  issue.includes('Recurring ') ||
+  issue.includes('Weekly recurrence') ||
+  issue.includes('Effective end date')
+
+const extractDatePortion = (value: string | null | undefined) => value?.split('T')[0] ?? ''
 
 // Governance indicator component
 const GovernanceIndicator: React.FC = () => {
@@ -142,27 +155,31 @@ const MissionControls: React.FC = () => {
   }, [allSatellites, selectedSatellites, setSelection])
 
   // Pre-feasibility orders store
-  const pfOrders = usePreFeasibilityOrdersStore((s) => s.orders)
+  const pfOrder = usePreFeasibilityOrdersStore((s) => s.order)
   const [hasAttemptedRun, setHasAttemptedRun] = useState(false)
 
   // Full validation — gates the Run button and shown after a run attempt
   const validationIssues = useMemo(() => {
     const issues: string[] = []
-    if (pfOrders.length === 0) {
+    if (!pfOrder) {
       issues.push('At least one order is required')
       return issues
     }
-    for (const order of pfOrders) {
-      if (!order.name || !order.name.trim()) issues.push(`Order "${order.id}" has no name`)
-      if (order.targets.length === 0)
-        issues.push(`Order "${order.name || order.id}" has no targets`)
-      for (const t of order.targets) {
-        if (!t.name || !t.name.trim())
-          issues.push(`A target in order "${order.name || order.id}" has no name`)
+
+    if (!pfOrder.name || !pfOrder.name.trim()) issues.push(`Order "${pfOrder.id}" has no name`)
+    if (pfOrder.targets.length === 0) issues.push(`Order "${pfOrder.name || pfOrder.id}" has no targets`)
+    const recurrenceIssues = getRecurrenceValidationIssues(pfOrder.orderType, pfOrder.recurrence)
+    for (const recurrenceIssue of recurrenceIssues) {
+      issues.push(`Order "${pfOrder.name || pfOrder.id}": ${recurrenceIssue}`)
+    }
+    for (const target of pfOrder.targets) {
+      if (!target.name || !target.name.trim()) {
+        issues.push(`A target in order "${pfOrder.name || pfOrder.id}" has no name`)
       }
     }
+
     return issues
-  }, [pfOrders])
+  }, [pfOrder])
   const hasValidOrders = validationIssues.length === 0
 
   const acquisitionTimeWindowIssue = useMemo(() => {
@@ -201,8 +218,18 @@ const MissionControls: React.FC = () => {
   const softIssues = useMemo(() => {
     return hasAttemptedRun
       ? validationIssues
-      : validationIssues.filter((issue) => !issue.includes('has no targets'))
+      : validationIssues.filter(
+          (issue) => !issue.includes('has no targets') && !isRecurrenceValidationIssue(issue),
+        )
   }, [validationIssues, hasAttemptedRun])
+
+  const recurrenceDateDefaults = useMemo(
+    () => ({
+      startDate: extractDatePortion(formData.startTime),
+      endDate: extractDatePortion(formData.endTime),
+    }),
+    [formData.startTime, formData.endTime],
+  )
 
   // Auto-disable map add mode when running analysis
   const { disableAddMode } = useTargetAddStore.getState()
@@ -223,14 +250,35 @@ const MissionControls: React.FC = () => {
       return
     }
 
-    // Collect ALL targets from ALL orders
-    const allTargets = pfOrders.flatMap((o) => o.targets)
+    if (pfOrder?.orderType === 'repeats') {
+      try {
+        const result = await syncRecurringTemplatesForOrder(
+          {
+            id: pfOrder.id,
+            name: pfOrder.name,
+            targets: pfOrder.targets,
+            recurrence: pfOrder.recurrence,
+            templateIds: pfOrder.templateIds,
+            templateStatus: pfOrder.templateStatus,
+          },
+          state.activeWorkspace || 'default',
+        )
+
+        usePreFeasibilityOrdersStore.getState().setOrderTemplateState(pfOrder.id, result)
+      } catch (error) {
+        setHasAttemptedRun(true)
+        alert(`Cannot save recurring order configuration:\n\n${getTemplateMutationErrorMessage(error)}`)
+        return
+      }
+    }
+
+    const allTargets = pfOrder?.targets ?? []
     if (allTargets.length === 0) {
       alert('Please add at least one target to an order')
       return
     }
 
-    // Build form data with targets from all orders
+    // Build form data with targets from the single run-level order
     const missionData = {
       ...formData,
       targets: allTargets,
@@ -274,17 +322,20 @@ const MissionControls: React.FC = () => {
       {/* Scrollable Content */}
       <div className="flex-1 overflow-y-auto">
         <div className="p-4 space-y-6">
-          {/* Step 1: Orders & Targets */}
+          {/* Step 1: Order & Targets */}
           <div>
             <div className="flex items-center space-x-2 mb-3">
               <div className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold">
                 1
               </div>
-              <h3 className="text-sm font-semibold text-white">Orders & Targets</h3>
+              <h3 className="text-sm font-semibold text-white">Order & Targets</h3>
             </div>
-            <OrdersPanel disabled={!!isAnalyzed} />
+            <OrdersPanel
+              disabled={!!isAnalyzed}
+              recurrenceDateDefaults={recurrenceDateDefaults}
+            />
             {/* Validation summary — soft issues hide "no targets" until user attempts Run */}
-            {!isAnalyzed && pfOrders.length > 0 && softIssues.length > 0 && (
+            {!isAnalyzed && pfOrder && softIssues.length > 0 && (
               <div className="mt-2 p-2 bg-red-900/20 border border-red-700/30 rounded-lg">
                 <div className="flex items-start gap-1.5">
                   <AlertCircle className="w-3.5 h-3.5 text-red-400 flex-shrink-0 mt-0.5" />

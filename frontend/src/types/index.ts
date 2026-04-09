@@ -87,6 +87,46 @@ export interface AcquisitionTimeWindow {
   reference: 'off_nadir_time'
 }
 
+export type OrderType = 'one_time' | 'repeats'
+export type RecurrenceType = 'daily' | 'weekly'
+export type RecurrenceWeekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'
+export type OrderTemplateStatus = 'active' | 'paused' | 'ended'
+
+export interface OrderRecurrenceSettings {
+  recurrenceType?: RecurrenceType | ''
+  daysOfWeek?: RecurrenceWeekday[]
+  windowStart?: string
+  windowEnd?: string
+  timezone?: string
+  effectiveStartDate?: string
+  effectiveEndDate?: string
+}
+
+export interface OrderTemplateRecord {
+  id: string
+  workspace_id: string
+  name: string
+  status: OrderTemplateStatus
+  canonical_target_id: string
+  target_lat: number
+  target_lon: number
+  priority: number
+  constraints?: Record<string, unknown> | null
+  requested_satellite_group?: string | null
+  recurrence_type: RecurrenceType
+  interval: number
+  days_of_week?: RecurrenceWeekday[] | null
+  window_start_hhmm: string
+  window_end_hhmm: string
+  timezone_name: string
+  effective_start_date: string
+  effective_end_date?: string | null
+  notes?: string | null
+  external_ref?: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface MissionRequest {
   // Legacy single satellite (deprecated - use satellites for constellation)
   tle?: TLEData

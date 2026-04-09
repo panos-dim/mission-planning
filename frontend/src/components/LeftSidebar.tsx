@@ -334,7 +334,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
       let planId: string | undefined
       let backendAcqIds: string[] = []
       const isRepairMode = !!result.repair_plan_id
-      let nextPanel = LEFT_SIDEBAR_PANELS.SCHEDULE
+      const nextPanel = LEFT_SIDEBAR_PANELS.SCHEDULE
 
       try {
         if (isRepairMode) {

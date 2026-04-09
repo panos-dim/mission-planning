@@ -306,6 +306,13 @@ export interface Order {
   notes?: string
   external_ref?: string
   workspace_id?: string
+  template_id?: string
+  instance_key?: string
+  instance_local_date?: string
+  planner_target_id?: string
+  canonical_target_id?: string
+  target_lat?: number
+  target_lon?: number
   // PS2.5 Extended fields
   order_type?: string
   due_time?: string

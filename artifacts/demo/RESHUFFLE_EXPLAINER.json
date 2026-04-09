@@ -1,50 +1,107 @@
 {
-  "workspace_id": "workspace_demo",
-  "generated_at": "2026-04-02T14:20:42.202851Z",
+  "workspace_id": "default",
+  "generated_at": "2026-04-03T06:10:59.752418Z",
   "revision_id": 3,
   "previous_revision_id": 2,
-  "mode_used": "repair",
-  "plan_id": "plan_demo",
-  "commit_type": "repair",
+  "mode_used": "direct_commit",
+  "plan_id": "plan_f290385eb849",
+  "commit_type": "normal",
   "diff_summary": {
-    "before_count": 2,
-    "after_count": 2,
-    "added_count": 1,
-    "removed_count": 1,
-    "kept_count": 1,
+    "before_count": 0,
+    "after_count": 4,
+    "added_count": 4,
+    "removed_count": 0,
+    "kept_count": 0,
     "unchanged_kept_count": 0,
-    "changed_timing_count": 1,
-    "changed_satellite_assignment_count": 1
+    "changed_timing_count": 0,
+    "changed_satellite_assignment_count": 0
   },
   "explanation": {
-    "headline": "Revision 3 applied in repair mode against revision 2.",
+    "headline": "Revision 3 applied in direct_commit mode against revision 2.",
     "summary_lines": [
-      "Revision 3 applied in repair mode against revision 2.",
-      "Active schedule size changed from 2 to 2 acquisitions.",
-      "1 added, 1 removed, 1 kept.",
-      "1 kept acquisitions changed timing and 1 changed satellite assignment.",
-      "Added targets: PORT_C.",
-      "Removed targets: PORT_B.",
-      "Timing changes: PORT_A: 2026-04-02T10:00:00Z -> 2026-04-02T10:15:00Z.",
-      "Satellite reassignments: PORT_A: SAT-A -> SAT-B."
+      "Revision 3 applied in direct_commit mode against revision 2.",
+      "Active schedule size changed from 0 to 4 acquisitions.",
+      "4 added, 0 removed, 0 kept.",
+      "0 kept acquisitions changed timing and 0 changed satellite assignment.",
+      "Added targets: Kuwait City, Manama, Riyadh, Jeddah."
     ]
   },
   "diff": {
     "added": [
       {
-        "identity_key": "order:ord_port_c",
-        "order_id": "ord_port_c",
-        "template_id": "tmpl_port_c",
-        "instance_key": "PORT_C:2026-04-02",
-        "canonical_target_id": "PORT_C",
-        "planner_target_id": "planner::PORT_C::2026-04-02",
-        "display_target_name": "PORT_C",
+        "identity_key": "opportunity:PLEIADES NEO 3_Kuwait City_0_max",
+        "order_id": null,
+        "template_id": null,
+        "instance_key": null,
+        "canonical_target_id": "Kuwait City",
+        "planner_target_id": "Kuwait City",
+        "display_target_name": "Kuwait City",
         "after": {
-          "acquisition_id": "acq_demo_after_added",
-          "satellite_id": "SAT-D",
-          "start_time": "2026-04-02T12:00:00Z",
-          "end_time": "2026-04-02T12:05:00Z",
-          "plan_id": "plan_demo",
+          "acquisition_id": "acq_f92272891845",
+          "satellite_id": "PLEIADES NEO 3",
+          "start_time": "2026-04-03T07:41:15.679908+00:00",
+          "end_time": "2026-04-03T07:41:20.679908+00:00",
+          "plan_id": "plan_f290385eb849",
+          "state": "committed",
+          "lock_level": "none",
+          "mode": "OPTICAL",
+          "source": "auto"
+        }
+      },
+      {
+        "identity_key": "opportunity:PLEIADES NEO 3_Manama_1_max",
+        "order_id": null,
+        "template_id": null,
+        "instance_key": null,
+        "canonical_target_id": "Manama",
+        "planner_target_id": "Manama",
+        "display_target_name": "Manama",
+        "after": {
+          "acquisition_id": "acq_f2031a95dcbf",
+          "satellite_id": "PLEIADES NEO 3",
+          "start_time": "2026-04-03T07:41:55.944772+00:00",
+          "end_time": "2026-04-03T07:42:00.944772+00:00",
+          "plan_id": "plan_f290385eb849",
+          "state": "committed",
+          "lock_level": "none",
+          "mode": "OPTICAL",
+          "source": "auto"
+        }
+      },
+      {
+        "identity_key": "opportunity:PLEIADES NEO 3_Riyadh_2_max",
+        "order_id": null,
+        "template_id": null,
+        "instance_key": null,
+        "canonical_target_id": "Riyadh",
+        "planner_target_id": "Riyadh",
+        "display_target_name": "Riyadh",
+        "after": {
+          "acquisition_id": "acq_349ba7b0d541",
+          "satellite_id": "PLEIADES NEO 3",
+          "start_time": "2026-04-03T07:42:32.354460+00:00",
+          "end_time": "2026-04-03T07:42:37.354460+00:00",
+          "plan_id": "plan_f290385eb849",
+          "state": "committed",
+          "lock_level": "none",
+          "mode": "OPTICAL",
+          "source": "auto"
+        }
+      },
+      {
+        "identity_key": "opportunity:PLEIADES NEO 3_Jeddah_4_max",
+        "order_id": null,
+        "template_id": null,
+        "instance_key": null,
+        "canonical_target_id": "Jeddah",
+        "planner_target_id": "Jeddah",
+        "display_target_name": "Jeddah",
+        "after": {
+          "acquisition_id": "acq_c2e614a49776",
+          "satellite_id": "PLEIADES NEO 3",
+          "start_time": "2026-04-03T07:43:42.242546+00:00",
+          "end_time": "2026-04-03T07:43:47.242546+00:00",
+          "plan_id": "plan_f290385eb849",
           "state": "committed",
           "lock_level": "none",
           "mode": "OPTICAL",
@@ -52,170 +109,14 @@
         }
       }
     ],
-    "removed": [
-      {
-        "identity_key": "order:ord_port_b",
-        "order_id": "ord_port_b",
-        "template_id": "tmpl_port_b",
-        "instance_key": "PORT_B:2026-04-02",
-        "canonical_target_id": "PORT_B",
-        "planner_target_id": "planner::PORT_B::2026-04-02",
-        "display_target_name": "PORT_B",
-        "before": {
-          "acquisition_id": "acq_demo_before_removed",
-          "satellite_id": "SAT-C",
-          "start_time": "2026-04-02T11:00:00Z",
-          "end_time": "2026-04-02T11:05:00Z",
-          "plan_id": "plan_demo",
-          "state": "committed",
-          "lock_level": "none",
-          "mode": "OPTICAL",
-          "source": "auto"
-        }
-      }
-    ],
-    "kept": [
-      {
-        "identity_key": "order:ord_port_a",
-        "match_strategy": "order_id",
-        "order_id": "ord_port_a",
-        "template_id": "tmpl_port_a",
-        "instance_key": "PORT_A:2026-04-02",
-        "canonical_target_id": "PORT_A",
-        "planner_target_id": "planner::PORT_A::2026-04-02",
-        "display_target_name": "PORT_A",
-        "before": {
-          "acquisition_id": "acq_demo_before_kept",
-          "satellite_id": "SAT-A",
-          "start_time": "2026-04-02T10:00:00Z",
-          "end_time": "2026-04-02T10:05:00Z",
-          "plan_id": "plan_demo",
-          "state": "committed",
-          "lock_level": "none",
-          "mode": "OPTICAL",
-          "source": "auto"
-        },
-        "after": {
-          "acquisition_id": "acq_demo_after_kept",
-          "satellite_id": "SAT-B",
-          "start_time": "2026-04-02T10:15:00Z",
-          "end_time": "2026-04-02T10:20:00Z",
-          "plan_id": "plan_demo",
-          "state": "committed",
-          "lock_level": "none",
-          "mode": "OPTICAL",
-          "source": "auto"
-        },
-        "change_types": [
-          "timing",
-          "satellite_assignment"
-        ],
-        "timing_delta_minutes": {
-          "start": 15.0,
-          "end": 15.0
-        },
-        "satellite_change": {
-          "from": "SAT-A",
-          "to": "SAT-B"
-        }
-      }
-    ],
-    "changed_timing": [
-      {
-        "identity_key": "order:ord_port_a",
-        "match_strategy": "order_id",
-        "order_id": "ord_port_a",
-        "template_id": "tmpl_port_a",
-        "instance_key": "PORT_A:2026-04-02",
-        "canonical_target_id": "PORT_A",
-        "planner_target_id": "planner::PORT_A::2026-04-02",
-        "display_target_name": "PORT_A",
-        "before": {
-          "acquisition_id": "acq_demo_before_kept",
-          "satellite_id": "SAT-A",
-          "start_time": "2026-04-02T10:00:00Z",
-          "end_time": "2026-04-02T10:05:00Z",
-          "plan_id": "plan_demo",
-          "state": "committed",
-          "lock_level": "none",
-          "mode": "OPTICAL",
-          "source": "auto"
-        },
-        "after": {
-          "acquisition_id": "acq_demo_after_kept",
-          "satellite_id": "SAT-B",
-          "start_time": "2026-04-02T10:15:00Z",
-          "end_time": "2026-04-02T10:20:00Z",
-          "plan_id": "plan_demo",
-          "state": "committed",
-          "lock_level": "none",
-          "mode": "OPTICAL",
-          "source": "auto"
-        },
-        "change_types": [
-          "timing",
-          "satellite_assignment"
-        ],
-        "timing_delta_minutes": {
-          "start": 15.0,
-          "end": 15.0
-        },
-        "satellite_change": {
-          "from": "SAT-A",
-          "to": "SAT-B"
-        }
-      }
-    ],
-    "changed_satellite_assignment": [
-      {
-        "identity_key": "order:ord_port_a",
-        "match_strategy": "order_id",
-        "order_id": "ord_port_a",
-        "template_id": "tmpl_port_a",
-        "instance_key": "PORT_A:2026-04-02",
-        "canonical_target_id": "PORT_A",
-        "planner_target_id": "planner::PORT_A::2026-04-02",
-        "display_target_name": "PORT_A",
-        "before": {
-          "acquisition_id": "acq_demo_before_kept",
-          "satellite_id": "SAT-A",
-          "start_time": "2026-04-02T10:00:00Z",
-          "end_time": "2026-04-02T10:05:00Z",
-          "plan_id": "plan_demo",
-          "state": "committed",
-          "lock_level": "none",
-          "mode": "OPTICAL",
-          "source": "auto"
-        },
-        "after": {
-          "acquisition_id": "acq_demo_after_kept",
-          "satellite_id": "SAT-B",
-          "start_time": "2026-04-02T10:15:00Z",
-          "end_time": "2026-04-02T10:20:00Z",
-          "plan_id": "plan_demo",
-          "state": "committed",
-          "lock_level": "none",
-          "mode": "OPTICAL",
-          "source": "auto"
-        },
-        "change_types": [
-          "timing",
-          "satellite_assignment"
-        ],
-        "timing_delta_minutes": {
-          "start": 15.0,
-          "end": 15.0
-        },
-        "satellite_change": {
-          "from": "SAT-A",
-          "to": "SAT-B"
-        }
-      }
-    ]
+    "removed": [],
+    "kept": [],
+    "changed_timing": [],
+    "changed_satellite_assignment": []
   },
-  "audit_log_id": "audit_demo",
   "artifact_paths": {
     "json_path": "/Users/panagiotis.d/CascadeProjects/mission-planning/artifacts/demo/RESHUFFLE_EXPLAINER.json",
     "md_path": "/Users/panagiotis.d/CascadeProjects/mission-planning/artifacts/demo/RESHUFFLE_EXPLAINER.md"
-  }
+  },
+  "audit_log_id": "audit_b7c17841980f"
 }

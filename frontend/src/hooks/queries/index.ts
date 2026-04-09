@@ -32,3 +32,6 @@ export {
 
 // Managed satellite hooks
 export { useManagedSatellites } from './useSatelliteQueries'
+
+// Recurring order template hooks
+export { useOrderTemplates } from './useOrderTemplateQueries'

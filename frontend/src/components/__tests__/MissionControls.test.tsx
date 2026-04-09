@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import MissionControls from '../MissionControls'
 import { usePlanningStore } from '../../store/planningStore'
@@ -10,10 +11,12 @@ import { useSlewVisStore } from '../../store/slewVisStore'
 import { useTargetAddStore } from '../../store/targetAddStore'
 import { useVisStore } from '../../store/visStore'
 
-const { analyzeMissionMock, useMissionMock, useManagedSatellitesMock } = vi.hoisted(() => ({
+const { analyzeMissionMock, useMissionMock, useManagedSatellitesMock, useOrderTemplatesMock } =
+  vi.hoisted(() => ({
   analyzeMissionMock: vi.fn(),
   useMissionMock: vi.fn(),
   useManagedSatellitesMock: vi.fn(),
+  useOrderTemplatesMock: vi.fn(),
 }))
 
 vi.mock('../../context/MissionContext', () => ({
@@ -22,6 +25,7 @@ vi.mock('../../context/MissionContext', () => ({
 
 vi.mock('../../hooks/queries', () => ({
   useManagedSatellites: useManagedSatellitesMock,
+  useOrderTemplates: useOrderTemplatesMock,
 }))
 
 vi.mock('../MissionParameters.tsx', () => ({
@@ -88,12 +92,29 @@ vi.mock('../MissionParameters.tsx', () => ({
 }))
 
 describe('MissionControls', () => {
+  const renderMissionControls = () =>
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: {
+              queries: { retry: false },
+              mutations: { retry: false },
+            },
+          })
+        }
+      >
+        <MissionControls />
+      </QueryClientProvider>,
+    )
+
   beforeEach(() => {
     localStorage.removeItem('acceptedOrders')
     localStorage.removeItem('satellite-selection')
 
     useMissionMock.mockReset()
     useManagedSatellitesMock.mockReset()
+    useOrderTemplatesMock.mockReset()
     analyzeMissionMock.mockReset()
 
     usePreFeasibilityOrdersStore.getState().clearAll()
@@ -130,12 +151,18 @@ describe('MissionControls', () => {
         ],
       },
     })
+
+    useOrderTemplatesMock.mockReturnValue({
+      data: {
+        templates: [],
+      },
+    })
   })
 
-  it('keeps the active Orders & Targets workflow visible in mission controls', () => {
-    render(<MissionControls />)
+  it('keeps the active Order & Targets workflow visible in mission controls', () => {
+    renderMissionControls()
 
-    expect(screen.getByText('Orders & Targets')).toBeInTheDocument()
+    expect(screen.getByText('Order & Targets')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /create order/i })).toBeInTheDocument()
     expect(screen.getByText('Mission Parameters Stub')).toBeInTheDocument()
   })
@@ -143,32 +170,46 @@ describe('MissionControls', () => {
   it('lets operators create a new order from the live mission controls path', async () => {
     const user = userEvent.setup()
 
-    render(<MissionControls />)
+    renderMissionControls()
 
     await user.click(screen.getByRole('button', { name: /create order/i }))
 
     expect(await screen.findByText('Order 1')).toBeInTheDocument()
     expect(screen.getByText('0 targets')).toBeInTheDocument()
-    expect(usePreFeasibilityOrdersStore.getState().orders).toHaveLength(1)
-    expect(usePreFeasibilityOrdersStore.getState().orders[0]?.name).toBe('Order 1')
+    expect(screen.queryByRole('button', { name: /create order/i })).not.toBeInTheDocument()
+    expect(usePreFeasibilityOrdersStore.getState().order?.name).toBe('Order 1')
+  })
+
+  it('defaults recurring-order active dates from the current horizon and keeps UTC implicit', async () => {
+    const user = userEvent.setup()
+    const expectedStartDate = new Date().toISOString().slice(0, 10)
+    const expectedEndDate = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+
+    renderMissionControls()
+
+    await user.click(screen.getByRole('button', { name: /create order/i }))
+    await user.click(screen.getByRole('button', { name: 'Recurring' }))
+
+    expect(screen.getByDisplayValue(expectedStartDate)).toBeInTheDocument()
+    expect(screen.getByDisplayValue(expectedEndDate)).toBeInTheDocument()
+    expect(screen.queryByText(/^Timezone$/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/UTC is applied automatically/i)).toBeInTheDocument()
   })
 
   it('passes the acquisition time window through the feasibility run payload', async () => {
     const user = userEvent.setup()
 
     usePreFeasibilityOrdersStore.setState({
-      orders: [
-        {
-          id: 'order-1',
-          name: 'Order 1',
-          createdAt: '2026-04-02T08:00:00Z',
-          targets: [{ name: 'Alpha', latitude: 24.5, longitude: 54.3, priority: 1 }],
-        },
-      ],
+      order: {
+        id: 'order-1',
+        name: 'Order 1',
+        createdAt: '2026-04-02T08:00:00Z',
+        targets: [{ name: 'Alpha', latitude: 24.5, longitude: 54.3, priority: 1 }],
+      },
       activeOrderId: 'order-1',
     })
 
-    render(<MissionControls />)
+    renderMissionControls()
 
     await user.click(screen.getByRole('button', { name: 'Enable Acquisition Window' }))
     await user.click(screen.getByRole('button', { name: /run feasibility/i }))
@@ -193,18 +234,16 @@ describe('MissionControls', () => {
 
     try {
       usePreFeasibilityOrdersStore.setState({
-        orders: [
-          {
-            id: 'order-1',
-            name: 'Order 1',
-            createdAt: '2026-04-02T08:00:00Z',
-            targets: [{ name: 'Alpha', latitude: 24.5, longitude: 54.3, priority: 1 }],
-          },
-        ],
+        order: {
+          id: 'order-1',
+          name: 'Order 1',
+          createdAt: '2026-04-02T08:00:00Z',
+          targets: [{ name: 'Alpha', latitude: 24.5, longitude: 54.3, priority: 1 }],
+        },
         activeOrderId: 'order-1',
       })
 
-      render(<MissionControls />)
+      renderMissionControls()
 
       await user.click(screen.getByRole('button', { name: 'Enable Incomplete Acquisition Window' }))
       expect(
@@ -227,18 +266,16 @@ describe('MissionControls', () => {
     const user = userEvent.setup()
 
     usePreFeasibilityOrdersStore.setState({
-      orders: [
-        {
-          id: 'order-1',
-          name: 'Order 1',
-          createdAt: '2026-04-02T08:00:00Z',
-          targets: [{ name: 'Alpha', latitude: 24.5, longitude: 54.3, priority: 1 }],
-        },
-      ],
+      order: {
+        id: 'order-1',
+        name: 'Order 1',
+        createdAt: '2026-04-02T08:00:00Z',
+        targets: [{ name: 'Alpha', latitude: 24.5, longitude: 54.3, priority: 1 }],
+      },
       activeOrderId: 'order-1',
     })
 
-    render(<MissionControls />)
+    renderMissionControls()
 
     await user.click(screen.getByRole('button', { name: 'Enable Partial Acquisition Window' }))
 

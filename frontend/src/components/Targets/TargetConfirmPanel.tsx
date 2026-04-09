@@ -14,7 +14,7 @@ import { usePreFeasibilityOrdersStore } from '../../store/preFeasibilityOrdersSt
 
 const TargetConfirmPanel: React.FC = () => {
   const { lastAddedTarget, clearLastAddedTarget } = useTargetAddStore()
-  const orders = usePreFeasibilityOrdersStore((s) => s.orders)
+  const order = usePreFeasibilityOrdersStore((s) => s.order)
   const updateTarget = usePreFeasibilityOrdersStore((s) => s.updateTarget)
 
   const [name, setName] = useState('')
@@ -23,8 +23,8 @@ const TargetConfirmPanel: React.FC = () => {
   // Resolve the saved target from the order store
   const savedTarget = (() => {
     if (!lastAddedTarget) return null
-    const order = orders.find((o) => o.id === lastAddedTarget.orderId)
-    return order?.targets[lastAddedTarget.targetIndex] ?? null
+    if (!order || order.id !== lastAddedTarget.orderId) return null
+    return order.targets[lastAddedTarget.targetIndex] ?? null
   })()
 
   // Sync local state when lastAddedTarget changes

@@ -1584,19 +1584,14 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
               debug.info(`Target added inline: ${clickedLocation.formatted.decimal}`)
 
               const ordersState = usePreFeasibilityOrdersStore.getState()
-              let orderId = ordersState.activeOrderId
-              if (!orderId) {
-                orderId = ordersState.createOrder()
-                usePreFeasibilityOrdersStore.getState().setActiveOrder(orderId)
-              }
+              const orderId =
+                ordersState.activeOrderId ?? ordersState.order?.id ?? ordersState.createOrder()
 
-              const order = usePreFeasibilityOrdersStore
-                .getState()
-                .orders.find((o) => o.id === orderId)
+              const order = usePreFeasibilityOrdersStore.getState().order
               const idx = order ? order.targets.length : 0
               const autoName = `Target ${idx + 1}`
 
-              ordersState.addTarget(orderId!, {
+              ordersState.addTarget(orderId, {
                 name: autoName,
                 latitude: clickedLocation.latitude,
                 longitude: clickedLocation.longitude,
@@ -1606,7 +1601,7 @@ const GlobeViewport: React.FC<GlobeViewportProps> = ({ mode, viewportId, sharedC
               })
 
               setLastAddedTarget({
-                orderId: orderId!,
+                orderId,
                 targetIndex: idx,
                 latitude: clickedLocation.latitude,
                 longitude: clickedLocation.longitude,

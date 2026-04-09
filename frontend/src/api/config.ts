@@ -62,6 +62,8 @@ export const API_ENDPOINTS = {
   ORDER_BY_ID: (id: string) => `/api/v1/orders/${id}`,
   ORDER_REJECT: (id: string) => `/api/v1/orders/${id}/reject`,
   ORDER_DEFER: (id: string) => `/api/v1/orders/${id}/defer`,
+  ORDER_TEMPLATES: '/api/v1/order-templates',
+  ORDER_TEMPLATE_BY_ID: (id: string) => `/api/v1/order-templates/${id}`,
 
   // Dev endpoints (demo runner)
   DEV_SCHEDULE_SNAPSHOT: '/api/v1/dev/schedule-snapshot',

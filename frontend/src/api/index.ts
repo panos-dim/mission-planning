@@ -14,6 +14,7 @@ export { tleApi } from './tle'
 export { configApi } from './configApi'
 export { planningApi } from './planningApi'
 export { satellitesApi } from './satellitesApi'
+export * as orderTemplatesApi from './orderTemplatesApi'
 
 // Configuration
 export { API_BASE_URL, API_ENDPOINTS, TIMEOUTS, RETRY_CONFIG } from './config'
@@ -55,3 +56,10 @@ export type {
   SarModesResponse,
 } from './configApi'
 export type { OpportunitiesResponse, PlanningConfigResponse } from './planningApi'
+export type {
+  OrderTemplateCreatePayload,
+  OrderTemplateUpdatePayload,
+  OrderTemplateResponse,
+  OrderTemplateListResponse,
+  OrderTemplateDeleteResponse,
+} from './orderTemplatesApi'

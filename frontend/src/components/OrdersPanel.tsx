@@ -1,8 +1,8 @@
 /**
  * OrdersPanel Component
  *
- * Pre-feasibility orders section. Allows operator to create named orders,
- * add/remove targets per order, and validates before feasibility run.
+ * Pre-feasibility order section. Allows the operator to author the single
+ * run-level order, add/remove targets inside it, and validate before feasibility run.
  * Supports: manual entry, file upload, sample targets, and map-click addition.
  */
 
@@ -23,14 +23,28 @@ import {
   Upload,
   FileText,
   Map,
+  Repeat2,
 } from 'lucide-react'
-import type { TargetData } from '../types'
+import type { OrderType, TargetData } from '../types'
+import { useOrderTemplates } from '../hooks/queries'
 import {
+  mergePreFeasibilityOrders,
   usePreFeasibilityOrdersStore,
   type PreFeasibilityOrder,
 } from '../store/preFeasibilityOrdersStore'
 import { usePreviewTargetsStore } from '../store/previewTargetsStore'
 import { useTargetAddStore, type LastAddedTarget } from '../store/targetAddStore'
+import { useWorkspaceStore } from '../store/workspaceStore'
+import { queryClient, queryKeys } from '../lib/queryClient'
+import RecurrenceSummaryChip from './RecurrenceSummaryChip'
+import {
+  WEEKDAY_OPTIONS,
+  formatRecurrenceSummary,
+  getOrderRecurrence,
+  getRecurrenceValidationIssues,
+  groupTemplatesIntoOrders,
+} from '../utils/recurrence'
+import { getTemplateMutationErrorMessage, retireTemplateIds } from '../utils/orderTemplateSync'
 
 // =============================================================================
 // Gulf Area Sample Targets — debugging / demo scenario
@@ -117,6 +131,11 @@ const GULF_SAMPLE_TARGETS: TargetData[] = [
     priority: 5,
     color: '#3B82F6',
   },
+]
+
+const ORDER_TYPE_OPTIONS: Array<{ value: OrderType; label: string }> = [
+  { value: 'one_time', label: 'One-time' },
+  { value: 'repeats', label: 'Recurring' },
 ]
 
 // =============================================================================
@@ -408,6 +427,190 @@ const InlineTargetAdd: React.FC<InlineTargetAddProps> = ({ onAdd }) => {
   )
 }
 
+interface RecurrenceSectionProps {
+  order: PreFeasibilityOrder
+  disabled?: boolean
+  saveStatus: { type: 'error' | null; message: string }
+  onOrderTypeChange: (nextType: OrderType) => void
+  onRecurrenceChange: (updates: Partial<NonNullable<PreFeasibilityOrder['recurrence']>>) => void
+  onToggleWeekday: (weekday: (typeof WEEKDAY_OPTIONS)[number]['value']) => void
+}
+
+const RecurrenceSection: React.FC<RecurrenceSectionProps> = ({
+  order,
+  disabled,
+  saveStatus,
+  onOrderTypeChange,
+  onRecurrenceChange,
+  onToggleWeekday,
+}) => {
+  const orderType = order.orderType ?? 'one_time'
+  const recurrence = getOrderRecurrence(order.recurrence)
+  const recurrenceSummary = formatRecurrenceSummary({ orderType, recurrence })
+  const recurrenceIssues = getRecurrenceValidationIssues(orderType, recurrence)
+  const showRecurrenceIssues =
+    Boolean(recurrence.recurrenceType) ||
+    Boolean(recurrence.windowStart) ||
+    Boolean(recurrence.windowEnd) ||
+    Boolean(recurrence.effectiveStartDate) ||
+    Boolean(recurrence.effectiveEndDate)
+
+  const segmentedClass = (selected: boolean) =>
+    `rounded-md border px-2 py-1 text-[10px] font-medium transition-colors ${
+      selected
+        ? 'border-blue-500/60 bg-blue-500/15 text-blue-200'
+        : 'border-gray-700 bg-gray-800/70 text-gray-300 hover:border-gray-600 hover:text-white'
+    }`
+
+  return (
+    <div className="rounded-lg border border-gray-700/60 bg-gray-900/50 p-2.5 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          <Repeat2 className="w-3.5 h-3.5 text-blue-300" />
+          <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-400">
+            Recurrence
+          </span>
+        </div>
+        <RecurrenceSummaryChip summary={recurrenceSummary} />
+      </div>
+
+      <div className="space-y-1.5">
+        <span className="text-[10px] text-gray-500">Order type</span>
+        <div className="flex flex-wrap gap-1.5">
+          {ORDER_TYPE_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              disabled={disabled}
+              onClick={() => onOrderTypeChange(option.value)}
+              className={segmentedClass(orderType === option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {orderType === 'repeats' && (
+        <div className="space-y-2 pt-1 border-t border-gray-800">
+          <div className="space-y-1.5">
+            <span className="text-[10px] text-gray-500">Frequency</span>
+            <div className="flex flex-wrap gap-1.5">
+              {(['daily', 'weekly'] as const).map((pattern) => (
+                <button
+                  key={pattern}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => onRecurrenceChange({ recurrenceType: pattern })}
+                  className={segmentedClass(recurrence.recurrenceType === pattern)}
+                >
+                  {pattern === 'daily' ? 'Daily' : 'Weekly'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {recurrence.recurrenceType === 'weekly' && (
+            <div className="space-y-1.5">
+              <span className="text-[10px] text-gray-500">Weekdays</span>
+              <div className="flex flex-wrap gap-1.5">
+                {WEEKDAY_OPTIONS.map((weekday) => (
+                  <button
+                    key={weekday.value}
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => onToggleWeekday(weekday.value)}
+                    className={segmentedClass(recurrence.daysOfWeek?.includes(weekday.value) ?? false)}
+                  >
+                    {weekday.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className="space-y-1">
+              <span className="text-[10px] text-gray-500">From</span>
+              <input
+                type="time"
+                value={recurrence.windowStart ?? ''}
+                disabled={disabled}
+                onChange={(e) => onRecurrenceChange({ windowStart: e.target.value })}
+                className="input-field w-full text-xs py-1"
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-[10px] text-gray-500">To</span>
+              <input
+                type="time"
+                value={recurrence.windowEnd ?? ''}
+                disabled={disabled}
+                onChange={(e) => onRecurrenceChange({ windowEnd: e.target.value })}
+                className="input-field w-full text-xs py-1"
+              />
+            </label>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className="space-y-1">
+              <span className="text-[10px] text-gray-500">Active from</span>
+              <input
+                type="date"
+                value={recurrence.effectiveStartDate ?? ''}
+                disabled={disabled}
+                onChange={(e) => onRecurrenceChange({ effectiveStartDate: e.target.value })}
+                className="input-field w-full text-xs py-1"
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-[10px] text-gray-500">Active to</span>
+              <input
+                type="date"
+                value={recurrence.effectiveEndDate ?? ''}
+                disabled={disabled}
+                onChange={(e) => onRecurrenceChange({ effectiveEndDate: e.target.value })}
+                className="input-field w-full text-xs py-1"
+              />
+            </label>
+          </div>
+
+          <div className="rounded-md border border-gray-800 bg-gray-950/40 px-2 py-1.5 text-[10px] text-gray-400">
+            Active from/to defines when this recurring order exists. These dates default from the
+            current horizon, while the horizon below only controls the slice you analyze right now.
+            UTC is applied automatically.
+          </div>
+
+          {showRecurrenceIssues && recurrenceIssues.length > 0 && (
+            <div className="rounded-md border border-red-700/40 bg-red-900/20 px-2 py-1.5 text-[10px] text-red-300 space-y-0.5">
+              {recurrenceIssues.map((issue) => (
+                <p key={issue}>{issue}</p>
+              ))}
+            </div>
+          )}
+
+          {order.targets.length === 0 && (
+            <div className="rounded-md border border-amber-700/40 bg-amber-900/20 px-2 py-1.5 text-[10px] text-amber-200">
+              Add at least one target to make this a recurring order.
+            </div>
+          )}
+
+          {saveStatus.type === 'error' && (
+            <div className="rounded-md border border-red-700/40 bg-red-900/20 px-2 py-1.5 text-[10px] text-red-300">
+              {saveStatus.message}
+            </div>
+          )}
+
+          <div className="text-[10px] text-gray-500">
+            Complete this section, then run feasibility. Recurring configuration syncs
+            automatically in UTC as part of that run.
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // =============================================================================
 // OrderCard — single order with its targets
 // =============================================================================
@@ -417,6 +620,7 @@ interface OrderCardProps {
   isMapActive: boolean
   onToggleMap: () => void
   disabled?: boolean
+  defaultRecurrenceDates: { startDate: string; endDate: string }
   /** Reference to the just-added map-click target, if it belongs to this order */
   lastAdded: LastAddedTarget | null
 }
@@ -426,6 +630,7 @@ const OrderCard: React.FC<OrderCardProps> = ({
   isMapActive,
   onToggleMap,
   disabled,
+  defaultRecurrenceDates,
   lastAdded,
 }) => {
   const [expanded, setExpanded] = useState(true)
@@ -435,9 +640,27 @@ const OrderCard: React.FC<OrderCardProps> = ({
     type: 'success' | 'error' | null
     message: string
   }>({ type: null, message: '' })
+  const [recurrenceSaveStatus, setRecurrenceSaveStatus] = useState<{
+    type: 'error' | null
+    message: string
+  }>({ type: null, message: '' })
+  const [isSavingRecurrence, setIsSavingRecurrence] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const { renameOrder, removeOrder, addTarget, addTargets, removeTarget, updateTarget } =
-    usePreFeasibilityOrdersStore()
+  const activeWorkspaceId = useWorkspaceStore((state) => state.activeWorkspace) || 'default'
+  const {
+    renameOrder,
+    removeOrder,
+    addTarget,
+    addTargets,
+    removeTarget,
+    updateTarget,
+    setOrderType,
+    updateOrderRecurrence,
+    setOrderTemplateState,
+  } = usePreFeasibilityOrdersStore()
+  const orderType = order.orderType ?? 'one_time'
+  const recurrence = getOrderRecurrence(order.recurrence)
+  const recurrenceSummary = formatRecurrenceSummary({ orderType, recurrence })
 
   const handleSaveName = () => {
     if (editName.trim()) {
@@ -513,6 +736,113 @@ const OrderCard: React.FC<OrderCardProps> = ({
     })
   }
 
+  const handleRecurrenceChange = (
+    updates: Partial<NonNullable<PreFeasibilityOrder['recurrence']>>,
+  ) => {
+    setRecurrenceSaveStatus({ type: null, message: '' })
+    updateOrderRecurrence(order.id, updates)
+  }
+
+  const handleToggleWeekday = (weekday: (typeof WEEKDAY_OPTIONS)[number]['value']) => {
+    const currentDays = recurrence.daysOfWeek ?? []
+    const nextDays = currentDays.includes(weekday)
+      ? currentDays.filter((day) => day !== weekday)
+      : [...currentDays, weekday]
+
+    handleRecurrenceChange({ daysOfWeek: nextDays })
+  }
+
+  const handleOrderTypeChange = async (nextType: OrderType) => {
+    if (nextType === orderType) {
+      return
+    }
+
+    setRecurrenceSaveStatus({ type: null, message: '' })
+
+    if (nextType === 'one_time' && (order.templateIds?.length ?? 0) > 0) {
+      setIsSavingRecurrence(true)
+      try {
+        await retireTemplateIds(order.templateIds ?? [])
+        setOrderTemplateState(order.id, { templateIds: [], templateStatus: null })
+        setOrderType(order.id, 'one_time')
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.orderTemplates.list(activeWorkspaceId),
+        })
+      } catch (error) {
+        setRecurrenceSaveStatus({
+          type: 'error',
+          message: getTemplateMutationErrorMessage(error),
+        })
+      } finally {
+        setIsSavingRecurrence(false)
+      }
+      return
+    }
+
+    if (nextType === 'repeats') {
+      const defaultRecurrenceUpdates: Partial<NonNullable<PreFeasibilityOrder['recurrence']>> = {}
+
+      if (!recurrence.effectiveStartDate && defaultRecurrenceDates.startDate) {
+        defaultRecurrenceUpdates.effectiveStartDate = defaultRecurrenceDates.startDate
+      }
+
+      if (!recurrence.effectiveEndDate && defaultRecurrenceDates.endDate) {
+        defaultRecurrenceUpdates.effectiveEndDate = defaultRecurrenceDates.endDate
+      }
+
+      if (Object.keys(defaultRecurrenceUpdates).length > 0) {
+        updateOrderRecurrence(order.id, defaultRecurrenceUpdates)
+      }
+    }
+
+    setOrderType(order.id, nextType)
+  }
+
+  const handleRemoveOrder = async () => {
+    setRecurrenceSaveStatus({ type: null, message: '' })
+
+    try {
+      if ((order.templateIds?.length ?? 0) > 0) {
+        setIsSavingRecurrence(true)
+        await retireTemplateIds(order.templateIds ?? [])
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.orderTemplates.list(activeWorkspaceId),
+        })
+      }
+      removeOrder(order.id)
+    } catch (error) {
+      setRecurrenceSaveStatus({
+        type: 'error',
+        message: getTemplateMutationErrorMessage(error),
+      })
+    } finally {
+      setIsSavingRecurrence(false)
+    }
+  }
+
+  const handleRemoveTarget = async (targetIndex: number) => {
+    setRecurrenceSaveStatus({ type: null, message: '' })
+
+    try {
+      const templateId = order.templateIds?.[targetIndex]
+      if (templateId) {
+        setIsSavingRecurrence(true)
+        await retireTemplateIds([templateId])
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.orderTemplates.list(activeWorkspaceId),
+        })
+      }
+      removeTarget(order.id, targetIndex)
+    } catch (error) {
+      setRecurrenceSaveStatus({
+        type: 'error',
+        message: getTemplateMutationErrorMessage(error),
+      })
+    } finally {
+      setIsSavingRecurrence(false)
+    }
+  }
+
   const nameIsEmpty = !order.name.trim()
 
   return (
@@ -558,6 +888,7 @@ const OrderCard: React.FC<OrderCardProps> = ({
             >
               {nameIsEmpty ? 'Unnamed order' : order.name}
             </span>
+            <RecurrenceSummaryChip summary={recurrenceSummary} className="max-w-[220px]" />
             {!disabled && (
               <button
                 onClick={() => {
@@ -579,7 +910,10 @@ const OrderCard: React.FC<OrderCardProps> = ({
 
         {!disabled && (
           <button
-            onClick={() => removeOrder(order.id)}
+            onClick={() => {
+              void handleRemoveOrder()
+            }}
+            disabled={isSavingRecurrence}
             className="p-0.5 text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded transition-colors"
             title="Remove order"
           >
@@ -597,6 +931,17 @@ const OrderCard: React.FC<OrderCardProps> = ({
               <span>Order name is required to run feasibility</span>
             </div>
           )}
+
+          <RecurrenceSection
+            order={order}
+            disabled={disabled || isSavingRecurrence}
+            saveStatus={recurrenceSaveStatus}
+            onOrderTypeChange={(nextType) => {
+              void handleOrderTypeChange(nextType)
+            }}
+            onRecurrenceChange={handleRecurrenceChange}
+            onToggleWeekday={handleToggleWeekday}
+          />
 
           {/* Quick actions toolbar: samples, file upload, map-click */}
           {!disabled && (
@@ -701,16 +1046,18 @@ const OrderCard: React.FC<OrderCardProps> = ({
                   <OrderTargetRow
                     key={`${order.id}-${idx}`}
                     target={target}
-                    onRemove={() => removeTarget(order.id, idx)}
+                    onRemove={() => {
+                      void handleRemoveTarget(idx)
+                    }}
                     onUpdate={(updates) => updateTarget(order.id, idx, updates)}
-                    disabled={disabled}
+                    disabled={disabled || isSavingRecurrence}
                   />
                 )
               })}
             </div>
           )}
 
-          {!disabled && !isMapActive && (
+          {!disabled && !isMapActive && !isSavingRecurrence && (
             <InlineTargetAdd onAdd={(target) => addTarget(order.id, target)} />
           )}
         </div>
@@ -725,15 +1072,51 @@ const OrderCard: React.FC<OrderCardProps> = ({
 
 interface OrdersPanelProps {
   disabled?: boolean
+  recurrenceDateDefaults?: { startDate: string; endDate: string }
 }
 
-const OrdersPanel: React.FC<OrdersPanelProps> = ({ disabled = false }) => {
-  const { orders, createOrder, activeOrderId, setActiveOrder } = usePreFeasibilityOrdersStore()
+const OrdersPanel: React.FC<OrdersPanelProps> = ({
+  disabled = false,
+  recurrenceDateDefaults = { startDate: '', endDate: '' },
+}) => {
+  const activeWorkspaceId = useWorkspaceStore((state) => state.activeWorkspace) || 'default'
+  const hydratedWorkspaceRef = useRef<string | null>(null)
+  const { data: orderTemplatesData } = useOrderTemplates(activeWorkspaceId, true)
+  const { order, createOrder, activeOrderId, setActiveOrder, replaceOrder } =
+    usePreFeasibilityOrdersStore()
   const { setTargets: setPreviewTargets } = usePreviewTargetsStore()
   const { isAddMode, toggleAddMode, disableAddMode, lastAddedTarget } = useTargetAddStore()
 
+  useEffect(() => {
+    if (hydratedWorkspaceRef.current && hydratedWorkspaceRef.current !== activeWorkspaceId) {
+      replaceOrder(null)
+      hydratedWorkspaceRef.current = null
+    }
+  }, [activeWorkspaceId, replaceOrder])
+
+  useEffect(() => {
+    if (!orderTemplatesData || hydratedWorkspaceRef.current === activeWorkspaceId) {
+      return
+    }
+
+    const localUnsyncedOrder = usePreFeasibilityOrdersStore.getState().order
+    const recurringOrder = mergePreFeasibilityOrders(
+      groupTemplatesIntoOrders(orderTemplatesData.templates),
+    )
+
+    replaceOrder(
+      mergePreFeasibilityOrders([
+        localUnsyncedOrder && (localUnsyncedOrder.templateIds?.length ?? 0) === 0
+          ? localUnsyncedOrder
+          : null,
+        recurringOrder,
+      ]),
+    )
+    hydratedWorkspaceRef.current = activeWorkspaceId
+  }, [activeWorkspaceId, orderTemplatesData, replaceOrder])
+
   // Sync all order targets to preview store for map display
-  const allTargets = useMemo(() => orders.flatMap((o) => o.targets), [orders])
+  const allTargets = useMemo(() => order?.targets ?? [], [order])
   useEffect(() => {
     setPreviewTargets(allTargets)
   }, [allTargets, setPreviewTargets])
@@ -755,40 +1138,36 @@ const OrdersPanel: React.FC<OrdersPanelProps> = ({ disabled = false }) => {
 
   // Clean up: if active order is removed, disable map mode
   useEffect(() => {
-    if (activeOrderId && !orders.find((o) => o.id === activeOrderId)) {
+    if (activeOrderId && order?.id !== activeOrderId) {
       disableAddMode()
       setActiveOrder(null)
     }
-  }, [orders, activeOrderId, disableAddMode, setActiveOrder])
+  }, [order, activeOrderId, disableAddMode, setActiveOrder])
 
   return (
     <div className={`space-y-3 ${disabled ? 'opacity-60 pointer-events-none' : ''}`}>
-      {/* Orders List */}
-      {orders.length === 0 ? (
+      {/* Order Card */}
+      {!order ? (
         <div className="text-center py-6 glass-panel rounded-lg">
           <Package className="w-8 h-8 mx-auto mb-2 text-gray-500 opacity-30" />
-          <p className="text-xs font-medium text-gray-400">No orders created yet</p>
+          <p className="text-xs font-medium text-gray-400">No order created yet</p>
           <p className="text-[10px] text-gray-500 mt-1">
-            Create an order and add targets to run feasibility
+            Create the run order and add targets to run feasibility
           </p>
         </div>
       ) : (
-        <div className="space-y-2">
-          {orders.map((order) => (
-            <OrderCard
-              key={order.id}
-              order={order}
-              isMapActive={isAddMode && activeOrderId === order.id}
-              onToggleMap={() => handleToggleMapForOrder(order.id)}
-              disabled={disabled}
-              lastAdded={lastAddedTarget?.orderId === order.id ? lastAddedTarget : null}
-            />
-          ))}
-        </div>
+        <OrderCard
+          key={order.id}
+          order={order}
+          isMapActive={isAddMode && activeOrderId === order.id}
+          onToggleMap={() => handleToggleMapForOrder(order.id)}
+          disabled={disabled}
+          defaultRecurrenceDates={recurrenceDateDefaults}
+          lastAdded={lastAddedTarget?.orderId === order.id ? lastAddedTarget : null}
+        />
       )}
 
-      {/* Create Order Button */}
-      {!disabled && (
+      {!disabled && !order && (
         <button
           onClick={createOrder}
           className="w-full px-3 py-2 bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 hover:text-blue-200 rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1.5 border border-blue-600/30 hover:border-blue-500/50"
@@ -796,6 +1175,13 @@ const OrdersPanel: React.FC<OrdersPanelProps> = ({ disabled = false }) => {
           <Plus className="w-3.5 h-3.5" />
           <span>Create Order</span>
         </button>
+      )}
+
+      {order && (
+        <div className="rounded-lg border border-blue-800/40 bg-blue-950/20 px-3 py-2 text-[10px] text-blue-200">
+          Feasibility Analysis authors one order per run. Add as many targets as needed inside
+          this order, and configure recurring frequency at the order level.
+        </div>
       )}
     </div>
   )

@@ -7,7 +7,7 @@
  * - Schedule tab: View committed schedule
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   InboxOrder,
   Batch,
@@ -26,6 +26,10 @@ import {
   getScheduleState,
   PlanBatchResponse,
 } from '../api/scheduleApi'
+import type { OrderTemplateRecord } from '../types'
+import { useOrderTemplates } from '../hooks/queries'
+import RecurrenceSummaryChip from './RecurrenceSummaryChip'
+import { formatTemplateRecurrenceSummary } from '../utils/recurrence'
 
 type TabType = 'inbox' | 'batches' | 'schedule'
 
@@ -37,6 +41,14 @@ export default function OrdersArea({ workspaceId }: OrdersAreaProps): JSX.Elemen
   const [activeTab, setActiveTab] = useState<TabType>('inbox')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const { data: orderTemplatesData } = useOrderTemplates(workspaceId, true)
+  const orderTemplatesById = useMemo(
+    () =>
+      new Map<string, OrderTemplateRecord>(
+        (orderTemplatesData?.templates ?? []).map((template) => [template.id, template]),
+      ),
+    [orderTemplatesData],
+  )
 
   // Inbox state
   const [inboxOrders, setInboxOrders] = useState<InboxOrder[]>([])
@@ -315,6 +327,7 @@ export default function OrdersArea({ workspaceId }: OrdersAreaProps): JSX.Elemen
             formatDate={formatDate}
             getStatusColor={getStatusColor}
             getPriorityColor={getPriorityColor}
+            orderTemplatesById={orderTemplatesById}
           />
         )}
 
@@ -335,7 +348,11 @@ export default function OrdersArea({ workspaceId }: OrdersAreaProps): JSX.Elemen
         )}
 
         {activeTab === 'schedule' && (
-          <ScheduleTab workspaceId={workspaceId} formatDate={formatDate} />
+          <ScheduleTab
+            workspaceId={workspaceId}
+            formatDate={formatDate}
+            orderTemplatesById={orderTemplatesById}
+          />
         )}
       </div>
     </div>
@@ -366,6 +383,7 @@ interface InboxTabProps {
   formatDate: (s: string) => string
   getStatusColor: (s: string) => string
   getPriorityColor: (p: number) => string
+  orderTemplatesById: Map<string, OrderTemplateRecord>
 }
 
 function InboxTab({
@@ -388,6 +406,7 @@ function InboxTab({
   formatDate,
   getStatusColor,
   getPriorityColor,
+  orderTemplatesById,
 }: InboxTabProps) {
   return (
     <div className="space-y-4">
@@ -505,7 +524,16 @@ function InboxTab({
                   <td className="px-3 py-2">
                     <span className="font-mono text-blue-400">{(score * 100).toFixed(0)}</span>
                   </td>
-                  <td className="px-3 py-2 font-medium">{order.target_id}</td>
+                  <td className="px-3 py-2">
+                    <div className="space-y-1">
+                      <div className="font-medium">{order.target_id}</div>
+                      <RecurrenceSummaryChip
+                        summary={formatTemplateRecurrenceSummary(
+                          order.template_id ? orderTemplatesById.get(order.template_id) : undefined,
+                        )}
+                      />
+                    </div>
+                  </td>
                   <td className={`px-3 py-2 font-bold ${getPriorityColor(order.priority)}`}>
                     P{order.priority}
                   </td>
@@ -758,9 +786,10 @@ function BatchesTab({
 interface ScheduleTabProps {
   workspaceId: string
   formatDate: (s: string) => string
+  orderTemplatesById: Map<string, OrderTemplateRecord>
 }
 
-function ScheduleTab({ workspaceId, formatDate }: ScheduleTabProps) {
+function ScheduleTab({ workspaceId, formatDate, orderTemplatesById }: ScheduleTabProps) {
   const [orders, setOrders] = useState<
     Array<{
       id: string
@@ -769,6 +798,7 @@ function ScheduleTab({ workspaceId, formatDate }: ScheduleTabProps) {
       status: string
       requested_window_start?: string
       requested_window_end?: string
+      template_id?: string
     }>
   >([])
   const [acquisitions, setAcquisitions] = useState<
@@ -924,6 +954,13 @@ function ScheduleTab({ workspaceId, formatDate }: ScheduleTabProps) {
                     <span className="px-1.5 py-0.5 text-[10px] rounded bg-gray-700 text-gray-300">
                       {order.status}
                     </span>
+                  </div>
+                  <div className="mt-1">
+                    <RecurrenceSummaryChip
+                      summary={formatTemplateRecurrenceSummary(
+                        order.template_id ? orderTemplatesById.get(order.template_id) : undefined,
+                      )}
+                    />
                   </div>
                   <div className="text-[11px] text-gray-500 mt-0.5 truncate">
                     {order.id} · {linkedAcqs.length} acquisition{linkedAcqs.length !== 1 ? 's' : ''}
