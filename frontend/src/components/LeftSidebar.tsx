@@ -26,7 +26,7 @@ import { usePlanningStore } from '../store/planningStore'
 import { useSlewVisStore } from '../store/slewVisStore'
 import { useSessionStore } from '../store/sessionStore'
 import { AlgorithmResult, AcceptedOrder, WorkspaceData, SceneObject, TargetData } from '../types'
-import { commitScheduleDirect, commitRepairPlan } from '../api/scheduleApi'
+import { commitScheduleDirect, commitRepairPlan, type PlanningMode } from '../api/scheduleApi'
 import { queryClient, queryKeys } from '../lib/queryClient'
 import { scheduleToDirectCommitItems } from '../utils/commitItems'
 import { LEFT_SIDEBAR_PANELS, SIMPLE_MODE_LEFT_PANELS, isDebugMode } from '../constants/simpleMode'
@@ -312,7 +312,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
     async (
       algorithm: string,
       result: AlgorithmResult,
-      options?: { force?: boolean },
+      options?: { force?: boolean; planningMode?: PlanningMode },
     ) => {
       const timestamp = new Date().toISOString()
       // Get existing order count for sequential naming
@@ -379,6 +379,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ onAdminPanelOpen, refreshKey 
             items: commitItems,
             algorithm,
             mode: result.schedule[0]?.sar_mode ? 'SAR' : 'OPTICAL',
+            planning_mode: options?.planningMode,
             lock_level: 'none',
             workspace_id: state.activeWorkspace || 'default',
             force: options?.force ?? false,

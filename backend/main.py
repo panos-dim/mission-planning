@@ -942,6 +942,39 @@ def _load_workspace_planning_baseline_target_ids(
     return set()
 
 
+def _build_workspace_current_target_ids(
+    mission_data: Dict[str, Any],
+    opportunities: list[Any],
+) -> set[str]:
+    """Build the scheduler-visible target set for incremental comparisons.
+
+    Auto-mode selection treats the current target set as the union of:
+    - mission-scope targets from the latest analysis payload, and
+    - planner-visible opportunity target IDs.
+
+    Keep the planning endpoint aligned with that same rule so a newly added
+    target with zero feasible opportunities is still recognized as new work
+    instead of falling back to replaying already-scheduled targets.
+    """
+
+    current_target_ids: set[str] = set()
+
+    for target in mission_data.get("targets", []):
+        if isinstance(target, dict):
+            target_name = target.get("name", "")
+        else:
+            target_name = getattr(target, "name", "")
+        if target_name:
+            current_target_ids.add(str(target_name))
+
+    for opp in opportunities:
+        target_id = getattr(opp, "target_id", "")
+        if target_id:
+            current_target_ids.add(str(target_id))
+
+    return current_target_ids
+
+
 def _serialize_workspace_target(target: Any) -> Dict[str, Any]:
     """Normalize target objects/dicts for workspace persistence."""
     if isinstance(target, dict):
@@ -3897,9 +3930,10 @@ def schedule_mission(request: PlanningRequest) -> PlanningResponse:
                             len(committed),
                         )
 
-                current_target_ids = {
-                    opp.target_id for opp in opportunities if getattr(opp, "target_id", "")
-                }
+                current_target_ids = _build_workspace_current_target_ids(
+                    mission_data,
+                    opportunities,
+                )
                 new_target_ids = current_target_ids - existing_target_ids
                 if new_target_ids:
                     original_target_count = len(opportunities)

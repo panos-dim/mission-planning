@@ -8,6 +8,7 @@ import pytest
 from unittest.mock import patch, MagicMock, PropertyMock
 from datetime import datetime, timedelta
 from concurrent.futures import Future
+from concurrent.futures.process import BrokenProcessPool
 
 from mission_planner.parallel import (
     get_optimal_workers,
@@ -446,6 +447,46 @@ class TestParallelVisibilityCalculator:
 
         # Should return empty list for failed target
         assert 'Target1' in result
+
+    @patch("mission_planner.parallel.cleanup_process_pool")
+    @patch("mission_planner.parallel.get_or_create_process_pool")
+    @patch("mission_planner.parallel.as_completed")
+    def test_get_visibility_windows_reraises_broken_process_pool(
+        self,
+        mock_as_completed,
+        mock_pool,
+        mock_cleanup,
+        mock_satellite,
+    ) -> None:
+        """Catastrophic pool failures should bubble up so callers can fall back to serial."""
+        mock_future = MagicMock(spec=Future)
+        mock_future.result.side_effect = BrokenProcessPool("terminated abruptly")
+
+        mock_executor = MagicMock()
+        mock_executor.submit.return_value = mock_future
+        mock_pool.return_value = mock_executor
+        mock_as_completed.return_value = iter([mock_future])
+
+        target = MagicMock()
+        target.name = "Target1"
+        target.latitude = 45.0
+        target.longitude = 10.0
+        target.description = ""
+        target.mission_type = "communication"
+        target.elevation_mask = 10.0
+        target.sensor_fov_half_angle_deg = None
+        target.max_spacecraft_roll = None
+
+        calc = ParallelVisibilityCalculator(mock_satellite)
+
+        with pytest.raises(BrokenProcessPool):
+            calc.get_visibility_windows(
+                [target],
+                datetime.utcnow(),
+                datetime.utcnow() + timedelta(hours=24),
+            )
+
+        mock_cleanup.assert_called_once()
 
     def test_adaptive_mode_setting(self, mock_satellite) -> None:
         """Test adaptive mode is properly set."""

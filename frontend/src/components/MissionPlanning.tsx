@@ -33,7 +33,7 @@ interface MissionPlanningProps {
   onPromoteToOrders?: (
     algorithm: string,
     result: AlgorithmResult,
-    options?: { force?: boolean },
+    options?: { force?: boolean; planningMode?: PlanningMode },
   ) => void | Promise<void>
 }
 
@@ -599,6 +599,7 @@ export default function MissionPlanning({ onPromoteToOrders }: MissionPlanningPr
         // Await the async handler so the guard holds until the commit completes
         await onPromoteToOrders(pendingCommitAlgorithm, results[pendingCommitAlgorithm], {
           force: !!commitPreview?.conflicts.some((conflict) => conflict.severity === 'error'),
+          planningMode: schedulingReasoning?.mode,
         })
         commitSucceeded = true
       } catch (err) {

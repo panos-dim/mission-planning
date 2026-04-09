@@ -6,6 +6,7 @@ mission planning tasks, enabling significant speedups on multi-core systems.
 """
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
 from typing import List, Dict, Any, Callable, Optional, Tuple
 from datetime import datetime
 import atexit
@@ -412,7 +413,7 @@ class ParallelVisibilityCalculator:
         # Collect results as they complete
         for future in as_completed(future_to_target):
             target_name = future_to_target[future]
-            
+
             try:
                 target_name, passes = future.result()
                 results[target_name] = passes
@@ -429,8 +430,15 @@ class ParallelVisibilityCalculator:
                 # Call progress callback if provided
                 if progress_callback:
                     progress_callback(completed, len(targets))
-                    
+
             except Exception as e:
+                if isinstance(e, BrokenProcessPool):
+                    logger.error(
+                        "Parallel process pool failed while processing %s; cleaning up and falling back to serial",
+                        target_name,
+                    )
+                    cleanup_process_pool()
+                    raise
                 logger.error("Error processing target %s: %s", target_name, e)
                 results[target_name] = []
                 completed += 1

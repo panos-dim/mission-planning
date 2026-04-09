@@ -576,3 +576,222 @@ def test_scheduler_runs_on_materialized_instances_without_algorithm_changes(
     assert all(item["template_id"] == template.id for item in schedule)
     assert all(item["instance_key"] in {"2026-04-02", "2026-04-03"} for item in schedule)
     assert all(item["canonical_target_id"] == "PORT_A" for item in schedule)
+
+
+def test_direct_commit_preserves_recurring_lineage_from_planning_schedule(
+    isolated_recurring_planning_api: Tuple[TestClient, ScheduleDB, str],
+) -> None:
+    client, db, workspace_id = isolated_recurring_planning_api
+    template = _create_template(
+        db,
+        workspace_id,
+        window_start_hhmm="00:00",
+        window_end_hhmm="23:59",
+        effective_end_date="2026-04-03",
+    )
+    base_start = datetime(2026, 4, 2, 9, 30, tzinfo=timezone.utc)
+    original_state = _snapshot_analysis_state()
+    set_current_mission_data(
+        {
+            "passes": [
+                {
+                    "satellite_name": "SAT-1",
+                    "target_name": "PORT_A",
+                    "start_time": _state_iso(base_start),
+                    "end_time": _state_iso(base_start),
+                    "max_elevation_time": _state_iso(base_start),
+                    "max_elevation": 40.0,
+                    "start_azimuth": 180.0,
+                },
+                {
+                    "satellite_name": "SAT-1",
+                    "target_name": "PORT_A",
+                    "start_time": _state_iso(base_start + timedelta(days=1)),
+                    "end_time": _state_iso(base_start + timedelta(days=1)),
+                    "max_elevation_time": _state_iso(base_start + timedelta(days=1)),
+                    "max_elevation": 42.0,
+                    "start_azimuth": 182.0,
+                },
+            ],
+            "targets": [
+                TargetData(name="PORT_A", latitude=29.3772, longitude=47.9906, priority=2)
+            ],
+            "mission_data": {
+                "start_time": _state_iso(base_start - timedelta(hours=1)),
+                "end_time": _state_iso(base_start + timedelta(days=1, hours=2)),
+                "max_spacecraft_pitch_deg": 45.0,
+            },
+            "satellites_dict": {},
+        },
+        workspace_id,
+    )
+
+    try:
+        plan_response = client.post(
+            "/api/v1/planning/schedule",
+            json={
+                "algorithms": ["roll_pitch_best_fit"],
+                "mode": "from_scratch",
+                "workspace_id": workspace_id,
+            },
+        )
+    finally:
+        _restore_analysis_state(original_state)
+
+    assert plan_response.status_code == 200, plan_response.json()
+    plan_payload = plan_response.json()
+    schedule = plan_payload["results"]["roll_pitch_best_fit"]["schedule"]
+    assert len(schedule) == 2, plan_payload
+    assert all(item["template_id"] == template.id for item in schedule), plan_payload
+
+    commit_items = [
+        {
+            "opportunity_id": item["opportunity_id"],
+            "satellite_id": item["satellite_id"],
+            "target_id": item["target_id"],
+            "start_time": item["start_time"],
+            "end_time": item["end_time"],
+            "roll_angle_deg": item["roll_angle"],
+            "pitch_angle_deg": item["pitch_angle"],
+            "value": item["value"],
+            "quality_score": item.get("quality_score"),
+            "order_id": item.get("order_id"),
+            "template_id": item.get("template_id"),
+            "instance_key": item.get("instance_key"),
+            "canonical_target_id": item.get("canonical_target_id"),
+            "display_target_name": item.get("display_target_name"),
+        }
+        for item in schedule
+    ]
+
+    commit_response = client.post(
+        "/api/v1/schedule/commit/direct",
+        json={
+            "items": commit_items,
+            "algorithm": "roll_pitch_best_fit",
+            "mode": "OPTICAL",
+            "planning_mode": "from_scratch",
+            "workspace_id": workspace_id,
+        },
+    )
+    assert commit_response.status_code == 200, commit_response.json()
+    commit_payload = commit_response.json()
+
+    plan_items = db.get_plan_items(commit_payload["plan_id"])
+    assert len(plan_items) == 2
+    assert all(item.order_id for item in plan_items)
+    assert all(item.template_id == template.id for item in plan_items)
+    assert all(item.instance_key in {"2026-04-02", "2026-04-03"} for item in plan_items)
+    assert all(item.canonical_target_id == "PORT_A" for item in plan_items)
+    assert all(item.display_target_name == "PORT_A" for item in plan_items)
+
+    acquisitions = db.list_acquisitions(workspace_id=workspace_id, limit=10)
+    assert len(acquisitions) == 2
+    assert all(acq.order_id for acq in acquisitions)
+    assert all(acq.template_id == template.id for acq in acquisitions)
+    assert all(acq.instance_key in {"2026-04-02", "2026-04-03"} for acq in acquisitions)
+    assert all(acq.canonical_target_id == "PORT_A" for acq in acquisitions)
+    assert all(acq.display_target_name == "PORT_A" for acq in acquisitions)
+
+
+def test_repair_commit_preserves_recurring_lineage_for_added_instances(
+    isolated_recurring_planning_api: Tuple[TestClient, ScheduleDB, str],
+) -> None:
+    client, db, workspace_id = isolated_recurring_planning_api
+    base_start = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(days=1)
+    template = _create_template(
+        db,
+        workspace_id,
+        window_start_hhmm="00:00",
+        window_end_hhmm="23:59",
+        effective_start_date=base_start.date().isoformat(),
+        effective_end_date=(base_start + timedelta(days=1)).date().isoformat(),
+    )
+    original_state = _snapshot_analysis_state()
+    set_current_mission_data(
+        {
+            "passes": [
+                {
+                    "satellite_name": "SAT-1",
+                    "target_name": "PORT_A",
+                    "start_time": _state_iso(base_start),
+                    "end_time": _state_iso(base_start),
+                    "max_elevation_time": _state_iso(base_start),
+                    "max_elevation": 40.0,
+                    "start_azimuth": 180.0,
+                },
+                {
+                    "satellite_name": "SAT-1",
+                    "target_name": "PORT_A",
+                    "start_time": _state_iso(base_start + timedelta(days=1)),
+                    "end_time": _state_iso(base_start + timedelta(days=1)),
+                    "max_elevation_time": _state_iso(base_start + timedelta(days=1)),
+                    "max_elevation": 42.0,
+                    "start_azimuth": 182.0,
+                },
+            ],
+            "targets": [
+                TargetData(name="PORT_A", latitude=29.3772, longitude=47.9906, priority=2)
+            ],
+            "mission_data": {
+                "start_time": _state_iso(base_start - timedelta(hours=1)),
+                "end_time": _state_iso(base_start + timedelta(days=1, hours=2)),
+                "max_spacecraft_pitch_deg": 45.0,
+            },
+            "satellites_dict": {},
+        },
+        workspace_id,
+    )
+
+    try:
+        repair_response = client.post(
+            "/api/v1/schedule/repair",
+            json={
+                "workspace_id": workspace_id,
+                "horizon_from": _iso(base_start - timedelta(hours=1)),
+                "horizon_to": _iso(base_start + timedelta(days=1, hours=2)),
+            },
+        )
+    finally:
+        _restore_analysis_state(original_state)
+
+    assert repair_response.status_code == 200, repair_response.json()
+    repair_payload = repair_response.json()
+    added_items = [
+        item
+        for item in repair_payload["new_plan_items"]
+        if item.get("template_id") == template.id
+    ]
+    assert len(added_items) == 2, repair_payload
+    expected_instance_keys = {
+        base_start.date().isoformat(),
+        (base_start + timedelta(days=1)).date().isoformat(),
+    }
+    assert {item["instance_key"] for item in added_items} == expected_instance_keys
+
+    commit_response = client.post(
+        "/api/v1/schedule/repair/commit",
+        json={
+            "plan_id": repair_payload["plan_id"],
+            "workspace_id": workspace_id,
+            "drop_acquisition_ids": repair_payload["repair_diff"]["dropped"],
+            "lock_level": "none",
+        },
+    )
+    assert commit_response.status_code == 200, commit_response.json()
+
+    plan_items = db.get_plan_items(repair_payload["plan_id"])
+    assert len(plan_items) == 2
+    assert all(item.order_id for item in plan_items)
+    assert all(item.template_id == template.id for item in plan_items)
+    assert all(item.instance_key in expected_instance_keys for item in plan_items)
+    assert all(item.canonical_target_id == "PORT_A" for item in plan_items)
+    assert all(item.display_target_name == "PORT_A" for item in plan_items)
+
+    acquisitions = db.list_acquisitions(workspace_id=workspace_id, limit=10)
+    assert len(acquisitions) == 2
+    assert all(acq.order_id for acq in acquisitions)
+    assert all(acq.template_id == template.id for acq in acquisitions)
+    assert all(acq.instance_key in expected_instance_keys for acq in acquisitions)
+    assert all(acq.canonical_target_id == "PORT_A" for acq in acquisitions)
+    assert all(acq.display_target_name == "PORT_A" for acq in acquisitions)

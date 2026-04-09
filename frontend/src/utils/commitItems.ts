@@ -17,9 +17,15 @@ export function scheduleToDirectCommitItems(
     roll_angle_deg: item.roll_angle || item.delta_roll || 0,
     pitch_angle_deg: item.pitch_angle || 0,
     value: item.value,
+    quality_score: item.quality_score,
     incidence_angle_deg: item.incidence_angle,
     sar_mode: item.sar_mode,
     look_side: item.look_side,
     pass_direction: item.pass_direction,
+    order_id: item.order_id ?? null,
+    template_id: item.template_id ?? null,
+    instance_key: item.instance_key ?? null,
+    canonical_target_id: item.canonical_target_id ?? null,
+    display_target_name: item.display_target_name ?? null,
   }))
 }
