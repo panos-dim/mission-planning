@@ -74,6 +74,62 @@ export const SARMissionDataSchema = z.object({
   sar_passes_count: z.number().optional(),
 });
 
+export const MissionRunOrderRecurrenceSummarySchema = z.object({
+  recurrence_type: z.enum(["daily", "weekly"]),
+  interval: z.number(),
+  days_of_week: z
+    .array(z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]))
+    .nullable()
+    .optional(),
+  window_start_hhmm: z.string(),
+  window_end_hhmm: z.string(),
+  timezone_name: z.string(),
+  effective_start_date: z.string(),
+  effective_end_date: z.string().nullable().optional(),
+});
+
+export const MissionRunOrderSummarySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  order_type: z.enum(["one_time", "repeats"]),
+  target_count: z.number(),
+  planning_demand_count: z.number(),
+  recurrence: MissionRunOrderRecurrenceSummarySchema.nullable().optional(),
+});
+
+export const PlanningDemandSummarySchema = z.object({
+  run_order_id: z.string(),
+  demand_id: z.string(),
+  canonical_target_id: z.string(),
+  display_target_name: z.string(),
+  demand_type: z.enum(["one_time", "recurring_instance"]),
+  template_id: z.string().nullable().optional(),
+  instance_key: z.string().nullable().optional(),
+  requested_window_start: z.string().nullable().optional(),
+  requested_window_end: z.string().nullable().optional(),
+  local_date: z.string().nullable().optional(),
+  priority: z.number(),
+  feasibility_status: z.enum(["feasible", "no_opportunity"]),
+  has_feasible_pass: z.boolean(),
+  matching_pass_count: z.number(),
+  matching_pass_indexes: z.array(z.number()),
+  first_pass_start: z.string().nullable().optional(),
+  last_pass_end: z.string().nullable().optional(),
+  best_pass_index: z.number().nullable().optional(),
+  best_pass_start: z.string().nullable().optional(),
+  best_pass_end: z.string().nullable().optional(),
+  best_max_elevation: z.number().nullable().optional(),
+});
+
+export const PlanningDemandAggregateSummarySchema = z.object({
+  run_order_id: z.string(),
+  total_demands: z.number(),
+  feasible_demands: z.number(),
+  infeasible_demands: z.number(),
+  one_time_demands: z.number(),
+  recurring_instance_demands: z.number(),
+});
+
 export const MissionDataSchema = z.object({
   // Legacy single satellite (optional for constellation)
   satellite_name: z.string().nullable().optional(),
@@ -95,6 +151,9 @@ export const MissionDataSchema = z.object({
   passes: z.array(PassDataSchema),
   coverage_percentage: z.number().optional(),
   pass_statistics: z.record(z.string(), z.number()).optional(),
+  run_order: MissionRunOrderSummarySchema.nullable().optional(),
+  planning_demands: z.array(PlanningDemandSummarySchema).optional(),
+  planning_demand_summary: PlanningDemandAggregateSummarySchema.nullable().optional(),
   // SAR-specific data (only present for SAR missions)
   sar: SARMissionDataSchema.optional(),
 });

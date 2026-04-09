@@ -127,6 +127,84 @@ export interface OrderTemplateRecord {
   updated_at: string
 }
 
+export interface MissionRunOrderTarget {
+  canonicalTargetId: string
+  displayTargetName: string
+  templateId?: string | null
+}
+
+export interface MissionRunOrderRecurrence {
+  recurrenceType?: RecurrenceType | ''
+  interval?: number
+  daysOfWeek?: RecurrenceWeekday[]
+  windowStart?: string
+  windowEnd?: string
+  timezone?: string
+  effectiveStartDate?: string
+  effectiveEndDate?: string
+}
+
+export interface MissionRunOrder {
+  id: string
+  name: string
+  orderType: OrderType
+  targets: MissionRunOrderTarget[]
+  recurrence?: MissionRunOrderRecurrence | null
+}
+
+export interface MissionRunOrderRecurrenceSummary {
+  recurrence_type: RecurrenceType
+  interval: number
+  days_of_week?: RecurrenceWeekday[] | null
+  window_start_hhmm: string
+  window_end_hhmm: string
+  timezone_name: string
+  effective_start_date: string
+  effective_end_date?: string | null
+}
+
+export interface MissionRunOrderSummary {
+  id: string
+  name: string
+  order_type: OrderType
+  target_count: number
+  planning_demand_count: number
+  recurrence?: MissionRunOrderRecurrenceSummary | null
+}
+
+export interface PlanningDemandSummary {
+  run_order_id: string
+  demand_id: string
+  canonical_target_id: string
+  display_target_name: string
+  demand_type: 'one_time' | 'recurring_instance'
+  template_id?: string | null
+  instance_key?: string | null
+  requested_window_start?: string | null
+  requested_window_end?: string | null
+  local_date?: string | null
+  priority: number
+  feasibility_status: 'feasible' | 'no_opportunity'
+  has_feasible_pass: boolean
+  matching_pass_count: number
+  matching_pass_indexes: number[]
+  first_pass_start?: string | null
+  last_pass_end?: string | null
+  best_pass_index?: number | null
+  best_pass_start?: string | null
+  best_pass_end?: string | null
+  best_max_elevation?: number | null
+}
+
+export interface PlanningDemandAggregateSummary {
+  run_order_id: string
+  total_demands: number
+  feasible_demands: number
+  infeasible_demands: number
+  one_time_demands: number
+  recurring_instance_demands: number
+}
+
 export interface MissionRequest {
   // Legacy single satellite (deprecated - use satellites for constellation)
   tle?: TLEData
@@ -142,6 +220,26 @@ export interface MissionRequest {
   elevation_mask?: number
   max_spacecraft_roll_deg?: number // Satellite agility limit (how far it can tilt)
   acquisition_time_window?: AcquisitionTimeWindow
+  run_order?: {
+    id: string
+    name: string
+    order_type: OrderType
+    targets: Array<{
+      canonical_target_id: string
+      display_target_name: string
+      template_id?: string | null
+    }>
+    recurrence?: {
+      recurrence_type: RecurrenceType
+      interval?: number
+      days_of_week?: RecurrenceWeekday[] | null
+      window_start_hhmm: string
+      window_end_hhmm: string
+      timezone_name?: string
+      effective_start_date: string
+      effective_end_date?: string | null
+    } | null
+  }
 }
 
 // =============================================================================
@@ -312,6 +410,9 @@ export interface MissionData {
   passes: PassData[]
   coverage_percentage?: number
   pass_statistics?: Record<string, number>
+  run_order?: MissionRunOrderSummary | null
+  planning_demands?: PlanningDemandSummary[]
+  planning_demand_summary?: PlanningDemandAggregateSummary | null
 
   // SAR-specific data (only present for SAR missions)
   sar?: SARMissionData
@@ -493,6 +594,7 @@ export interface FormData {
   tle: TLEData
   satellites: TLEData[]
   targets: TargetData[]
+  runOrder?: MissionRunOrder
   startTime: string
   endTime: string
   missionType: 'imaging' | 'communication'

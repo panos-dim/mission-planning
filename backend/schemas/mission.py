@@ -1,8 +1,8 @@
 """Mission request/response schemas."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.time_windows import (
     DailyTimeWindow,
@@ -132,6 +132,88 @@ class AcquisitionTimeWindowRequest(BaseModel):
         return self
 
 
+RunOrderType = Literal["one_time", "repeats"]
+RunOrderRecurrenceType = Literal["daily", "weekly"]
+RunOrderWeekday = Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+PlanningDemandType = Literal["one_time", "recurring_instance"]
+PlanningDemandFeasibilityStatus = Literal["feasible", "no_opportunity"]
+
+
+class RunOrderTargetBinding(BaseModel):
+    """Lineage metadata for one target inside the run-level order."""
+
+    canonical_target_id: str = Field(..., min_length=1)
+    display_target_name: Optional[str] = Field(default=None, min_length=1)
+    template_id: Optional[str] = Field(default=None, min_length=1)
+
+    @field_validator("canonical_target_id", "display_target_name", "template_id")
+    @classmethod
+    def validate_non_empty_strings(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Value must not be empty")
+        return stripped
+
+
+class RunOrderRecurrenceRequest(BaseModel):
+    """Recurring cadence authored on the single run-level order."""
+
+    recurrence_type: RunOrderRecurrenceType
+    interval: int = Field(default=1, ge=1)
+    days_of_week: Optional[List[RunOrderWeekday]] = Field(default=None)
+    window_start_hhmm: str = Field(..., min_length=1)
+    window_end_hhmm: str = Field(..., min_length=1)
+    timezone_name: str = Field(default="UTC", min_length=1)
+    effective_start_date: str = Field(..., min_length=1)
+    effective_end_date: Optional[str] = Field(default=None, min_length=1)
+
+    @field_validator("window_start_hhmm", "window_end_hhmm")
+    @classmethod
+    def validate_window_time_format(cls, value: str) -> str:
+        parse_hhmm_time(value)
+        return value
+
+    @field_validator("timezone_name")
+    @classmethod
+    def validate_recurrence_timezone(cls, value: str) -> str:
+        get_time_zone(value)
+        return value
+
+    @model_validator(mode="after")
+    def validate_weekly_configuration(self) -> "RunOrderRecurrenceRequest":
+        if self.recurrence_type == "weekly" and not self.days_of_week:
+            raise ValueError(
+                "days_of_week is required when recurrence_type is 'weekly'"
+            )
+        return self
+
+
+class RunOrderRequest(BaseModel):
+    """Single run-level order container sent with feasibility analysis."""
+
+    id: str = Field(..., min_length=1)
+    name: str = Field(..., min_length=1)
+    order_type: RunOrderType = Field(default="one_time")
+    targets: List[RunOrderTargetBinding] = Field(default_factory=list)
+    recurrence: Optional[RunOrderRecurrenceRequest] = Field(default=None)
+
+    @field_validator("id", "name")
+    @classmethod
+    def validate_run_order_strings(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Value must not be empty")
+        return stripped
+
+    @model_validator(mode="after")
+    def validate_recurrence_for_order_type(self) -> "RunOrderRequest":
+        if self.order_type == "repeats" and self.recurrence is None:
+            raise ValueError("recurrence is required when order_type is 'repeats'")
+        return self
+
+
 class MissionRequest(BaseModel):
     # Legacy single satellite (optional for backward compatibility)
     tle: Optional[TLEData] = Field(
@@ -146,6 +228,10 @@ class MissionRequest(BaseModel):
     workspace_id: Optional[str] = Field(
         default=None,
         description="Optional workspace scope for mission analysis state",
+    )
+    run_order: Optional[RunOrderRequest] = Field(
+        default=None,
+        description="Optional single run-level order contract for demand-aware feasibility",
     )
 
     targets: List[TargetData]
@@ -220,6 +306,11 @@ class MissionRequest(BaseModel):
 
         if not has_tle and not has_satellites:
             raise ValueError("Either 'tle' or 'satellites' must be provided")
+        if self.run_order and self.run_order.targets:
+            if len(self.run_order.targets) != len(self.targets):
+                raise ValueError(
+                    "run_order.targets must align 1:1 with request.targets"
+                )
         return self
 
     def get_satellite_list(self) -> List[TLEData]:
@@ -238,4 +329,112 @@ class MissionRequest(BaseModel):
 class MissionResponse(BaseModel):
     success: bool
     message: str
-    data: Optional[Dict[str, Any]] = None
+    data: Optional["MissionAnalyzeResponseData"] = None
+
+
+class SatelliteInfoResponse(BaseModel):
+    """Satellite summary returned by feasibility analysis."""
+
+    id: str
+    name: str
+    color: Optional[str] = None
+
+
+class RunOrderRecurrenceResponse(BaseModel):
+    """Normalized recurring cadence returned with mission results."""
+
+    recurrence_type: RunOrderRecurrenceType
+    interval: int = Field(default=1, ge=1)
+    days_of_week: Optional[List[RunOrderWeekday]] = None
+    window_start_hhmm: str
+    window_end_hhmm: str
+    timezone_name: str
+    effective_start_date: str
+    effective_end_date: Optional[str] = None
+
+
+class RunOrderSummary(BaseModel):
+    """Single run-level order summary attached to mission results."""
+
+    id: str
+    name: str
+    order_type: RunOrderType
+    target_count: int = Field(ge=0)
+    planning_demand_count: int = Field(ge=0)
+    recurrence: Optional[RunOrderRecurrenceResponse] = None
+
+
+class PlanningDemandSummary(BaseModel):
+    """Demand-aware feasibility summary for one actionable planning unit."""
+
+    run_order_id: str
+    demand_id: str
+    canonical_target_id: str
+    display_target_name: str
+    demand_type: PlanningDemandType
+    template_id: Optional[str] = None
+    instance_key: Optional[str] = None
+    requested_window_start: Optional[str] = None
+    requested_window_end: Optional[str] = None
+    local_date: Optional[str] = None
+    priority: int = Field(ge=1, le=5)
+    feasibility_status: PlanningDemandFeasibilityStatus
+    has_feasible_pass: bool
+    matching_pass_count: int = Field(ge=0)
+    matching_pass_indexes: List[int] = Field(default_factory=list)
+    first_pass_start: Optional[str] = None
+    last_pass_end: Optional[str] = None
+    best_pass_index: Optional[int] = None
+    best_pass_start: Optional[str] = None
+    best_pass_end: Optional[str] = None
+    best_max_elevation: Optional[float] = None
+
+
+class PlanningDemandAggregateSummary(BaseModel):
+    """Roll-up counts for the demand-aware feasibility response."""
+
+    run_order_id: str
+    total_demands: int = Field(ge=0)
+    feasible_demands: int = Field(ge=0)
+    infeasible_demands: int = Field(ge=0)
+    one_time_demands: int = Field(ge=0)
+    recurring_instance_demands: int = Field(ge=0)
+
+
+class MissionDataResponse(BaseModel):
+    """Typed mission analysis payload with additive demand-aware fields."""
+
+    model_config = ConfigDict(extra="allow")
+
+    satellite_name: Optional[str] = None
+    satellites: List[SatelliteInfoResponse] = Field(default_factory=list)
+    is_constellation: bool = False
+    mission_type: str
+    imaging_type: Optional[str] = None
+    start_time: str
+    end_time: str
+    elevation_mask: float
+    sensor_fov_half_angle_deg: Optional[float] = None
+    max_spacecraft_roll_deg: Optional[float] = None
+    max_spacecraft_pitch_deg: Optional[float] = None
+    satellite_agility: Optional[float] = None
+    acquisition_time_window: Optional[AcquisitionTimeWindowRequest] = None
+    total_passes: int = Field(ge=0)
+    targets: List[TargetData]
+    passes: List[Dict[str, Any]] = Field(default_factory=list)
+    coverage_percentage: Optional[float] = None
+    pass_statistics: Optional[Dict[str, int]] = None
+    sar: Optional[Dict[str, Any]] = None
+    run_order: Optional[RunOrderSummary] = None
+    planning_demands: List[PlanningDemandSummary] = Field(default_factory=list)
+    planning_demand_summary: Optional[PlanningDemandAggregateSummary] = None
+
+
+class MissionAnalyzeResponseData(BaseModel):
+    """Nested response payload for mission feasibility analysis."""
+
+    mission_data: MissionDataResponse
+    czml_data: List[Dict[str, Any]]
+
+
+MissionResponse.model_rebuild()

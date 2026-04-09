@@ -18,6 +18,7 @@ import {
   getTemplateMutationErrorMessage,
   syncRecurringTemplatesForOrder,
 } from '../utils/orderTemplateSync'
+import { buildMissionRunOrder } from '../utils/planningDemand'
 import { LEFT_SIDEBAR_PANELS, RIGHT_SIDEBAR_PANELS } from '../constants/simpleMode'
 
 const DEFAULT_ACQUISITION_TIME_WINDOW: AcquisitionTimeWindow = {
@@ -282,6 +283,7 @@ const MissionControls: React.FC = () => {
     const missionData = {
       ...formData,
       targets: allTargets,
+      runOrder: pfOrder ? buildMissionRunOrder(pfOrder) : undefined,
       tle: formData.satellites[0],
     }
 

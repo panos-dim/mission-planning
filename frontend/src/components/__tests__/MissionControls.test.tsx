@@ -217,6 +217,19 @@ describe('MissionControls', () => {
     expect(analyzeMissionMock).toHaveBeenCalledTimes(1)
     expect(analyzeMissionMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        runOrder: {
+          id: 'order-1',
+          name: 'Order 1',
+          orderType: 'one_time',
+          targets: [
+            {
+              canonicalTargetId: 'Alpha',
+              displayTargetName: 'Alpha',
+              templateId: null,
+            },
+          ],
+          recurrence: null,
+        },
         acquisitionTimeWindow: {
           enabled: true,
           start_time: '15:00',

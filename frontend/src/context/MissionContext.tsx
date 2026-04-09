@@ -28,7 +28,9 @@ import { useWorkspaceStore } from '../store/workspaceStore'
 import { useSessionStore } from '../store/sessionStore'
 import debug from '../utils/debug'
 import { missionApi, tleApi, planningApi, getErrorMessage } from '../api'
+import type { MissionAnalyzeRequest } from '../api/mission'
 import { queryClient, queryKeys } from '../lib/queryClient'
+import { toMissionAnalyzeRunOrder } from '../utils/planningDemand'
 import type { CesiumViewerRefValue } from '../types/cesiumHelpers'
 
 // Core mission state (scene objects & workspaces now in Zustand stores)
@@ -246,11 +248,14 @@ export function MissionProvider({ children }: MissionProviderProps): JSX.Element
       // Use satellites array for multiple satellites, fall back to tle for single satellite
       const hasSatellitesArray = formData.satellites && formData.satellites.length > 0
 
-      const missionRequest = {
+      const missionRequest: MissionAnalyzeRequest = {
         // NEW: Constellation support - use satellites array if available
         ...(hasSatellitesArray ? { satellites: formData.satellites } : { tle: formData.tle }),
         workspace_id: activeWorkspace || 'default',
         targets: formData.targets,
+        run_order: formData.runOrder
+          ? toMissionAnalyzeRunOrder(formData.runOrder)
+          : undefined,
         start_time: startTimeUTC,
         end_time: endTimeUTC,
         mission_type: formData.missionType,

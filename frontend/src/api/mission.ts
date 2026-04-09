@@ -13,9 +13,36 @@ import type {
   CZMLPacket, 
   PlanningRequest, 
   AlgorithmResult,
+  OrderType,
+  RecurrenceWeekday,
   TLEData,
   TargetData 
 } from '../types'
+
+export interface MissionAnalyzeRunOrderTarget {
+  canonical_target_id: string
+  display_target_name: string
+  template_id?: string | null
+}
+
+export interface MissionAnalyzeRunOrderRecurrence {
+  recurrence_type: 'daily' | 'weekly'
+  interval?: number
+  days_of_week?: RecurrenceWeekday[] | null
+  window_start_hhmm: string
+  window_end_hhmm: string
+  timezone_name?: string
+  effective_start_date: string
+  effective_end_date?: string | null
+}
+
+export interface MissionAnalyzeRunOrder {
+  id: string
+  name: string
+  order_type: OrderType
+  targets: MissionAnalyzeRunOrderTarget[]
+  recurrence?: MissionAnalyzeRunOrderRecurrence | null
+}
 
 // Request types
 export interface MissionAnalyzeRequest {
@@ -33,6 +60,7 @@ export interface MissionAnalyzeRequest {
   imaging_type?: 'optical' | 'sar'
   sar_mode?: 'stripmap' | 'spotlight' | 'scan'
   acquisition_time_window?: AcquisitionTimeWindow
+  run_order?: MissionAnalyzeRunOrder
 }
 
 // Response types

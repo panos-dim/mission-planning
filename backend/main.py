@@ -93,6 +93,7 @@ from backend.time_windows import (
 from backend.czml_generator import CZMLGenerator, generate_mission_czml
 from backend.mission_settings_manager import MissionSettingsManager
 from backend.order_materialization import prepare_recurring_planner_inputs
+from backend.planning_demands import build_planning_demand_contract
 from backend.routers.batching import router as batching_router
 from backend.routers.config_admin import router as config_admin_router
 from backend.routers.dev import router as dev_router
@@ -2004,6 +2005,20 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
         # Use primary satellite for enrichment (constellation passes are tagged with sat_id)
         primary_vis_calc = VisibilityCalculator(satellite=satellite, use_adaptive=False)
 
+        passes_payload = [
+            _enrich_and_convert_pass(p, idx, targets, primary_vis_calc)
+            for idx, p in enumerate(all_passes)
+        ]
+        run_order_summary, planning_demands, planning_demand_summary = (
+            build_planning_demand_contract(
+                run_order=request.run_order,
+                targets=request.targets,
+                horizon_start=start_time,
+                horizon_end=end_time,
+                passes=passes_payload,
+            )
+        )
+
         # Generate mission data
         mission_data: Dict[str, Any] = {
             # Legacy single satellite name (for backward compatibility)
@@ -2042,10 +2057,12 @@ async def analyze_mission(request: MissionRequest) -> MissionResponse:
                 }
                 for t in targets
             ],
-            "passes": [
-                _enrich_and_convert_pass(p, idx, targets, primary_vis_calc)
-                for idx, p in enumerate(all_passes)
+            "passes": passes_payload,
+            "run_order": run_order_summary.model_dump(),
+            "planning_demands": [
+                planning_demand.model_dump() for planning_demand in planning_demands
             ],
+            "planning_demand_summary": planning_demand_summary.model_dump(),
         }
 
         # Add SAR-specific data to mission response
