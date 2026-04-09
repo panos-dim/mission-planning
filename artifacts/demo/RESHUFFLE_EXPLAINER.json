@@ -1,67 +1,47 @@
 {
-  "workspace_id": "09157e0e-2df6-4eb5-8db2-36cb5a71a266",
-  "generated_at": "2026-04-09T15:31:22.060931Z",
-  "revision_id": 2,
-  "previous_revision_id": 1,
+  "workspace_id": "536b515f-79c2-4272-a04b-ccc3f24eaf20",
+  "generated_at": "2026-04-09T16:11:20.230232Z",
+  "revision_id": 3,
+  "previous_revision_id": 2,
   "mode_used": "direct_commit",
-  "plan_id": "plan_5e4594a647aa",
-  "commit_type": "normal",
+  "plan_id": "plan_bc07c6ee3d9f",
+  "commit_type": "force",
   "diff_summary": {
-    "before_count": 0,
+    "before_count": 1,
     "after_count": 2,
-    "added_count": 2,
+    "added_count": 1,
     "removed_count": 0,
-    "kept_count": 0,
-    "unchanged_kept_count": 0,
+    "kept_count": 1,
+    "unchanged_kept_count": 1,
     "changed_timing_count": 0,
     "changed_satellite_assignment_count": 0
   },
   "explanation": {
-    "headline": "Revision 2 applied in direct_commit mode against revision 1.",
+    "headline": "Revision 3 applied in direct_commit mode against revision 2.",
     "summary_lines": [
-      "Revision 2 applied in direct_commit mode against revision 1.",
-      "Active schedule size changed from 0 to 2 acquisitions.",
-      "2 added, 0 removed, 0 kept.",
+      "Revision 3 applied in direct_commit mode against revision 2.",
+      "Active schedule size changed from 1 to 2 acquisitions.",
+      "1 added, 0 removed, 1 kept.",
       "0 kept acquisitions changed timing and 0 changed satellite assignment.",
-      "Added targets: RETRY-A, RETRY-B."
+      "Added targets: B-FORCE."
     ]
   },
   "diff": {
     "added": [
       {
-        "identity_key": "opportunity:retry-direct-1",
+        "identity_key": "opportunity:operator-b-force-1",
         "order_id": null,
         "template_id": null,
         "instance_key": null,
-        "canonical_target_id": "RETRY-A",
-        "planner_target_id": "RETRY-A",
-        "display_target_name": "RETRY-A",
+        "canonical_target_id": "B-FORCE",
+        "planner_target_id": "B-FORCE",
+        "display_target_name": "B-FORCE",
         "after": {
-          "acquisition_id": "acq_08e4ee94631b",
+          "acquisition_id": "acq_312eb349065f",
           "satellite_id": "SAT-1",
-          "start_time": "2026-04-28T15:31:22.036408Z",
-          "end_time": "2026-04-28T15:36:22.036408Z",
-          "plan_id": "plan_5e4594a647aa",
-          "state": "committed",
-          "lock_level": "none",
-          "mode": "OPTICAL",
-          "source": "auto"
-        }
-      },
-      {
-        "identity_key": "opportunity:retry-direct-2",
-        "order_id": null,
-        "template_id": null,
-        "instance_key": null,
-        "canonical_target_id": "RETRY-B",
-        "planner_target_id": "RETRY-B",
-        "display_target_name": "RETRY-B",
-        "after": {
-          "acquisition_id": "acq_abf62b7be6ad",
-          "satellite_id": "SAT-1",
-          "start_time": "2026-04-28T15:41:22.036408Z",
-          "end_time": "2026-04-28T15:46:22.036408Z",
-          "plan_id": "plan_5e4594a647aa",
+          "start_time": "2026-05-03T16:13:20.166611Z",
+          "end_time": "2026-05-03T16:18:20.166611Z",
+          "plan_id": "plan_bc07c6ee3d9f",
           "state": "committed",
           "lock_level": "none",
           "mode": "OPTICAL",
@@ -70,7 +50,41 @@
       }
     ],
     "removed": [],
-    "kept": [],
+    "kept": [
+      {
+        "identity_key": "opportunity:operator-a-force-1",
+        "match_strategy": "opportunity_id",
+        "order_id": null,
+        "template_id": null,
+        "instance_key": null,
+        "canonical_target_id": "A-FORCE",
+        "planner_target_id": "A-FORCE",
+        "display_target_name": "A-FORCE",
+        "before": {
+          "acquisition_id": "acq_94fd80097add",
+          "satellite_id": "SAT-1",
+          "start_time": "2026-05-03T16:11:20.166611Z",
+          "end_time": "2026-05-03T16:16:20.166611Z",
+          "plan_id": "plan_2edfa0de6bcc",
+          "state": "committed",
+          "lock_level": "none",
+          "mode": "OPTICAL",
+          "source": "auto"
+        },
+        "after": {
+          "acquisition_id": "acq_94fd80097add",
+          "satellite_id": "SAT-1",
+          "start_time": "2026-05-03T16:11:20.166611Z",
+          "end_time": "2026-05-03T16:16:20.166611Z",
+          "plan_id": "plan_2edfa0de6bcc",
+          "state": "committed",
+          "lock_level": "none",
+          "mode": "OPTICAL",
+          "source": "auto"
+        },
+        "change_types": []
+      }
+    ],
     "changed_timing": [],
     "changed_satellite_assignment": []
   },
@@ -78,5 +92,5 @@
     "json_path": "/Users/panagiotis.d/CascadeProjects/mission-planning/artifacts/demo/RESHUFFLE_EXPLAINER.json",
     "md_path": "/Users/panagiotis.d/CascadeProjects/mission-planning/artifacts/demo/RESHUFFLE_EXPLAINER.md"
   },
-  "audit_log_id": "audit_468ddbd42251"
+  "audit_log_id": "audit_06b56feb76eb"
 }

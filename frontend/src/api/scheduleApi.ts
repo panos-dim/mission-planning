@@ -245,6 +245,12 @@ export interface MasterScheduleItem {
   order_id?: string
   plan_id?: string
   workspace_id?: string
+  template_id?: string
+  instance_key?: string
+  instance_local_date?: string
+  canonical_target_id?: string
+  display_target_name?: string
+  order_type?: string
   target_lat?: number
   target_lon?: number
   satellite_display_name?: string

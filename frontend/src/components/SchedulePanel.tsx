@@ -40,6 +40,7 @@ import {
 } from '../utils/recoveredOrders'
 import { formatDateTimeShort } from '../utils/date'
 import { getMissionHorizon } from '../utils/missionHorizon'
+import { findPlanningDemandForAcquisition } from '../utils/planningDemand'
 
 interface SchedulePanelProps {
   orders: AcceptedOrder[]
@@ -137,6 +138,9 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
   const setTimeRangeFromIso = useVisStore((s) => s.setTimeRangeFromIso)
   const activeLeftPanel = useVisStore((s) => s.activeLeftPanel)
   const clearAcquisitionSelection = useSelectionStore((s) => s.selectAcquisition)
+  const selectAcquisition = useSelectionStore((s) => s.selectAcquisition)
+  const selectPlanningDemandAcquisition = useSelectionStore((s) => s.selectPlanningDemandAcquisition)
+  const selectedPlanningDemandId = useSelectionStore((s) => s.selectedPlanningDemandId)
   const conflicts = useConflictStore((s) => s.conflicts)
   const setConflicts = useConflictStore((s) => s.setConflicts)
   const setConflictLoading = useConflictStore((s) => s.setLoading)
@@ -144,7 +148,7 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
   const workspaceId = missionState.activeWorkspace || 'default'
   const missionHorizon = useMemo(
     () => getMissionHorizon(missionState.missionData),
-    [missionState.missionData?.start_time, missionState.missionData?.end_time],
+    [missionState.missionData],
   )
   const missionHorizonKey = missionHorizon
     ? `${workspaceId}:${missionHorizon.start}:${missionHorizon.end}`
@@ -229,6 +233,23 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
   // PR-UI-030: Click-to-focus handler — bridge selection to Cesium
   const handleSelectAcquisition = useCallback(
     (acq: ScheduledAcquisition) => {
+      const matchedDemand = findPlanningDemandForAcquisition({
+        planningDemands: missionState.missionData?.planning_demands ?? [],
+        acquisition: {
+          id: acq.id,
+          target_id: acq.canonical_target_id || acq.target_id,
+          start_time: acq.start_time,
+          end_time: acq.end_time,
+        },
+        preferredDemandId: selectedPlanningDemandId,
+      })
+
+      if (matchedDemand) {
+        selectPlanningDemandAcquisition(acq.id, matchedDemand.demand_id, 'timeline')
+      } else {
+        selectAcquisition(acq.id, 'timeline')
+      }
+
       focusAcquisition(acq.id, {
         startTime: acq.start_time,
         lat: acq.target_lat,
@@ -237,7 +258,13 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
         targetId: acq.target_id,
       })
     },
-    [focusAcquisition],
+    [
+      focusAcquisition,
+      missionState.missionData?.planning_demands,
+      selectAcquisition,
+      selectPlanningDemandAcquisition,
+      selectedPlanningDemandId,
+    ],
   )
 
   // PR-UI-030: View range change → sync Cesium timeline window
@@ -293,6 +320,10 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
           order_id: order.order_id,
           satellite_name: satelliteNameMap.get(item.satellite_id) || item.satellite_id,
           off_nadir_deg: Math.abs(item.droll_deg),
+          template_id: item.template_id ?? null,
+          instance_key: item.instance_key ?? null,
+          canonical_target_id: item.canonical_target_id ?? null,
+          display_target_name: item.display_target_name ?? null,
         })
       }
     }
@@ -323,6 +354,10 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
         (item.geometry?.roll_deg != null ? Math.abs(item.geometry.roll_deg) : undefined),
       target_lat: item.target_lat ?? undefined,
       target_lon: item.target_lon ?? undefined,
+      template_id: item.template_id ?? null,
+      instance_key: item.instance_key ?? null,
+      canonical_target_id: item.canonical_target_id ?? null,
+      display_target_name: item.display_target_name ?? null,
     }))
   }, [currentWorkspaceScheduleItems, lockLevels, satelliteNameMap, timelineAcquisitions])
 

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import MissionResultsPanel from '../MissionResultsPanel'
 import type { MissionData } from '../../types'
+import { useSelectionStore } from '../../store/selectionStore'
 
 const { useMissionMock } = vi.hoisted(() => ({
   useMissionMock: vi.fn(),
@@ -67,6 +68,7 @@ describe('MissionResultsPanel', () => {
     missionData = null
     navigateToPassWindowMock = vi.fn()
     useMissionMock.mockReset()
+    useSelectionStore.getState().clearSelection()
     useMissionMock.mockImplementation(() => ({
       state: { missionData },
       navigateToPassWindow: navigateToPassWindowMock,
@@ -288,5 +290,70 @@ describe('MissionResultsPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Demand Alpha' }))
 
     expect(navigateToPassWindowMock).toHaveBeenCalledWith(0)
+    expect(useSelectionStore.getState().selectedTargetId).toBe('Alpha')
+    expect(useSelectionStore.getState().selectedPlanningDemandId).toBe('order-1::one_time::Alpha')
+  })
+
+  it('keeps no-opportunity demands inspectable even when there is no pass to focus', async () => {
+    const user = userEvent.setup()
+
+    missionData = buildMissionData(['Alpha'], {
+      runOrder: {
+        id: 'order-1',
+        name: 'Order 1',
+        order_type: 'repeats',
+        target_count: 1,
+        planning_demand_count: 1,
+        recurrence: {
+          recurrence_type: 'daily',
+          interval: 1,
+          days_of_week: null,
+          window_start_hhmm: '09:00',
+          window_end_hhmm: '11:00',
+          timezone_name: 'UTC',
+          effective_start_date: '2026-03-08',
+          effective_end_date: '2026-03-10',
+        },
+      },
+      planningDemands: [
+        {
+          run_order_id: 'order-1',
+          demand_id: 'order-1::alpha::2026-03-09',
+          canonical_target_id: 'Alpha',
+          display_target_name: 'Alpha',
+          demand_type: 'recurring_instance',
+          template_id: 'tmpl-1',
+          instance_key: '2026-03-09',
+          requested_window_start: '2026-03-09T09:00:00Z',
+          requested_window_end: '2026-03-09T11:00:00Z',
+          local_date: '2026-03-09',
+          priority: 1,
+          feasibility_status: 'no_opportunity',
+          has_feasible_pass: false,
+          matching_pass_count: 0,
+          matching_pass_indexes: [],
+          best_pass_index: null,
+        },
+      ],
+      planningDemandSummary: {
+        run_order_id: 'order-1',
+        total_demands: 1,
+        feasible_demands: 0,
+        infeasible_demands: 1,
+        one_time_demands: 0,
+        recurring_instance_demands: 1,
+      },
+    })
+
+    render(<MissionResultsPanel />)
+
+    const demandButton = screen.getByRole('button', { name: 'Demand Alpha on 09-03-2026' })
+    expect(demandButton).toBeEnabled()
+
+    await user.click(demandButton)
+
+    expect(navigateToPassWindowMock).not.toHaveBeenCalled()
+    expect(useSelectionStore.getState().selectedTargetId).toBe('Alpha')
+    expect(useSelectionStore.getState().selectedPlanningDemandId).toBe('order-1::alpha::2026-03-09')
   })
 })

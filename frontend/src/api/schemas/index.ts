@@ -109,7 +109,7 @@ export const PlanningDemandSummarySchema = z.object({
   requested_window_end: z.string().nullable().optional(),
   local_date: z.string().nullable().optional(),
   priority: z.number(),
-  feasibility_status: z.enum(["feasible", "no_opportunity"]),
+  feasibility_status: z.enum(["feasible", "limited", "no_opportunity"]),
   has_feasible_pass: z.boolean(),
   matching_pass_count: z.number(),
   matching_pass_indexes: z.array(z.number()),

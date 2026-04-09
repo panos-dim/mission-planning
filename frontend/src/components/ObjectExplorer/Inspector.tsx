@@ -57,7 +57,23 @@ import { useMission } from '../../context/MissionContext'
 import { useScheduleStore } from '../../store/scheduleStore'
 import { formatDateTimeDDMMYYYY } from '../../utils/date'
 import { fmt1 } from '../../utils/format'
+import {
+  findPlanningDemandById,
+  findPlanningDemandForAcquisition,
+  formatRunOrderRecurrenceSummary,
+  getPassOffNadirAngle,
+  getPlanningDemandBestPass,
+  getPlanningDemandInstanceDateLabel,
+  getPlanningDemandMatchingAcquisitions,
+  getPlanningDemandStatusDisplay,
+  getPlanningDemandTargetId,
+  getPlanningDemandWindowDisplay,
+  matchesPlanningDemandTarget,
+} from '../../utils/planningDemand'
+import type { PassData, PlanningDemandSummary } from '../../types'
 import type { TreeNodeType } from '../../types/explorer'
+
+const EMPTY_PLANNING_DEMANDS: PlanningDemandSummary[] = []
 
 // =============================================================================
 // Icon Components Map
@@ -608,38 +624,56 @@ interface AcquisitionRow {
 interface TargetAcquisitionsSectionProps {
   targetId: string
   rows: AcquisitionRow[]
+  planningDemand?: PlanningDemandSummary | null
 }
 
 const TargetAcquisitionsSection: React.FC<TargetAcquisitionsSectionProps> = ({
   targetId,
   rows,
+  planningDemand,
 }) => {
   const selectedAcquisitionId = useSelectionStore((s) => s.selectedAcquisitionId)
   const selectAcquisition = useSelectionStore((s) => s.selectAcquisition)
+  const selectPlanningDemandAcquisition = useSelectionStore((s) => s.selectPlanningDemandAcquisition)
   const focusAcquisition = useScheduleStore((s) => s.focusAcquisition)
   const lockLevels = useLockStore((s) => s.levels)
   const targetAcqs = useMemo(() => {
-    return rows
-      .filter((r) => r.target_id === targetId)
-      .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())
-  }, [rows, targetId])
+    const targetRows = rows.filter(
+      (row) =>
+        row.target_id === targetId ||
+        (planningDemand ? matchesPlanningDemandTarget(planningDemand, row.target_id) : false),
+    )
+    const scopedRows = planningDemand
+      ? getPlanningDemandMatchingAcquisitions(planningDemand, targetRows)
+      : targetRows
+
+    return [...scopedRows].sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())
+  }, [planningDemand, rows, targetId])
 
   if (targetAcqs.length === 0) {
     return (
-      <InspectorSection title={`Schedule (0)`} icon="Calendar">
-        <p className="text-xs text-gray-500">No scheduled acquisitions in current window</p>
+      <InspectorSection title="Acquisitions (0)" icon="Calendar">
+        <p className="text-xs text-gray-500">
+          {planningDemand
+            ? 'No scheduled acquisitions for this demand in the current schedule window'
+            : 'No scheduled acquisitions in the current schedule window'}
+        </p>
       </InspectorSection>
     )
   }
 
   return (
-    <InspectorSection title={`Schedule (${targetAcqs.length})`} icon="Calendar">
+    <InspectorSection title={`Acquisitions (${targetAcqs.length})`} icon="Calendar">
       <div className="space-y-1.5">
         {targetAcqs.map((acq) => (
           <button
             key={acq.id}
             onClick={() => {
-              selectAcquisition(acq.id, 'inspector')
+              if (planningDemand) {
+                selectPlanningDemandAcquisition(acq.id, planningDemand.demand_id, 'inspector')
+              } else {
+                selectAcquisition(acq.id, 'inspector')
+              }
               focusAcquisition(acq.id)
             }}
             className={`w-full rounded-lg border px-3 py-2.5 text-left transition-all ${
@@ -651,11 +685,9 @@ const TargetAcquisitionsSection: React.FC<TargetAcquisitionsSectionProps> = ({
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
-                <div className="text-sm font-medium text-white">
-                  {formatAcquisitionWindow(acq.start_time, acq.end_time)}
-                </div>
+                <div className="text-sm font-medium text-white">{formatDateTimeDDMMYYYY(acq.start_time)}</div>
                 <div className="mt-1 text-xs text-slate-400">
-                  {formatDateTimeDDMMYYYY(acq.start_time)} • {acq.satellite_name}
+                  {acq.satellite_name}
                 </div>
                 <div className="mt-1 text-[11px] text-slate-500">
                   {(lockLevels.get(acq.id) ?? acq.lock_level) === 'hard'
@@ -663,9 +695,9 @@ const TargetAcquisitionsSection: React.FC<TargetAcquisitionsSectionProps> = ({
                     : 'Flexible window'}
                 </div>
               </div>
-              {acq.off_nadir_deg != null && (
-                <span className="text-xs font-medium text-slate-300">{fmt1(acq.off_nadir_deg)}°</span>
-              )}
+              <div className="text-right text-[11px] text-slate-400">
+                {acq.off_nadir_deg != null ? `${fmt1(acq.off_nadir_deg)}°` : '—'}
+              </div>
             </div>
           </button>
         ))}
@@ -772,6 +804,140 @@ const TargetFocusSummary: React.FC<{
       ]}
       testId="inspector-target-hero"
     />
+  )
+}
+
+const PlanningDemandFocusSummary: React.FC<{
+  demand: PlanningDemandSummary
+  recurrenceSummary: string | null
+  acquisitionRows: AcquisitionRow[]
+}> = ({ demand, recurrenceSummary, acquisitionRows }) => {
+  const status = getPlanningDemandStatusDisplay(demand)
+  const instanceDate = getPlanningDemandInstanceDateLabel(demand)
+  const matchingAcquisitions = useMemo(
+    () => getPlanningDemandMatchingAcquisitions(demand, acquisitionRows),
+    [acquisitionRows, demand],
+  )
+  const demandTypeLabel = demand.demand_type === 'recurring_instance' ? 'Recurring' : 'One-time'
+  const subtitleParts = [demandTypeLabel]
+
+  if (demand.demand_type === 'recurring_instance' && recurrenceSummary) {
+    subtitleParts.push(recurrenceSummary)
+  }
+  if (instanceDate) {
+    subtitleParts.push(instanceDate)
+  }
+
+  return (
+    <FocusHero
+      eyebrow="Planning Demand"
+      title={demand.display_target_name}
+      subtitle={subtitleParts.join(' • ')}
+      icon={<Target className="h-5 w-5" />}
+      metrics={[
+        { label: 'Status', value: status.label },
+        { label: 'Priority', value: String(demand.priority) },
+        {
+          label: 'Scheduled',
+          value:
+            matchingAcquisitions.length === 1
+              ? '1 acquisition'
+              : `${matchingAcquisitions.length} acquisitions`,
+        },
+        {
+          label: 'Matches',
+          value:
+            demand.matching_pass_count === 1
+              ? '1 opportunity'
+              : `${demand.matching_pass_count} opportunities`,
+        },
+      ]}
+      testId="inspector-demand-hero"
+    />
+  )
+}
+
+const PlanningDemandContextSection: React.FC<{
+  demand: PlanningDemandSummary
+  recurrenceSummary: string | null
+  missionWindow?: { start?: string | null; end?: string | null }
+}> = ({ demand, recurrenceSummary, missionWindow }) => {
+  const status = getPlanningDemandStatusDisplay(demand)
+  const instanceDate = getPlanningDemandInstanceDateLabel(demand)
+  const windowDisplay = getPlanningDemandWindowDisplay(demand, missionWindow)
+  const demandTypeLabel = demand.demand_type === 'recurring_instance' ? 'Recurring' : 'One-time'
+  const demandTypeClasses =
+    demand.demand_type === 'recurring_instance'
+      ? 'border-blue-500/20 bg-blue-500/10 text-blue-100'
+      : 'border-slate-700/80 bg-slate-800/90 text-slate-200'
+  const statusClasses =
+    status.tone === 'blue'
+      ? 'border-blue-500/20 bg-blue-500/10 text-blue-100'
+      : status.tone === 'amber'
+        ? 'border-amber-500/20 bg-amber-500/10 text-amber-100'
+        : 'border-red-500/20 bg-red-500/10 text-red-100'
+
+  return (
+    <InspectorSection title="Demand Context" icon="Target">
+      <Field label="Target" value={demand.display_target_name} />
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-gray-500">Demand Type</span>
+        <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-medium ${demandTypeClasses}`}>
+          {demandTypeLabel}
+        </span>
+      </div>
+      {recurrenceSummary && <Field label="Recurrence" value={recurrenceSummary} />}
+      {instanceDate && <Field label="Instance Date" value={instanceDate} />}
+      <Field label={windowDisplay.label} value={windowDisplay.value} />
+      <Field label="Priority" value={demand.priority} />
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-gray-500">Feasibility</span>
+        <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-medium ${statusClasses}`}>
+          {status.label}
+        </span>
+      </div>
+    </InspectorSection>
+  )
+}
+
+const PlanningDemandBestOpportunitySection: React.FC<{
+  demand: PlanningDemandSummary
+  passes: PassData[]
+  onJumpToWindow: (passIndex: number) => void
+}> = ({ demand, passes, onJumpToWindow }) => {
+  const bestPass = getPlanningDemandBestPass(demand, passes)
+
+  if (!bestPass) {
+    return (
+      <InspectorSection title="Best Opportunity" icon="Clock">
+        <p className="text-xs text-gray-500">No feasible opportunities in current planning horizon</p>
+      </InspectorSection>
+    )
+  }
+
+  const offNadirAngle = getPassOffNadirAngle(bestPass.pass)
+
+  return (
+    <InspectorSection title="Best Opportunity" icon="Clock">
+      <Field
+        label="Satellite"
+        value={bestPass.pass.satellite_name || bestPass.pass.satellite_id || 'Assigned satellite'}
+      />
+      <Field
+        label="Off-Nadir Time"
+        value={formatDateTime(bestPass.pass.max_elevation_time || bestPass.pass.start_time)}
+      />
+      {offNadirAngle !== null && <Field label="Off-Nadir Angle" value={fmt1(offNadirAngle)} unit="°" />}
+      <Field label="Opportunity Start" value={formatDateTime(bestPass.pass.start_time)} />
+      <div className="pt-1">
+        <ActionButton
+          label="Jump to Window"
+          icon="Clock"
+          onClick={() => onJumpToWindow(bestPass.passIndex)}
+          variant="secondary"
+        />
+      </div>
+    </InspectorSection>
   )
 }
 
@@ -1476,11 +1642,16 @@ interface InspectorProps {
 
 const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
   const { selectedNodeId, selectedNodeType, setActivePlan, setFilterByTarget } = useExplorerStore()
-  const { state, navigateToImagingTime, flyToObject } = useMission()
+  const { state, navigateToImagingTime, navigateToPassWindow, flyToObject } = useMission()
   const planningResults = usePlanningStore((s) => s.results)
   const setActiveAlgorithm = usePlanningStore((s) => s.setActiveAlgorithm)
   const orders = useOrdersStore((s) => s.orders)
   const { removeOrder } = useOrdersStore()
+  const planningDemands = state.missionData?.planning_demands ?? EMPTY_PLANNING_DEMANDS
+  const runOrderRecurrenceSummary = useMemo(
+    () => formatRunOrderRecurrenceSummary(state.missionData?.run_order ?? null),
+    [state.missionData?.run_order],
+  )
 
   // Schedule items for fallback target metadata resolution
   const scheduleItems = useScheduleStore((s) => s.items)
@@ -1543,8 +1714,10 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
     selectedOpportunityId,
     selectedAcquisitionId,
     selectedConflictId,
+    selectedPlanningDemandId,
     clearSelection,
     selectAcquisition,
+    selectPlanningDemandTarget,
     selectTarget,
   } = useSelectionStore()
 
@@ -1553,6 +1726,42 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
   const toggleLock = useLockStore((s) => s.toggleLock)
   const lockPending = useLockStore((s) => s.pending)
   const lastSelectionSource = useSelectionStore((s) => s.lastSelectionSource)
+  const selectedAcquisitionRow = useMemo(
+    () => acquisitionRows.find((row) => row.id === selectedAcquisitionId) ?? null,
+    [acquisitionRows, selectedAcquisitionId],
+  )
+  const explicitPlanningDemand = useMemo(
+    () => findPlanningDemandById(planningDemands, selectedPlanningDemandId),
+    [planningDemands, selectedPlanningDemandId],
+  )
+  const inferredPlanningDemand = useMemo(() => {
+    if (explicitPlanningDemand) return explicitPlanningDemand
+
+    if (unifiedSelectedType === 'acquisition' && selectedAcquisitionRow) {
+      return findPlanningDemandForAcquisition({
+        planningDemands,
+        acquisition: selectedAcquisitionRow,
+        preferredDemandId: selectedPlanningDemandId,
+      })
+    }
+
+    if (unifiedSelectedType === 'target' && selectedTargetId) {
+      const matchingDemands = planningDemands.filter((demand) =>
+        matchesPlanningDemandTarget(demand, selectedTargetId),
+      )
+      return matchingDemands.length === 1 ? matchingDemands[0] : null
+    }
+
+    return null
+  }, [
+    explicitPlanningDemand,
+    planningDemands,
+    selectedAcquisitionRow,
+    selectedPlanningDemandId,
+    selectedTargetId,
+    unifiedSelectedType,
+  ])
+  const activePlanningDemand = explicitPlanningDemand ?? inferredPlanningDemand
 
   // Conflict store for conflict details
   const conflicts = useConflictStore((s) => s.conflicts)
@@ -1884,28 +2093,66 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
         <div className="flex-1 overflow-y-auto">
           {unifiedSelectedType === 'target' && (
             <>
-              <TargetFocusSummary
-                metadata={metadata}
-                acquisitionRows={acquisitionRows}
-                selectionSource={lastSelectionSource}
-              />
-              {metadata.latitude != null && metadata.longitude != null && (
-                <InspectorSection title="Location" icon="MapPin">
-                  <CoordinateField
-                    label="Position"
-                    latitude={metadata.latitude as number}
-                    longitude={metadata.longitude as number}
+              {activePlanningDemand && selectedTargetId ? (
+                <>
+                  <PlanningDemandFocusSummary
+                    demand={activePlanningDemand}
+                    recurrenceSummary={runOrderRecurrenceSummary}
+                    acquisitionRows={acquisitionRows}
                   />
-                </InspectorSection>
-              )}
-              {metadata.priority !== undefined && (
-                <InspectorSection title="Overview" icon="Target">
-                  <Field label="Priority" value={metadata.priority as number} />
-                </InspectorSection>
-              )}
-              {/* PR-UI-039: Acquisitions list for selected target */}
-              {selectedTargetId && (
-                <TargetAcquisitionsSection targetId={selectedTargetId} rows={acquisitionRows} />
+                  <PlanningDemandContextSection
+                    demand={activePlanningDemand}
+                    recurrenceSummary={runOrderRecurrenceSummary}
+                    missionWindow={{
+                      start: state.missionData?.start_time,
+                      end: state.missionData?.end_time,
+                    }}
+                  />
+                  <PlanningDemandBestOpportunitySection
+                    demand={activePlanningDemand}
+                    passes={state.missionData?.passes ?? []}
+                    onJumpToWindow={navigateToPassWindow}
+                  />
+                  <TargetAcquisitionsSection
+                    targetId={getPlanningDemandTargetId(activePlanningDemand) || selectedTargetId}
+                    rows={acquisitionRows}
+                    planningDemand={activePlanningDemand}
+                  />
+                  {metadata.latitude != null && metadata.longitude != null && (
+                    <InspectorSection title="Location" icon="MapPin">
+                      <CoordinateField
+                        label="Position"
+                        latitude={metadata.latitude as number}
+                        longitude={metadata.longitude as number}
+                      />
+                    </InspectorSection>
+                  )}
+                </>
+              ) : (
+                <>
+                  <TargetFocusSummary
+                    metadata={metadata}
+                    acquisitionRows={acquisitionRows}
+                    selectionSource={lastSelectionSource}
+                  />
+                  {metadata.latitude != null && metadata.longitude != null && (
+                    <InspectorSection title="Location" icon="MapPin">
+                      <CoordinateField
+                        label="Position"
+                        latitude={metadata.latitude as number}
+                        longitude={metadata.longitude as number}
+                      />
+                    </InspectorSection>
+                  )}
+                  {metadata.priority !== undefined && (
+                    <InspectorSection title="Overview" icon="Target">
+                      <Field label="Priority" value={metadata.priority as number} />
+                    </InspectorSection>
+                  )}
+                  {selectedTargetId && (
+                    <TargetAcquisitionsSection targetId={selectedTargetId} rows={acquisitionRows} />
+                  )}
+                </>
               )}
               {selectedTargetId && (
                 <QuickActionsCard>
@@ -1989,10 +2236,40 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
                   />
                 </div>
               )}
-              <AcquisitionFocusSummary
-                metadata={metadata}
-              />
-              <InspectorSection title="Overview" icon="Target">
+              {activePlanningDemand ? (
+                <>
+                  <PlanningDemandFocusSummary
+                    demand={activePlanningDemand}
+                    recurrenceSummary={runOrderRecurrenceSummary}
+                    acquisitionRows={acquisitionRows}
+                  />
+                  <PlanningDemandContextSection
+                    demand={activePlanningDemand}
+                    recurrenceSummary={runOrderRecurrenceSummary}
+                    missionWindow={{
+                      start: state.missionData?.start_time,
+                      end: state.missionData?.end_time,
+                    }}
+                  />
+                  <PlanningDemandBestOpportunitySection
+                    demand={activePlanningDemand}
+                    passes={state.missionData?.passes ?? []}
+                    onJumpToWindow={navigateToPassWindow}
+                  />
+                  <TargetAcquisitionsSection
+                    targetId={
+                      getPlanningDemandTargetId(activePlanningDemand) ||
+                      (metadata.target_id as string) ||
+                      ''
+                    }
+                    rows={acquisitionRows}
+                    planningDemand={activePlanningDemand}
+                  />
+                </>
+              ) : (
+                <AcquisitionFocusSummary metadata={metadata} />
+              )}
+              <InspectorSection title={activePlanningDemand ? 'Selected Acquisition' : 'Overview'} icon="Target">
                 <Field label="Target" value={metadata.target_id as string} />
                 <Field
                   label="Satellite"
@@ -2084,7 +2361,16 @@ const Inspector: React.FC<InspectorProps> = ({ onAction }) => {
                 <ActionButton
                   label="View Target"
                   icon="MapPin"
-                  onClick={() => selectTarget((metadata.target_id as string) || null, 'inspector')}
+                  onClick={() => {
+                    const targetId = (metadata.target_id as string) || null
+                    if (!targetId) return
+
+                    if (activePlanningDemand) {
+                      selectPlanningDemandTarget(targetId, activePlanningDemand.demand_id, 'inspector')
+                    } else {
+                      selectTarget(targetId, 'inspector')
+                    }
+                  }}
                   variant="primary"
                 />
                 {selectedRepairItem && (

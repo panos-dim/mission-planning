@@ -177,6 +177,8 @@ const visStoreState = {
 
 const selectionStoreState = {
   selectAcquisition: vi.fn(),
+  selectPlanningDemandAcquisition: vi.fn(),
+  selectedPlanningDemandId: null,
 }
 
 let scheduleStoreState: {

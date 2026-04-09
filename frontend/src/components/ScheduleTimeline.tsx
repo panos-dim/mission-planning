@@ -47,6 +47,10 @@ export interface ScheduledAcquisition {
   off_nadir_deg?: number // PR-UI-021: Off-nadir angle in degrees
   target_lat?: number // PR-UI-030: Target geo for map fly-to
   target_lon?: number // PR-UI-030: Target geo for map fly-to
+  template_id?: string | null
+  instance_key?: string | null
+  canonical_target_id?: string | null
+  display_target_name?: string | null
 }
 
 interface ScheduleTimelineProps {
@@ -849,8 +853,11 @@ export const ScheduleTimeline: React.FC<ScheduleTimelineProps> = ({
     (id: string) => {
       const acq = acquisitions.find((a) => a.id === id)
       if (acq) {
-        selectAcquisition(acq.id, 'timeline')
-        onSelectAcquisition?.(acq)
+        if (onSelectAcquisition) {
+          onSelectAcquisition(acq)
+        } else {
+          selectAcquisition(acq.id, 'timeline')
+        }
       }
       onFocusAcquisition?.(id)
     },

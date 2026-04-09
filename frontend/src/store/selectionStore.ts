@@ -37,6 +37,7 @@ export interface SelectionState {
   selectedOpportunityId: string | null;
   selectedAcquisitionId: string | null;
   selectedConflictId: string | null;
+  selectedPlanningDemandId: string | null;
 
   // Related IDs for highlighting (e.g., all acquisitions in a conflict)
   highlightedTargetIds: string[];
@@ -100,6 +101,18 @@ interface SelectionActions {
     relatedAcquisitionIds?: string[],
   ) => void;
 
+  // Demand-aware selection helpers
+  selectPlanningDemandTarget: (
+    targetId: string | null,
+    planningDemandId: string | null,
+    source?: SelectionState["lastSelectionSource"],
+  ) => void;
+  selectPlanningDemandAcquisition: (
+    acquisitionId: string | null,
+    planningDemandId: string | null,
+    source?: SelectionState["lastSelectionSource"],
+  ) => void;
+
   // Clear all selection
   clearSelection: () => void;
 
@@ -128,6 +141,7 @@ const initialState: SelectionState = {
   selectedOpportunityId: null,
   selectedAcquisitionId: null,
   selectedConflictId: null,
+  selectedPlanningDemandId: null,
   highlightedTargetIds: [],
   highlightedOpportunityIds: [],
   highlightedAcquisitionIds: [],
@@ -166,6 +180,7 @@ export const useSelectionStore = create<SelectionState & SelectionActions>()(
           selectedOpportunityId: null,
           selectedAcquisitionId: null,
           selectedConflictId: null,
+          selectedPlanningDemandId: null,
           highlightedTargetIds: isDeselect ? [] : [targetId!],
           highlightedOpportunityIds: [],
           highlightedAcquisitionIds: [],
@@ -192,6 +207,7 @@ export const useSelectionStore = create<SelectionState & SelectionActions>()(
           selectedOpportunityId: isDeselect ? null : opportunityId,
           selectedAcquisitionId: null,
           selectedConflictId: null,
+          selectedPlanningDemandId: null,
           highlightedTargetIds: [],
           highlightedOpportunityIds: isDeselect ? [] : [opportunityId!],
           highlightedAcquisitionIds: [],
@@ -218,6 +234,7 @@ export const useSelectionStore = create<SelectionState & SelectionActions>()(
           selectedOpportunityId: null,
           selectedAcquisitionId: isDeselect ? null : acquisitionId,
           selectedConflictId: null,
+          selectedPlanningDemandId: null,
           highlightedTargetIds: [],
           highlightedOpportunityIds: [],
           highlightedAcquisitionIds: isDeselect ? [] : [acquisitionId!],
@@ -243,11 +260,98 @@ export const useSelectionStore = create<SelectionState & SelectionActions>()(
           selectedOpportunityId: null,
           selectedAcquisitionId: null,
           selectedConflictId: isDeselect ? null : conflictId,
+          selectedPlanningDemandId: null,
           highlightedTargetIds: [],
           highlightedOpportunityIds: [],
           highlightedAcquisitionIds: isDeselect ? [] : relatedAcquisitionIds,
           inspectorOpen: !isDeselect,
           lastSelectionSource: "table",
+        });
+      },
+
+      selectPlanningDemandTarget: (
+        targetId,
+        planningDemandId,
+        source = null,
+      ) => {
+        if (isDev) {
+          console.log(
+            `[SelectionStore] selectPlanningDemandTarget: ${targetId} (demand: ${planningDemandId}, source: ${source})`,
+          );
+        }
+
+        if (!targetId) {
+          set({
+            selectedType: null,
+            selectedTargetId: null,
+            selectedOpportunityId: null,
+            selectedAcquisitionId: null,
+            selectedConflictId: null,
+            selectedPlanningDemandId: null,
+            highlightedTargetIds: [],
+            highlightedOpportunityIds: [],
+            highlightedAcquisitionIds: [],
+            inspectorOpen: false,
+            lastSelectionSource: source,
+          });
+          return;
+        }
+
+        set({
+          selectedType: "target",
+          selectedTargetId: targetId,
+          selectedOpportunityId: null,
+          selectedAcquisitionId: null,
+          selectedConflictId: null,
+          selectedPlanningDemandId: planningDemandId,
+          highlightedTargetIds: [targetId],
+          highlightedOpportunityIds: [],
+          highlightedAcquisitionIds: [],
+          inspectorOpen: true,
+          lastSelectionSource: source,
+        });
+      },
+
+      selectPlanningDemandAcquisition: (
+        acquisitionId,
+        planningDemandId,
+        source = null,
+      ) => {
+        if (isDev) {
+          console.log(
+            `[SelectionStore] selectPlanningDemandAcquisition: ${acquisitionId} (demand: ${planningDemandId}, source: ${source})`,
+          );
+        }
+
+        if (!acquisitionId) {
+          set({
+            selectedType: null,
+            selectedTargetId: null,
+            selectedOpportunityId: null,
+            selectedAcquisitionId: null,
+            selectedConflictId: null,
+            selectedPlanningDemandId: null,
+            highlightedTargetIds: [],
+            highlightedOpportunityIds: [],
+            highlightedAcquisitionIds: [],
+            inspectorOpen: false,
+            lastSelectionSource: source,
+          });
+          return;
+        }
+
+        set({
+          selectedType: "acquisition",
+          selectedTargetId: null,
+          selectedOpportunityId: null,
+          selectedAcquisitionId: acquisitionId,
+          selectedConflictId: null,
+          selectedPlanningDemandId: planningDemandId,
+          highlightedTargetIds: [],
+          highlightedOpportunityIds: [],
+          highlightedAcquisitionIds: [acquisitionId],
+          inspectorOpen: true,
+          lastSelectionSource: source,
         });
       },
 
@@ -262,6 +366,7 @@ export const useSelectionStore = create<SelectionState & SelectionActions>()(
           selectedOpportunityId: null,
           selectedAcquisitionId: null,
           selectedConflictId: null,
+          selectedPlanningDemandId: null,
           highlightedTargetIds: [],
           highlightedOpportunityIds: [],
           highlightedAcquisitionIds: [],
@@ -338,6 +443,7 @@ export const useSelection = () =>
     opportunityId: state.selectedOpportunityId,
     acquisitionId: state.selectedAcquisitionId,
     conflictId: state.selectedConflictId,
+    planningDemandId: state.selectedPlanningDemandId,
     source: state.lastSelectionSource,
   }));
 

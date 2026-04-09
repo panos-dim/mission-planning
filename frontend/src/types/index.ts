@@ -184,7 +184,7 @@ export interface PlanningDemandSummary {
   requested_window_end?: string | null
   local_date?: string | null
   priority: number
-  feasibility_status: 'feasible' | 'no_opportunity'
+  feasibility_status: 'feasible' | 'limited' | 'no_opportunity'
   has_feasible_pass: boolean
   matching_pass_count: number
   matching_pass_indexes: number[]
@@ -803,6 +803,10 @@ export interface AcceptedOrder {
     slack_s: number
     value: number
     density: number | 'inf'
+    template_id?: string | null
+    instance_key?: string | null
+    canonical_target_id?: string | null
+    display_target_name?: string | null
   }>
   satellites_involved?: string[]
   targets_covered?: string[]

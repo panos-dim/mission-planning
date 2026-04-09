@@ -4,14 +4,20 @@ import { BarChart2, MapPin, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
 import { LABELS } from '../constants/labels'
 import { formatDateTimeShort, formatDateTimeDDMMYYYY } from '../utils/date'
 import { fmt1 } from '../utils/format'
+import { useSelectionStore } from '../store/selectionStore'
 import {
+  findPlanningDemandForPass,
   formatPlanningDemandWindow,
+  getPlanningDemandStatusDisplay,
   formatRunOrderRecurrenceSummary,
   getPlanningDemandCounts,
   getPlanningDemandPrimaryPassIndex,
+  getPlanningDemandTargetId,
   groupPlanningDemandsByDate,
 } from '../utils/planningDemand'
 import type { PassData, PlanningDemandSummary } from '../types'
+
+const EMPTY_PLANNING_DEMANDS: PlanningDemandSummary[] = []
 
 // =============================================================================
 // Feasibility timeline constants & helpers (matches ScheduleTimeline)
@@ -63,6 +69,10 @@ const ftGenerateTicks = (minTs: number, maxTs: number, maxTicks: number): number
 
 const MissionResultsPanel: React.FC = () => {
   const { state, navigateToPassWindow } = useMission()
+  const selectPlanningDemandTarget = useSelectionStore((s) => s.selectPlanningDemandTarget)
+  const selectTarget = useSelectionStore((s) => s.selectTarget)
+  const selectedPlanningDemandId = useSelectionStore((s) => s.selectedPlanningDemandId)
+  const selectedTargetId = useSelectionStore((s) => s.selectedTargetId)
   const acquisitionTimeWindow = state.missionData?.acquisition_time_window
   const isAcquisitionTimeWindowActive = !!acquisitionTimeWindow?.enabled
   const acquisitionTimeWindowLabel =
@@ -78,7 +88,7 @@ const MissionResultsPanel: React.FC = () => {
     : state.missionData?.satellite_name || state.missionData?.satellites?.[0]?.name || '—'
   const satelliteSummaryTitle = isConstellation ? 'Satellites' : 'Satellite'
   const runOrder = state.missionData?.run_order ?? null
-  const planningDemands = state.missionData?.planning_demands ?? []
+  const planningDemands = state.missionData?.planning_demands ?? EMPTY_PLANNING_DEMANDS
   const planningDemandSummary = state.missionData?.planning_demand_summary ?? null
   const hasPlanningDemandData = !!runOrder || !!planningDemandSummary || planningDemands.length > 0
   const runOrderRecurrenceSummary = useMemo(
@@ -195,12 +205,46 @@ const MissionResultsPanel: React.FC = () => {
     : isPerfect
   const handleDemandClick = useCallback(
     (demand: PlanningDemandSummary) => {
+      const targetId = getPlanningDemandTargetId(demand) || demand.display_target_name
+      selectPlanningDemandTarget(targetId, demand.demand_id, 'table')
+
       const passIndex = getPlanningDemandPrimaryPassIndex(demand)
       if (passIndex !== null) {
         navigateToPassWindow(passIndex)
       }
     },
-    [navigateToPassWindow],
+    [navigateToPassWindow, selectPlanningDemandTarget],
+  )
+
+  const handlePassClick = useCallback(
+    (pass: PassData, passIndex: number) => {
+      const matchedDemand = findPlanningDemandForPass({
+        planningDemands,
+        passIndex,
+        targetId: pass.target,
+        passStartTime: pass.start_time,
+        preferredDemandId: selectedPlanningDemandId,
+      })
+
+      if (matchedDemand) {
+        selectPlanningDemandTarget(
+          getPlanningDemandTargetId(matchedDemand) || pass.target,
+          matchedDemand.demand_id,
+          'table',
+        )
+      } else {
+        selectTarget(pass.target, 'table')
+      }
+
+      navigateToPassWindow(passIndex)
+    },
+    [
+      navigateToPassWindow,
+      planningDemands,
+      selectPlanningDemandTarget,
+      selectTarget,
+      selectedPlanningDemandId,
+    ],
   )
 
   // Visible passes & targets based on target selection
@@ -534,24 +578,28 @@ const MissionResultsPanel: React.FC = () => {
                         const isNavigable = primaryPassIndex !== null
                         const demandTypeLabel =
                           demand.demand_type === 'recurring_instance' ? 'Recurring' : 'One-time'
-                        const statusLabel = demand.has_feasible_pass ? 'Feasible' : 'No opportunity'
+                        const status = getPlanningDemandStatusDisplay(demand)
+                        const isSelectedDemand = demand.demand_id === selectedPlanningDemandId
+                        const isSelectedTarget =
+                          selectedTargetId === getPlanningDemandTargetId(demand)
 
                         return (
                           <button
                             key={demand.demand_id}
                             type="button"
                             aria-label={`Demand ${demand.display_target_name}${group.localDate ? ` on ${group.label}` : ''}`}
-                            disabled={!isNavigable}
                             onClick={() => handleDemandClick(demand)}
                             className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
-                              isNavigable
-                                ? 'border-gray-700 bg-gray-800/50 hover:border-blue-500/40 hover:bg-gray-800'
-                                : 'border-gray-800 bg-gray-800/20 text-gray-500 cursor-not-allowed'
+                              isSelectedDemand
+                                ? 'border-blue-500/40 bg-blue-500/10'
+                                : isSelectedTarget
+                                  ? 'border-blue-500/20 bg-gray-800/60'
+                                  : 'border-gray-700 bg-gray-800/50 hover:border-blue-500/40 hover:bg-gray-800'
                             }`}
                             title={
                               isNavigable
-                                ? 'Jump to the best matching opportunity'
-                                : 'No matching opportunity for this demand'
+                                ? 'Inspect this demand and jump to the best matching opportunity'
+                                : 'Inspect this demand'
                             }
                           >
                             <div className="flex items-start justify-between gap-3">
@@ -565,12 +613,14 @@ const MissionResultsPanel: React.FC = () => {
                                   </span>
                                   <span
                                     className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                                      demand.has_feasible_pass
+                                      status.tone === 'blue'
                                         ? 'bg-blue-500/15 text-blue-300'
-                                        : 'bg-red-500/15 text-red-300'
+                                        : status.tone === 'amber'
+                                          ? 'bg-amber-500/15 text-amber-300'
+                                          : 'bg-red-500/15 text-red-300'
                                     }`}
                                   >
-                                    {statusLabel}
+                                    {status.label}
                                   </span>
                                 </div>
                                 <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-gray-400">
@@ -584,10 +634,10 @@ const MissionResultsPanel: React.FC = () => {
 
                               <span
                                 className={`text-[10px] font-medium ${
-                                  isNavigable ? 'text-blue-300' : 'text-gray-600'
+                                  isNavigable ? 'text-blue-300' : 'text-gray-400'
                                 }`}
                               >
-                                {isNavigable ? 'Focus' : 'Unavailable'}
+                                {isNavigable ? 'Inspect + Focus' : 'Inspect'}
                               </span>
                             </div>
                           </button>
@@ -764,7 +814,9 @@ const MissionResultsPanel: React.FC = () => {
                                     (p) =>
                                       p.start_time === pass.start_time && p.target === pass.target,
                                   )
-                                  navigateToPassWindow(oi)
+                                  if (oi >= 0) {
+                                    handlePassClick(pass, oi)
+                                  }
                                 }}
                                 onMouseEnter={(e) => handleDotHover(pass, e)}
                                 onMouseLeave={handleDotLeave}
@@ -781,14 +833,18 @@ const MissionResultsPanel: React.FC = () => {
 
             {/* Legend */}
             <div className="flex items-center gap-3 pt-1 border-t border-gray-800/50">
-              <div className="flex items-center gap-1">
-                <div className="w-3 h-1.5 rounded-sm bg-blue-500/70 border border-blue-400/50" />
-                <span className="text-[9px] text-gray-400">Optical</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <div className="w-3 h-1.5 rounded-sm bg-purple-500/70 border border-purple-400/50" />
-                <span className="text-[9px] text-gray-400">SAR</span>
-              </div>
+              {visiblePasses.some((pass) => !pass.sar_data) && (
+                <div className="flex items-center gap-1">
+                  <div className="w-3 h-1.5 rounded-sm bg-blue-500/70 border border-blue-400/50" />
+                  <span className="text-[9px] text-gray-400">Optical</span>
+                </div>
+              )}
+              {visiblePasses.some((pass) => !!pass.sar_data) && (
+                <div className="flex items-center gap-1">
+                  <div className="w-3 h-1.5 rounded-sm bg-purple-500/70 border border-purple-400/50" />
+                  <span className="text-[9px] text-gray-400">SAR</span>
+                </div>
+              )}
             </div>
           </div>
         )}
