@@ -662,6 +662,12 @@ export interface ScheduledOpportunity {
   look_side?: 'LEFT' | 'RIGHT'
   pass_direction?: 'ASCENDING' | 'DESCENDING'
   swath_width_km?: number
+  quality_score?: number
+  order_id?: string | null
+  template_id?: string | null
+  instance_key?: string | null
+  canonical_target_id?: string | null
+  display_target_name?: string | null
 }
 
 export interface ScheduleMetrics {

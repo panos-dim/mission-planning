@@ -4,7 +4,7 @@
  * Per UX_MINIMAL_SPEC.md Section 3.4
  */
 
-import React, { useState, useMemo, useCallback, useEffect } from 'react'
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import {
   CheckSquare,
   Clock,
@@ -39,6 +39,7 @@ import {
   getAcceptedOrderAcquisitionCount,
 } from '../utils/recoveredOrders'
 import { formatDateTimeShort } from '../utils/date'
+import { getMissionHorizon } from '../utils/missionHorizon'
 
 interface SchedulePanelProps {
   orders: AcceptedOrder[]
@@ -124,6 +125,7 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
   // PR-UI-030: Master schedule store + Cesium sync
   const scheduleItems = useScheduleStore((s) => s.items)
   const fetchMaster = useScheduleStore((s) => s.fetchMaster)
+  const setScheduleRange = useScheduleStore((s) => s.setRange)
   const startPolling = useScheduleStore((s) => s.startPolling)
   const stopPolling = useScheduleStore((s) => s.stopPolling)
   const activeTab = useScheduleStore((s) => s.activeTab as TabId)
@@ -140,6 +142,14 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
   const setConflictLoading = useConflictStore((s) => s.setLoading)
   const setConflictError = useConflictStore((s) => s.setError)
   const workspaceId = missionState.activeWorkspace || 'default'
+  const missionHorizon = useMemo(
+    () => getMissionHorizon(missionState.missionData),
+    [missionState.missionData?.start_time, missionState.missionData?.end_time],
+  )
+  const missionHorizonKey = missionHorizon
+    ? `${workspaceId}:${missionHorizon.start}:${missionHorizon.end}`
+    : null
+  const seededMissionHorizonKeyRef = useRef<string | null>(null)
   const currentWorkspaceScheduleItems = useMemo(
     () =>
       scheduleItems.filter(
@@ -148,14 +158,51 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
     [scheduleItems, workspaceId],
   )
 
+  const seedScheduleRangeFromMission = useCallback(() => {
+    if (!missionHorizon || !missionHorizonKey) return false
+    if (seededMissionHorizonKeyRef.current === missionHorizonKey) return false
+
+    setScheduleRange(missionHorizon.start, missionHorizon.end)
+    seededMissionHorizonKeyRef.current = missionHorizonKey
+    return true
+  }, [missionHorizon, missionHorizonKey, setScheduleRange])
+
+  const buildMasterScheduleFetchParams = useCallback(() => {
+    if (!workspaceId) return null
+
+    seedScheduleRangeFromMission()
+
+    const { tStart, tEnd } = useScheduleStore.getState()
+    if (tStart && tEnd) {
+      return {
+        workspace_id: workspaceId,
+        t_start: tStart,
+        t_end: tEnd,
+      }
+    }
+
+    if (missionHorizon) {
+      return {
+        workspace_id: workspaceId,
+        t_start: missionHorizon.start,
+        t_end: missionHorizon.end,
+      }
+    }
+
+    return { workspace_id: workspaceId }
+  }, [workspaceId, missionHorizon, seedScheduleRangeFromMission])
+
   // PR-UI-030: Polling lifecycle — start when Timeline tab is visible, stop otherwise
   useEffect(() => {
     if (activeLeftPanel !== 'schedule' || !workspaceId) return
 
     // Refresh once whenever the Schedule panel becomes active so both tabs
     // can recover the live backend state after a hard refresh.
-    void fetchMaster({ workspace_id: workspaceId })
-  }, [activeLeftPanel, workspaceId, fetchMaster])
+    const params = buildMasterScheduleFetchParams()
+    if (!params) return
+
+    void fetchMaster(params)
+  }, [activeLeftPanel, workspaceId, buildMasterScheduleFetchParams, fetchMaster])
 
   useEffect(() => {
     if (
@@ -166,9 +213,18 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
       stopPolling()
       return
     }
+
+    seedScheduleRangeFromMission()
     startPolling(workspaceId, POLL_INTERVAL_MS)
     return () => stopPolling()
-  }, [activeLeftPanel, activeTab, workspaceId, startPolling, stopPolling])
+  }, [
+    activeLeftPanel,
+    activeTab,
+    workspaceId,
+    seedScheduleRangeFromMission,
+    startPolling,
+    stopPolling,
+  ])
 
   // PR-UI-030: Click-to-focus handler — bridge selection to Cesium
   const handleSelectAcquisition = useCallback(
@@ -391,7 +447,10 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
       focusAcquisition(null)
       clearAcquisitionSelection(null)
       await queryClient.invalidateQueries({ queryKey: queryKeys.schedule.all })
-      await fetchMaster({ workspace_id: workspaceId })
+      const params = buildMasterScheduleFetchParams()
+      if (params) {
+        await fetchMaster(params)
+      }
       await fetchScheduleConflicts()
     } catch (error) {
       setClearError(error instanceof Error ? error.message : 'Failed to clear the current schedule')
@@ -400,6 +459,7 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
     }
   }, [
     clearAcquisitionSelection,
+    buildMasterScheduleFetchParams,
     clearInProgress,
     fetchMaster,
     fetchScheduleConflicts,
@@ -413,8 +473,9 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
 
     setSummaryRefreshing(true)
     try {
+      const params = buildMasterScheduleFetchParams()
       await Promise.all([
-        fetchMaster({ workspace_id: workspaceId }),
+        params ? fetchMaster(params) : Promise.resolve(),
         fetchCommitHistory(),
         fetchScheduleConflicts(),
       ])
@@ -422,6 +483,7 @@ const SchedulePanel: React.FC<SchedulePanelProps> = ({
       setSummaryRefreshing(false)
     }
   }, [
+    buildMasterScheduleFetchParams,
     fetchCommitHistory,
     fetchMaster,
     fetchScheduleConflicts,

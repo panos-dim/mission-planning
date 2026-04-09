@@ -8,9 +8,10 @@ Tests cover:
 """
 
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
+from concurrent.futures.process import BrokenProcessPool
 
 from mission_planner.targets import GroundTarget
 from mission_planner.visibility import PassDetails, VisibilityCalculator
@@ -175,6 +176,31 @@ class TestGetVisibilityWindows:
         )
 
         assert "TestTarget" in result
+
+    @patch("mission_planner.parallel.ParallelVisibilityCalculator.get_visibility_windows")
+    def test_parallel_broken_pool_falls_back_to_serial(
+        self,
+        mock_parallel_get_visibility_windows,
+        calculator,
+    ) -> None:
+        targets = [
+            GroundTarget("TestTargetA", 45.0, 10.0),
+            GroundTarget("TestTargetB", 46.0, 11.0),
+        ]
+        mock_parallel_get_visibility_windows.side_effect = BrokenProcessPool(
+            "terminated abruptly"
+        )
+
+        with patch.object(calculator, "find_passes", side_effect=[["A"], ["B"]]) as mock_find_passes:
+            result = calculator.get_visibility_windows(
+                targets=targets,
+                start_time=datetime.utcnow(),
+                end_time=datetime.utcnow() + timedelta(hours=1),
+                use_parallel=True,
+            )
+
+        assert result == {"TestTargetA": ["A"], "TestTargetB": ["B"]}
+        assert mock_find_passes.call_count == 2
 
 
 class TestVisibilityCalculatorMethods:

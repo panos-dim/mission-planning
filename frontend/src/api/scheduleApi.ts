@@ -33,16 +33,23 @@ export interface DirectCommitItem {
   roll_angle_deg: number
   pitch_angle_deg?: number
   value?: number
+  quality_score?: number
   incidence_angle_deg?: number
   sar_mode?: string
   look_side?: string
   pass_direction?: string
+  order_id?: string | null
+  template_id?: string | null
+  instance_key?: string | null
+  canonical_target_id?: string | null
+  display_target_name?: string | null
 }
 
 export interface DirectCommitRequest {
   items: DirectCommitItem[]
   algorithm: string
   mode?: string // OPTICAL | SAR
+  planning_mode?: PlanningMode
   lock_level?: string // none | hard
   workspace_id?: string
   notes?: string

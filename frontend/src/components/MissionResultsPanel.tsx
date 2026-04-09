@@ -4,7 +4,14 @@ import { BarChart2, MapPin, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
 import { LABELS } from '../constants/labels'
 import { formatDateTimeShort, formatDateTimeDDMMYYYY } from '../utils/date'
 import { fmt1 } from '../utils/format'
-import type { PassData } from '../types'
+import {
+  formatPlanningDemandWindow,
+  formatRunOrderRecurrenceSummary,
+  getPlanningDemandCounts,
+  getPlanningDemandPrimaryPassIndex,
+  groupPlanningDemandsByDate,
+} from '../utils/planningDemand'
+import type { PassData, PlanningDemandSummary } from '../types'
 
 // =============================================================================
 // Feasibility timeline constants & helpers (matches ScheduleTimeline)
@@ -70,6 +77,21 @@ const MissionResultsPanel: React.FC = () => {
     ? `${satelliteCount || 0} selected`
     : state.missionData?.satellite_name || state.missionData?.satellites?.[0]?.name || '—'
   const satelliteSummaryTitle = isConstellation ? 'Satellites' : 'Satellite'
+  const runOrder = state.missionData?.run_order ?? null
+  const planningDemands = state.missionData?.planning_demands ?? []
+  const planningDemandSummary = state.missionData?.planning_demand_summary ?? null
+  const hasPlanningDemandData = !!runOrder || !!planningDemandSummary || planningDemands.length > 0
+  const runOrderRecurrenceSummary = useMemo(
+    () => formatRunOrderRecurrenceSummary(runOrder),
+    [runOrder],
+  )
+  const demandCounts = useMemo(
+    () => getPlanningDemandCounts(planningDemands, planningDemandSummary),
+    [planningDemands, planningDemandSummary],
+  )
+  const demandGroups = useMemo(() => groupPlanningDemandsByDate(planningDemands), [planningDemands])
+  const hasRecurringDemands =
+    demandCounts.recurring_instance_demands > 0 || runOrder?.order_type === 'repeats'
 
   // Styled hover tooltip state for timeline dots
   const [timelineTooltip, setTimelineTooltip] = useState<{
@@ -158,6 +180,28 @@ const MissionResultsPanel: React.FC = () => {
     const t = state.missionData.targets.length
     return { covered: c, total: t, isPerfect: t > 0 && c === t }
   }, [state.missionData])
+  const primaryCovered = hasPlanningDemandData ? demandCounts.feasible_demands : covered
+  const primaryTotal = hasPlanningDemandData ? demandCounts.total_demands : total
+  const primaryLabel = hasPlanningDemandData
+    ? primaryTotal === 1
+      ? 'demand'
+      : 'demands'
+    : primaryTotal === 1
+      ? 'target'
+      : 'targets'
+  const secondaryTargetLabel = total === 1 ? 'target' : 'targets'
+  const isPrimaryPerfect = hasPlanningDemandData
+    ? primaryTotal > 0 && primaryCovered === primaryTotal
+    : isPerfect
+  const handleDemandClick = useCallback(
+    (demand: PlanningDemandSummary) => {
+      const passIndex = getPlanningDemandPrimaryPassIndex(demand)
+      if (passIndex !== null) {
+        navigateToPassWindow(passIndex)
+      }
+    },
+    [navigateToPassWindow],
+  )
 
   // Visible passes & targets based on target selection
   const visiblePasses = useMemo(
@@ -330,10 +374,10 @@ const MissionResultsPanel: React.FC = () => {
         <div className="px-3 pt-2.5 pb-2 flex flex-wrap items-center gap-2">
           {acquisitionTimeWindowLabel && (
             <div
-              aria-label={`Time window active: ${acquisitionTimeWindowLabel}`}
+              aria-label={`Global acquisition filter active: ${acquisitionTimeWindowLabel}`}
               className="inline-flex items-center gap-1.5 rounded-lg border border-blue-500/20 bg-gray-700/60 px-2.5 py-1 text-[10px] font-medium text-gray-300"
             >
-              <span className="text-gray-400">Time window active: </span>
+              <span className="text-gray-400">Global acquisition filter: </span>
               <span className="font-semibold text-blue-300 tabular-nums">
                 {acquisitionTimeWindowLabel}
               </span>
@@ -341,11 +385,16 @@ const MissionResultsPanel: React.FC = () => {
           )}
           <div
             className={`inline-flex items-center rounded-lg px-2.5 py-1 text-[10px] font-semibold tabular-nums ${
-              isPerfect ? 'bg-blue-500/15 text-blue-300' : 'bg-gray-700/70 text-gray-200'
+              isPrimaryPerfect ? 'bg-blue-500/15 text-blue-300' : 'bg-gray-700/70 text-gray-200'
             }`}
           >
-            {covered}/{total} targets
+            {primaryCovered}/{primaryTotal} {primaryLabel}
           </div>
+          {hasPlanningDemandData && (
+            <div className="inline-flex items-center rounded-lg bg-gray-700/40 px-2.5 py-1 text-[10px] font-medium text-gray-300 tabular-nums">
+              {covered}/{total} {secondaryTargetLabel}
+            </div>
+          )}
         </div>
 
         <div className="px-3 pb-2.5 space-y-1.5 text-[11px]">
@@ -353,6 +402,27 @@ const MissionResultsPanel: React.FC = () => {
             <span className="shrink-0 font-medium text-gray-500">{satelliteSummaryTitle}</span>
             <span className="truncate font-semibold text-gray-200">{satelliteSummaryLabel}</span>
           </div>
+
+          {runOrder && (
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+              <span className="shrink-0 font-medium text-gray-500">Order</span>
+              <span className="truncate font-semibold text-gray-200">{runOrder.name}</span>
+              <span
+                className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                  runOrder.order_type === 'repeats'
+                    ? 'bg-blue-500/15 text-blue-300'
+                    : 'bg-gray-700 text-gray-300'
+                }`}
+              >
+                {runOrder.order_type === 'repeats' ? 'Recurring' : 'One-time'}
+              </span>
+              {runOrderRecurrenceSummary && (
+                <span className="truncate text-[10px] text-gray-400">
+                  {runOrderRecurrenceSummary}
+                </span>
+              )}
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-4">
             <div className="flex min-w-0 items-baseline gap-1.5">
@@ -368,6 +438,10 @@ const MissionResultsPanel: React.FC = () => {
               </span>
             </div>
           </div>
+        </div>
+
+        <div className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-500">
+          Timeline Filters
         </div>
 
         {/* Target filter pills — click to select */}
@@ -419,6 +493,114 @@ const MissionResultsPanel: React.FC = () => {
           )}
         </div>
       </div>
+
+      {hasPlanningDemandData && (
+        <div className="flex-shrink-0 border-b border-gray-700/60 bg-gray-900/80">
+          <div className="px-3 py-2.5 space-y-2">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold text-white">Demand Summary</div>
+                <div className="text-[10px] text-gray-500">
+                  {hasRecurringDemands
+                    ? 'Grouped by local demand date'
+                    : 'One row per planning demand'}
+                </div>
+              </div>
+              <div className="text-[10px] text-gray-400">
+                {demandCounts.total_demands} demand{demandCounts.total_demands === 1 ? '' : 's'}
+              </div>
+            </div>
+
+            {planningDemands.length === 0 ? (
+              <div className="rounded-lg border border-gray-800 bg-gray-800/30 px-3 py-2 text-xs text-gray-500">
+                No planning demands materialized for this run.
+              </div>
+            ) : (
+              <div className="max-h-[220px] space-y-2 overflow-y-auto pr-1">
+                {demandGroups.map((group) => (
+                  <div key={group.id} className="space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-500">
+                        {group.label}
+                      </span>
+                      <span className="text-[10px] text-gray-500">
+                        {group.demands.length} demand{group.demands.length === 1 ? '' : 's'}
+                      </span>
+                    </div>
+
+                    <div className="space-y-1">
+                      {group.demands.map((demand) => {
+                        const primaryPassIndex = getPlanningDemandPrimaryPassIndex(demand)
+                        const isNavigable = primaryPassIndex !== null
+                        const demandTypeLabel =
+                          demand.demand_type === 'recurring_instance' ? 'Recurring' : 'One-time'
+                        const statusLabel = demand.has_feasible_pass ? 'Feasible' : 'No opportunity'
+
+                        return (
+                          <button
+                            key={demand.demand_id}
+                            type="button"
+                            aria-label={`Demand ${demand.display_target_name}${group.localDate ? ` on ${group.label}` : ''}`}
+                            disabled={!isNavigable}
+                            onClick={() => handleDemandClick(demand)}
+                            className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
+                              isNavigable
+                                ? 'border-gray-700 bg-gray-800/50 hover:border-blue-500/40 hover:bg-gray-800'
+                                : 'border-gray-800 bg-gray-800/20 text-gray-500 cursor-not-allowed'
+                            }`}
+                            title={
+                              isNavigable
+                                ? 'Jump to the best matching opportunity'
+                                : 'No matching opportunity for this demand'
+                            }
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <span className="truncate text-xs font-semibold text-white">
+                                    {demand.display_target_name}
+                                  </span>
+                                  <span className="rounded-full bg-gray-700 px-2 py-0.5 text-[10px] font-medium text-gray-300">
+                                    {demandTypeLabel}
+                                  </span>
+                                  <span
+                                    className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                                      demand.has_feasible_pass
+                                        ? 'bg-blue-500/15 text-blue-300'
+                                        : 'bg-red-500/15 text-red-300'
+                                    }`}
+                                  >
+                                    {statusLabel}
+                                  </span>
+                                </div>
+                                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-gray-400">
+                                  <span>{formatPlanningDemandWindow(demand)}</span>
+                                  <span>
+                                    {demand.matching_pass_count} match
+                                    {demand.matching_pass_count === 1 ? '' : 'es'}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <span
+                                className={`text-[10px] font-medium ${
+                                  isNavigable ? 'text-blue-300' : 'text-gray-600'
+                                }`}
+                              >
+                                {isNavigable ? 'Focus' : 'Unavailable'}
+                              </span>
+                            </div>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Zoom controls */}
       {visiblePasses.length > 0 && (
@@ -473,9 +655,14 @@ const MissionResultsPanel: React.FC = () => {
           </div>
         ) : (
           <div className="space-y-3 text-xs">
-            {/* Window count */}
+            {/* Aggregate timeline summary */}
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-white">Opportunity Windows</span>
+              <div>
+                <span className="text-xs font-semibold text-white">Master Timeline</span>
+                <p className="text-[10px] text-gray-500">
+                  Aggregate target view of opportunity windows
+                </p>
+              </div>
               <span className="text-[10px] text-gray-400">{visiblePasses.length} windows</span>
             </div>
 

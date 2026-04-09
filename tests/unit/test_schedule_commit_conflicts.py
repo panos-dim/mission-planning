@@ -592,6 +592,51 @@ class TestScheduleCommitConflictDetection:
         assert state.status_code == 200, state.json()
         assert len(state.json()["state"]["acquisitions"]) == 2, state.json()
 
+    def test_direct_commit_allows_identical_payload_in_different_workspaces(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Duplicate detection must stay scoped to the active workspace."""
+        client, _db, workspace_id = isolated_schedule_api
+        other_workspace_id = get_workspace_db().create_workspace(
+            name="Conflict Audit Workspace 2",
+            mission_mode="OPTICAL",
+        )
+
+        base_start = datetime.now(timezone.utc) + timedelta(days=19)
+        items = [
+            {
+                "opportunity_id": "cross-ws-direct-1",
+                "satellite_id": "SAT-1",
+                "target_id": "CROSS-WS-A",
+                "start_time": _iso(base_start),
+                "end_time": _iso(base_start + timedelta(minutes=5)),
+                "roll_angle_deg": 0.0,
+                "pitch_angle_deg": 0.0,
+            }
+        ]
+
+        first_commit = client.post(
+            "/api/v1/schedule/commit/direct",
+            json={
+                "workspace_id": workspace_id,
+                "algorithm": "regression_test",
+                "lock_level": "none",
+                "items": items,
+            },
+        )
+        assert first_commit.status_code == 200, first_commit.json()
+
+        second_commit = client.post(
+            "/api/v1/schedule/commit/direct",
+            json={
+                "workspace_id": other_workspace_id,
+                "algorithm": "regression_test",
+                "lock_level": "none",
+                "items": items,
+            },
+        )
+        assert second_commit.status_code == 200, second_commit.json()
+
     def test_direct_commit_retry_recovers_after_internal_commit_failure(
         self,
         isolated_schedule_api: Tuple[TestClient, ScheduleDB, str],
@@ -829,7 +874,9 @@ class TestScheduleCommitConflictDetection:
         duplicate_lookup_lock = threading.Lock()
         precheck_barrier = threading.Barrier(2)
 
-        def synchronize_duplicate_precheck(db_arg, input_hash):
+        def synchronize_duplicate_precheck(
+            db_arg, input_hash, workspace_id_arg=None
+        ):
             nonlocal duplicate_lookup_calls
             with duplicate_lookup_lock:
                 duplicate_lookup_calls += 1
@@ -837,7 +884,7 @@ class TestScheduleCommitConflictDetection:
             if current_call <= 2:
                 precheck_barrier.wait(timeout=5)
                 return None
-            return original_find_duplicate(db_arg, input_hash)
+            return original_find_duplicate(db_arg, input_hash, workspace_id_arg)
 
         monkeypatch.setattr(
             schedule_router,
@@ -918,7 +965,9 @@ class TestScheduleCommitConflictDetection:
         duplicate_lookup_lock = threading.Lock()
         precheck_barrier = threading.Barrier(burst_size)
 
-        def synchronize_duplicate_precheck(db_arg, input_hash):
+        def synchronize_duplicate_precheck(
+            db_arg, input_hash, workspace_id_arg=None
+        ):
             nonlocal duplicate_lookup_calls
             with duplicate_lookup_lock:
                 duplicate_lookup_calls += 1
@@ -926,7 +975,7 @@ class TestScheduleCommitConflictDetection:
             if current_call <= burst_size:
                 precheck_barrier.wait(timeout=5)
                 return None
-            return original_find_duplicate(db_arg, input_hash)
+            return original_find_duplicate(db_arg, input_hash, workspace_id_arg)
 
         monkeypatch.setattr(
             schedule_router,
@@ -2457,6 +2506,10 @@ class TestPlanningModeSelection:
                     "start_time": _state_iso(existing_start),
                     "end_time": _state_iso(existing_start + timedelta(hours=1)),
                     "max_spacecraft_pitch_deg": 45.0,
+                    "targets": [
+                        {"name": "TGT-1", "priority": 5},
+                        {"name": "TGT-2", "priority": 5},
+                    ],
                 },
                 "satellites_dict": {},
             },
@@ -2491,6 +2544,82 @@ class TestPlanningModeSelection:
         assert body["success"] is True, body
         schedule = body["results"]["roll_pitch_best_fit"]["schedule"]
         assert [item["target_id"] for item in schedule] == ["TGT-2"], body
+
+    def test_incremental_with_no_new_target_opportunities_does_not_replay_baseline(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Incremental runs should not replan committed targets when new work is infeasible."""
+        client, db, workspace_id = isolated_schedule_api
+        original_state = _snapshot_analysis_state()
+
+        existing_start = datetime.now(timezone.utc) + timedelta(days=1)
+
+        get_workspace_db().update_workspace(
+            workspace_id=workspace_id,
+            planning_state={"current_target_ids": ["TGT-1"]},
+        )
+
+        set_current_mission_data(
+            {
+                "passes": [
+                    {
+                        "satellite_name": "SAT-1",
+                        "target_name": "TGT-1",
+                        "start_time": _state_iso(existing_start + timedelta(minutes=20)),
+                        "end_time": _state_iso(existing_start + timedelta(minutes=20)),
+                        "max_elevation_time": _state_iso(
+                            existing_start + timedelta(minutes=20)
+                        ),
+                        "max_elevation": 42.0,
+                        "start_azimuth": 180.0,
+                    },
+                ],
+                "targets": [
+                    TargetData(name="TGT-1", latitude=25.0, longitude=55.0, priority=5),
+                    TargetData(name="TGT-2", latitude=25.5, longitude=55.5, priority=5),
+                ],
+                "mission_data": {
+                    "start_time": _state_iso(existing_start),
+                    "end_time": _state_iso(existing_start + timedelta(hours=1)),
+                    "max_spacecraft_pitch_deg": 45.0,
+                    "targets": [
+                        {"name": "TGT-1"},
+                        {"name": "TGT-2"},
+                    ],
+                },
+                "satellites_dict": {},
+            },
+            workspace_id,
+        )
+
+        db.create_acquisition(
+            satellite_id="SAT-1",
+            target_id="TGT-1",
+            start_time=_iso(existing_start),
+            end_time=_iso(existing_start),
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            state="committed",
+            workspace_id=workspace_id,
+        )
+
+        try:
+            response = client.post(
+                "/api/v1/planning/schedule",
+                json={
+                    "algorithms": ["roll_pitch_best_fit"],
+                    "mode": "incremental",
+                    "workspace_id": workspace_id,
+                },
+            )
+        finally:
+            _restore_analysis_state(original_state)
+
+        assert response.status_code == 200, response.json()
+        body = response.json()
+        assert body["success"] is True, body
+        schedule = body["results"]["roll_pitch_best_fit"]["schedule"]
+        assert schedule == [], body
 
     def test_schedule_state_excludes_failed_acquisitions_by_default(
         self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
@@ -3083,13 +3212,111 @@ class TestPlanningModeSelection:
         assert explainer.status_code == 200, explainer.json()
         explainer_body = explainer.json()
         assert explainer_body["has_data"] is True, explainer_body
+
+    def test_direct_commit_persists_explicit_planning_mode_in_audit_explainer(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Direct commits should preserve the scheduler mode that produced the schedule."""
+        client, db, workspace_id = isolated_schedule_api
+
+        base_start = datetime.now(timezone.utc) + timedelta(days=4)
+        direct_commit = client.post(
+            "/api/v1/schedule/commit/direct",
+            json={
+                "items": [
+                    {
+                        "opportunity_id": "opp_incremental_mode",
+                        "satellite_id": "SAT-8",
+                        "target_id": "MODE-TGT",
+                        "start_time": _iso(base_start),
+                        "end_time": _iso(base_start + timedelta(minutes=5)),
+                        "roll_angle_deg": 0.0,
+                        "pitch_angle_deg": 0.0,
+                        "value": 1.0,
+                        "quality_score": 0.75,
+                    }
+                ],
+                "algorithm": "roll_pitch_best_fit",
+                "mode": "OPTICAL",
+                "planning_mode": "incremental",
+                "workspace_id": workspace_id,
+            },
+        )
+        assert direct_commit.status_code == 200, direct_commit.json()
+
+        latest_audit = db.get_latest_commit_audit_log(workspace_id)
+        assert latest_audit is not None
+        assert latest_audit.mode_used == "incremental"
+
+        explainer = client.get(
+            "/api/v1/dev/reshuffle-explainer",
+            params={"workspace_id": workspace_id},
+        )
+        assert explainer.status_code == 200, explainer.json()
+        explainer_body = explainer.json()
+        assert explainer_body["has_data"] is True, explainer_body
+        assert explainer_body["mode_used"] == "incremental", explainer_body
         assert explainer_body["revision_id"] == 2, explainer_body
         assert explainer_body["previous_revision_id"] == 1, explainer_body
-        assert explainer_body["mode_used"] == "from_scratch", explainer_body
         assert explainer_body["diff_summary"]["added_count"] == 1, explainer_body
         assert (
             explainer_body["explainer"]["diff"]["added"][0]["planner_target_id"]
-            == "RESHUFFLE-TGT"
+            == "MODE-TGT"
         ), explainer_body
         assert Path(explainer_body["artifact_paths"]["json_path"]).exists(), explainer_body
         assert Path(explainer_body["artifact_paths"]["md_path"]).exists(), explainer_body
+
+    def test_repair_commit_persists_repair_mode_in_audit_explainer(
+        self, isolated_schedule_api: Tuple[TestClient, ScheduleDB, str]
+    ) -> None:
+        """Repair commits should complete successfully and persist repair-mode revision metadata."""
+        client, db, workspace_id = isolated_schedule_api
+
+        base_start = datetime.now(timezone.utc) + timedelta(days=5)
+        plan = db.create_plan(
+            algorithm="repair_mode",
+            config={"planning_mode": "repair"},
+            input_hash="sha256:repairaudit0001",
+            run_id="repair_audit_commit",
+            metrics={},
+            workspace_id=workspace_id,
+        )
+        db.create_plan_item(
+            plan_id=plan.id,
+            opportunity_id="opp_repair_mode",
+            satellite_id="SAT-9",
+            target_id="REPAIR-TGT",
+            start_time=_iso(base_start),
+            end_time=_iso(base_start + timedelta(minutes=5)),
+            roll_angle_deg=0.0,
+            pitch_angle_deg=0.0,
+            value=1.0,
+            quality_score=0.9,
+        )
+
+        repair_commit = client.post(
+            "/api/v1/schedule/repair/commit",
+            json={
+                "plan_id": plan.id,
+                "workspace_id": workspace_id,
+                "lock_level": "none",
+                "mode": "OPTICAL",
+            },
+        )
+        assert repair_commit.status_code == 200, repair_commit.json()
+
+        latest_audit = db.get_latest_commit_audit_log(workspace_id)
+        assert latest_audit is not None
+        assert latest_audit.mode_used == "repair"
+
+        explainer = client.get(
+            "/api/v1/dev/reshuffle-explainer",
+            params={"workspace_id": workspace_id},
+        )
+        assert explainer.status_code == 200, explainer.json()
+        explainer_body = explainer.json()
+        assert explainer_body["has_data"] is True, explainer_body
+        assert explainer_body["mode_used"] == "repair", explainer_body
+        assert explainer_body["revision_id"] == 2, explainer_body
+        assert explainer_body["previous_revision_id"] == 1, explainer_body
+        assert explainer_body["diff_summary"]["added_count"] == 1, explainer_body

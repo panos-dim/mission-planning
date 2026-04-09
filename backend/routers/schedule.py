@@ -128,6 +128,38 @@ def _capture_revision_baseline(
     )
 
 
+def _resolve_direct_commit_mode_used(
+    workspace_id: Optional[str],
+    requested_mode: Optional[str] = None,
+) -> str:
+    """Resolve the scheduling mode to persist on direct-commit audit records."""
+    if requested_mode in {"from_scratch", "incremental", "repair"}:
+        return requested_mode
+
+    if workspace_id:
+        try:
+            workspace = get_workspace_db().get_workspace(
+                workspace_id,
+                include_czml=False,
+            )
+            planning_state = workspace.planning_state if workspace else None
+            persisted_mode = (
+                planning_state.get("last_planning_mode")
+                if isinstance(planning_state, dict)
+                else None
+            )
+            if persisted_mode in {"from_scratch", "incremental", "repair"}:
+                return persisted_mode
+        except Exception:
+            logger.warning(
+                "[Direct Commit] Failed to load persisted planning mode for workspace=%s",
+                workspace_id,
+                exc_info=True,
+            )
+
+    return "direct_commit"
+
+
 def _create_commit_audit_with_explainer(
     db: ScheduleDB,
     *,
@@ -2064,13 +2096,22 @@ def _compute_direct_commit_input_hash(items: List["DirectCommitItem"]) -> str:
 def _find_existing_direct_commit_plan(
     db: ScheduleDB,
     input_hash: str,
+    workspace_id: Optional[str],
 ) -> Optional[str]:
     """Return a previously committed plan with the same direct-commit payload."""
+    effective_workspace_id = workspace_id or DEFAULT_WORKSPACE_ID
     with db._get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id FROM plans WHERE input_hash = ? AND status = 'committed' LIMIT 1",
-            (input_hash,),
+            """
+            SELECT id
+            FROM plans
+            WHERE input_hash = ?
+              AND status = 'committed'
+              AND COALESCE(workspace_id, ?) = ?
+            LIMIT 1
+            """,
+            (input_hash, DEFAULT_WORKSPACE_ID, effective_workspace_id),
         )
         row = cursor.fetchone()
     return row["id"] if row else None
@@ -2153,11 +2194,17 @@ class DirectCommitItem(BaseModel):
     roll_angle_deg: float
     pitch_angle_deg: float = 0.0
     value: Optional[float] = None
+    quality_score: Optional[float] = None
     incidence_angle_deg: Optional[float] = None
     # SAR fields
     sar_mode: Optional[str] = None
     look_side: Optional[str] = None
     pass_direction: Optional[str] = None
+    order_id: Optional[str] = None
+    template_id: Optional[str] = None
+    instance_key: Optional[str] = None
+    canonical_target_id: Optional[str] = None
+    display_target_name: Optional[str] = None
 
 
 class DirectCommitPreviewRequest(BaseModel):
@@ -2186,6 +2233,10 @@ class DirectCommitRequest(BaseModel):
         default="unknown", description="Algorithm that generated this schedule"
     )
     mode: str = Field(default="OPTICAL", description="Mission mode: OPTICAL | SAR")
+    planning_mode: Optional[str] = Field(
+        default=None,
+        description="Scheduling mode that produced this schedule: from_scratch | incremental | repair",
+    )
     lock_level: str = Field(default="none", description="Lock level: none | hard")
     workspace_id: Optional[str] = None
     notes: Optional[str] = None
@@ -2229,6 +2280,7 @@ async def preview_commit_direct(
     duplicate_plan_id = _find_existing_direct_commit_plan(
         db,
         _compute_direct_commit_input_hash(request.items),
+        effective_workspace_id,
     )
     if duplicate_plan_id:
         conflicts.append(
@@ -2293,7 +2345,7 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
     logger.info(
         f"[Direct Commit] Received request: items={len(request.items)}, "
         f"algorithm={request.algorithm}, mode={request.mode}, "
-        f"workspace_id={effective_workspace_id}"
+        f"workspace_id={effective_workspace_id}, planning_mode={request.planning_mode}"
     )
 
     if not request.items:
@@ -2312,6 +2364,7 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
     duplicate_plan_id = _find_existing_direct_commit_plan(
         db,
         _compute_direct_commit_input_hash(request.items),
+        effective_workspace_id,
     )
 
     if duplicate_plan_id:
@@ -2345,6 +2398,10 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
         )
 
     try:
+        applied_planning_mode = _resolve_direct_commit_mode_used(
+            effective_workspace_id,
+            request.planning_mode,
+        )
         input_hash = _compute_direct_commit_input_hash(request.items)
 
         # Generate run_id
@@ -2361,7 +2418,11 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
         # Create plan record
         plan = db.create_plan(
             algorithm=request.algorithm,
-            config={"mode": request.mode, "source": "direct_commit"},
+            config={
+                "mode": request.mode,
+                "planning_mode": applied_planning_mode,
+                "source": "direct_commit",
+            },
             input_hash=input_hash,
             run_id=run_id,
             metrics=metrics,
@@ -2385,7 +2446,12 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
                 roll_angle_deg=item.roll_angle_deg,
                 pitch_angle_deg=item.pitch_angle_deg,
                 value=item.value,
-                quality_score=item.value,
+                quality_score=item.quality_score,
+                order_id=item.order_id,
+                template_id=item.template_id,
+                instance_key=item.instance_key,
+                canonical_target_id=item.canonical_target_id,
+                display_target_name=item.display_target_name,
             )
 
         # Commit the plan
@@ -2404,7 +2470,11 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
             error_message = str(exc)
             if "Schedule revision conflict" in error_message:
                 db.update_plan_status(plan.id, "superseded")
-                duplicate_plan_id = _find_existing_direct_commit_plan(db, input_hash)
+                duplicate_plan_id = _find_existing_direct_commit_plan(
+                    db,
+                    input_hash,
+                    effective_workspace_id,
+                )
                 if duplicate_plan_id and duplicate_plan_id != plan.id:
                     raise HTTPException(
                         status_code=409,
@@ -2441,7 +2511,11 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
                 ) from exc
             if "Concurrent schedule conflict detected" in error_message:
                 db.update_plan_status(plan.id, "superseded")
-                duplicate_plan_id = _find_existing_direct_commit_plan(db, input_hash)
+                duplicate_plan_id = _find_existing_direct_commit_plan(
+                    db,
+                    input_hash,
+                    effective_workspace_id,
+                )
                 if duplicate_plan_id and duplicate_plan_id != plan.id:
                     raise HTTPException(
                         status_code=409,
@@ -2480,7 +2554,11 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
         except sqlite3.IntegrityError as exc:
             if "UNIQUE constraint failed: acquisitions." not in str(exc):
                 raise
-            duplicate_plan_id = _find_existing_direct_commit_plan(db, input_hash)
+            duplicate_plan_id = _find_existing_direct_commit_plan(
+                db,
+                input_hash,
+                effective_workspace_id,
+            )
             db.update_plan_status(plan.id, "superseded")
             raise HTTPException(
                 status_code=409,
@@ -2497,7 +2575,11 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
         # index can still surface through lower layers; treat that as a duplicate
         # race instead of reporting a false success.
         if result["committed"] == 0:
-            duplicate_plan_id = _find_existing_direct_commit_plan(db, input_hash)
+            duplicate_plan_id = _find_existing_direct_commit_plan(
+                db,
+                input_hash,
+                effective_workspace_id,
+            )
             db.update_plan_status(plan.id, "superseded")
             raise HTTPException(
                 status_code=409,
@@ -2537,7 +2619,7 @@ async def commit_direct(request: DirectCommitRequest) -> DirectCommitResponse:
             plan_id=plan.id,
             commit_type="force" if request.force else "normal",
             config_hash=input_hash,
-            mode_used="direct_commit",
+            mode_used=applied_planning_mode,
             previous_revision_id=previous_revision_id,
             before_acquisitions=before_acquisitions,
             acquisitions_created=result["committed"],
@@ -4020,6 +4102,10 @@ async def create_repair_plan(
         candidate_id = item.get("opportunity_id", item.get("acquisition_id", ""))
         if item.get("action") != "added" and candidate_id not in added_ids_set:
             continue
+        lineage = recurring_lineage_by_opportunity_id.get(
+            candidate_id,
+            _opportunity_lineage(item),
+        )
 
         db.create_plan_item(
             plan_id=plan.id,
@@ -4032,11 +4118,11 @@ async def create_repair_plan(
             pitch_angle_deg=item.get("pitch_angle_deg", 0.0),
             value=item.get("value", 1.0),
             quality_score=item.get("quality_score"),
-            order_id=item.get("order_id"),
-            template_id=item.get("template_id"),
-            instance_key=item.get("instance_key"),
-            canonical_target_id=item.get("canonical_target_id"),
-            display_target_name=item.get("display_target_name"),
+            order_id=lineage["order_id"],
+            template_id=lineage["template_id"],
+            instance_key=lineage["instance_key"],
+            canonical_target_id=lineage["canonical_target_id"],
+            display_target_name=lineage["display_target_name"],
         )
         persisted_plan_items += 1
 
@@ -4391,6 +4477,12 @@ async def commit_repair_plan(request: RepairCommitRequest) -> RepairCommitRespon
             status_code=400,
             detail=f"Plan {request.plan_id} is already committed",
         )
+
+    previous_revision_id, before_acquisitions = _capture_revision_baseline(
+        db,
+        request.workspace_id,
+    )
+    mode_used = _resolve_mode_used(plan, fallback="repair")
 
     # Check for protection conflicts before committing
     warnings: List[str] = []

@@ -27,6 +27,8 @@ wheels/
 .venv/
 venv/
 ENV/
+!frontend/src/lib/
+!frontend/src/lib/queryClient.ts
 
 # Node.js / Frontend
 node_modules/

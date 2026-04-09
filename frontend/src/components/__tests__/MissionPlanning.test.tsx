@@ -93,13 +93,16 @@ vi.mock('cesium', () => ({
   },
 }))
 
+const MISSION_START = '2026-03-23T00:00:00Z'
+const MISSION_END = '2026-03-30T00:00:00Z'
+
 function buildMissionData(): MissionData {
   return {
     satellite_name: 'ICEYE-X53',
     mission_type: 'imaging',
     imaging_type: 'optical',
-    start_time: '2026-03-23T00:00:00Z',
-    end_time: '2026-03-30T00:00:00Z',
+    start_time: MISSION_START,
+    end_time: MISSION_END,
     elevation_mask: 10,
     total_passes: 3,
     targets: [
@@ -183,8 +186,8 @@ function buildAlgorithmResult(targetId: string, opportunityId: string): Algorith
           reason: 'No feasible opportunity in current horizon',
         })),
       horizon: {
-        start: '2026-03-23T00:00:00Z',
-        end: '2026-03-30T00:00:00Z',
+        start: MISSION_START,
+        end: MISSION_END,
       },
       satellites_used: ['SAT-1'],
       total_targets_with_opportunities: 3,
@@ -226,8 +229,8 @@ function buildEmptyPlanningResponse(): PlanningResponse {
             reason: 'No feasible opportunity in current horizon',
           })),
           horizon: {
-            start: '2026-03-23T00:00:00Z',
-            end: '2026-03-30T00:00:00Z',
+            start: MISSION_START,
+            end: MISSION_END,
           },
           satellites_used: [],
           total_targets_with_opportunities: 3,
@@ -248,8 +251,8 @@ function buildRepairResponse() {
       by_state: { committed: 2 },
       by_satellite: { 'SAT-1': 2 },
       acquisition_ids: ['acq-1', 'acq-2'],
-      horizon_start: '2026-03-23T00:00:00Z',
-      horizon_end: '2026-03-30T00:00:00Z',
+      horizon_start: MISSION_START,
+      horizon_end: MISSION_END,
     },
     fixed_count: 1,
     flex_count: 1,
@@ -321,8 +324,8 @@ function buildRepairResponse() {
         },
       ],
       horizon: {
-        start: '2026-03-23T00:00:00Z',
-        end: '2026-03-30T00:00:00Z',
+        start: MISSION_START,
+        end: MISSION_END,
       },
       satellites_used: ['SAT-1'],
       total_targets_with_opportunities: 3,
@@ -461,6 +464,16 @@ describe('MissionPlanning', () => {
 
     render(<MissionPlanning />)
 
+    expect(useScheduleContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspace_id: 'ws-proof',
+        from: MISSION_START,
+        to: MISSION_END,
+        include_tentative: false,
+      }),
+      true,
+    )
+
     await user.click(screen.getByRole('button', { name: /^Priority$/i }))
     await user.click(screen.getByRole('button', { name: /generate mission plan/i }))
 
@@ -471,8 +484,8 @@ describe('MissionPlanning', () => {
           weight_priority: 100,
           weight_geometry: 0,
           weight_timing: 0,
-          horizon_from: expect.any(String),
-          horizon_to: expect.any(String),
+          horizon_from: MISSION_START,
+          horizon_to: MISSION_END,
         }),
       )
     })
@@ -516,6 +529,16 @@ describe('MissionPlanning', () => {
 
     render(<MissionPlanning />)
 
+    expect(useScheduleContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspace_id: 'ws-proof',
+        from: MISSION_START,
+        to: MISSION_END,
+        include_tentative: false,
+      }),
+      true,
+    )
+
     await user.click(screen.getByRole('button', { name: /^Quality$/i }))
     await user.click(screen.getByRole('button', { name: /generate mission plan/i }))
 
@@ -526,8 +549,8 @@ describe('MissionPlanning', () => {
           weight_priority: 0,
           weight_geometry: 100,
           weight_timing: 0,
-          horizon_from: expect.any(String),
-          horizon_to: expect.any(String),
+          horizon_from: MISSION_START,
+          horizon_to: MISSION_END,
         }),
       )
     })
@@ -573,6 +596,16 @@ describe('MissionPlanning', () => {
 
     render(<MissionPlanning />)
 
+    expect(useScheduleContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspace_id: 'ws-proof',
+        from: MISSION_START,
+        to: MISSION_END,
+        include_tentative: false,
+      }),
+      true,
+    )
+
     await user.click(screen.getByRole('button', { name: /^Urgent$/i }))
     await user.click(screen.getByRole('button', { name: /generate mission plan/i }))
 
@@ -583,8 +616,8 @@ describe('MissionPlanning', () => {
           weight_priority: 0,
           weight_geometry: 0,
           weight_timing: 100,
-          horizon_from: expect.any(String),
-          horizon_to: expect.any(String),
+          horizon_from: MISSION_START,
+          horizon_to: MISSION_END,
         }),
       )
     })

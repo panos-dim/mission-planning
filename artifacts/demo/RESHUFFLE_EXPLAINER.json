@@ -1,15 +1,15 @@
 {
-  "workspace_id": "default",
-  "generated_at": "2026-04-03T06:10:59.752418Z",
-  "revision_id": 3,
-  "previous_revision_id": 2,
+  "workspace_id": "09157e0e-2df6-4eb5-8db2-36cb5a71a266",
+  "generated_at": "2026-04-09T15:31:22.060931Z",
+  "revision_id": 2,
+  "previous_revision_id": 1,
   "mode_used": "direct_commit",
-  "plan_id": "plan_f290385eb849",
+  "plan_id": "plan_5e4594a647aa",
   "commit_type": "normal",
   "diff_summary": {
     "before_count": 0,
-    "after_count": 4,
-    "added_count": 4,
+    "after_count": 2,
+    "added_count": 2,
     "removed_count": 0,
     "kept_count": 0,
     "unchanged_kept_count": 0,
@@ -17,31 +17,31 @@
     "changed_satellite_assignment_count": 0
   },
   "explanation": {
-    "headline": "Revision 3 applied in direct_commit mode against revision 2.",
+    "headline": "Revision 2 applied in direct_commit mode against revision 1.",
     "summary_lines": [
-      "Revision 3 applied in direct_commit mode against revision 2.",
-      "Active schedule size changed from 0 to 4 acquisitions.",
-      "4 added, 0 removed, 0 kept.",
+      "Revision 2 applied in direct_commit mode against revision 1.",
+      "Active schedule size changed from 0 to 2 acquisitions.",
+      "2 added, 0 removed, 0 kept.",
       "0 kept acquisitions changed timing and 0 changed satellite assignment.",
-      "Added targets: Kuwait City, Manama, Riyadh, Jeddah."
+      "Added targets: RETRY-A, RETRY-B."
     ]
   },
   "diff": {
     "added": [
       {
-        "identity_key": "opportunity:PLEIADES NEO 3_Kuwait City_0_max",
+        "identity_key": "opportunity:retry-direct-1",
         "order_id": null,
         "template_id": null,
         "instance_key": null,
-        "canonical_target_id": "Kuwait City",
-        "planner_target_id": "Kuwait City",
-        "display_target_name": "Kuwait City",
+        "canonical_target_id": "RETRY-A",
+        "planner_target_id": "RETRY-A",
+        "display_target_name": "RETRY-A",
         "after": {
-          "acquisition_id": "acq_f92272891845",
-          "satellite_id": "PLEIADES NEO 3",
-          "start_time": "2026-04-03T07:41:15.679908+00:00",
-          "end_time": "2026-04-03T07:41:20.679908+00:00",
-          "plan_id": "plan_f290385eb849",
+          "acquisition_id": "acq_08e4ee94631b",
+          "satellite_id": "SAT-1",
+          "start_time": "2026-04-28T15:31:22.036408Z",
+          "end_time": "2026-04-28T15:36:22.036408Z",
+          "plan_id": "plan_5e4594a647aa",
           "state": "committed",
           "lock_level": "none",
           "mode": "OPTICAL",
@@ -49,59 +49,19 @@
         }
       },
       {
-        "identity_key": "opportunity:PLEIADES NEO 3_Manama_1_max",
+        "identity_key": "opportunity:retry-direct-2",
         "order_id": null,
         "template_id": null,
         "instance_key": null,
-        "canonical_target_id": "Manama",
-        "planner_target_id": "Manama",
-        "display_target_name": "Manama",
+        "canonical_target_id": "RETRY-B",
+        "planner_target_id": "RETRY-B",
+        "display_target_name": "RETRY-B",
         "after": {
-          "acquisition_id": "acq_f2031a95dcbf",
-          "satellite_id": "PLEIADES NEO 3",
-          "start_time": "2026-04-03T07:41:55.944772+00:00",
-          "end_time": "2026-04-03T07:42:00.944772+00:00",
-          "plan_id": "plan_f290385eb849",
-          "state": "committed",
-          "lock_level": "none",
-          "mode": "OPTICAL",
-          "source": "auto"
-        }
-      },
-      {
-        "identity_key": "opportunity:PLEIADES NEO 3_Riyadh_2_max",
-        "order_id": null,
-        "template_id": null,
-        "instance_key": null,
-        "canonical_target_id": "Riyadh",
-        "planner_target_id": "Riyadh",
-        "display_target_name": "Riyadh",
-        "after": {
-          "acquisition_id": "acq_349ba7b0d541",
-          "satellite_id": "PLEIADES NEO 3",
-          "start_time": "2026-04-03T07:42:32.354460+00:00",
-          "end_time": "2026-04-03T07:42:37.354460+00:00",
-          "plan_id": "plan_f290385eb849",
-          "state": "committed",
-          "lock_level": "none",
-          "mode": "OPTICAL",
-          "source": "auto"
-        }
-      },
-      {
-        "identity_key": "opportunity:PLEIADES NEO 3_Jeddah_4_max",
-        "order_id": null,
-        "template_id": null,
-        "instance_key": null,
-        "canonical_target_id": "Jeddah",
-        "planner_target_id": "Jeddah",
-        "display_target_name": "Jeddah",
-        "after": {
-          "acquisition_id": "acq_c2e614a49776",
-          "satellite_id": "PLEIADES NEO 3",
-          "start_time": "2026-04-03T07:43:42.242546+00:00",
-          "end_time": "2026-04-03T07:43:47.242546+00:00",
-          "plan_id": "plan_f290385eb849",
+          "acquisition_id": "acq_abf62b7be6ad",
+          "satellite_id": "SAT-1",
+          "start_time": "2026-04-28T15:41:22.036408Z",
+          "end_time": "2026-04-28T15:46:22.036408Z",
+          "plan_id": "plan_5e4594a647aa",
           "state": "committed",
           "lock_level": "none",
           "mode": "OPTICAL",
@@ -118,5 +78,5 @@
     "json_path": "/Users/panagiotis.d/CascadeProjects/mission-planning/artifacts/demo/RESHUFFLE_EXPLAINER.json",
     "md_path": "/Users/panagiotis.d/CascadeProjects/mission-planning/artifacts/demo/RESHUFFLE_EXPLAINER.md"
   },
-  "audit_log_id": "audit_b7c17841980f"
+  "audit_log_id": "audit_468ddbd42251"
 }
